@@ -32,6 +32,15 @@ enum DebugDump {
         typeSource = source
     }
 
+    /// Renders the key window into a PNG without screen-recording access.
+    private static func writeWindowSnapshot(to path: String) {
+        guard let view = (NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible })?.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
     static func install(describe: @escaping @MainActor () -> String) {
         signal(SIGUSR1, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
@@ -40,6 +49,7 @@ enum DebugDump {
                 let path = ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_DUMP"]
                     ?? NSTemporaryDirectory() + "ghostherdr-debug.txt"
                 try? describe().write(toFile: path, atomically: true, encoding: .utf8)
+                writeWindowSnapshot(to: (path as NSString).deletingPathExtension + ".png")
             }
         }
         source.resume()

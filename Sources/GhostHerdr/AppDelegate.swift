@@ -24,9 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Uses the user's own Ghostty config, so fonts, theme and keybinds match.
     private static func makeTerminalController() -> TerminalController {
+        let home = NSHomeDirectory()
         let candidates = [
-            NSHomeDirectory() + "/.config/ghostty/config",
-            NSHomeDirectory() + "/Library/Application Support/com.mitchellh.ghostty/config",
+            home + "/.config/ghostty/config.ghostty",
+            home + "/.config/ghostty/config",
+            home + "/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+            home + "/Library/Application Support/com.mitchellh.ghostty/config",
         ]
         let path = candidates.first { FileManager.default.fileExists(atPath: $0) }
         return TerminalController(configFilePath: path)

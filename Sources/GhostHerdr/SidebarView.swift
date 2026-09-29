@@ -24,7 +24,8 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.addTableColumn(column)
         table.headerView = nil
         table.rowHeight = 30
-        table.style = .sourceList
+        table.style = .plain
+        table.intercellSpacing = NSSize(width: 0, height: 2)
         table.dataSource = self
         table.delegate = self
         table.backgroundColor = .clear
@@ -83,6 +84,10 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
+    func tableView(_: NSTableView, rowViewForRow _: Int) -> NSTableRowView? {
+        WorkspaceRowView()
+    }
+
     func tableViewSelectionDidChange(_: Notification) {
         guard !suppressSelection, table.selectedRow >= 0 else { return }
         let id = workspaces[table.selectedRow].workspaceID
@@ -107,6 +112,17 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func renameClicked() { if let id = clickedID { onRename?(id) } }
     @objc private func closeClicked() { if let id = clickedID { onClose?(id) } }
+}
+
+private final class WorkspaceRowView: NSTableRowView {
+    override func drawSelection(in _: NSRect) {
+        let rect = bounds.insetBy(dx: 8, dy: 1)
+        NSColor.controlAccentColor.withAlphaComponent(0.28).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+    }
+
+    override func drawBackground(in _: NSRect) {}
+    override var isEmphasized: Bool { get { false } set {} }
 }
 
 private final class WorkspaceCell: NSTableCellView {
@@ -141,8 +157,8 @@ private final class WorkspaceCell: NSTableCellView {
     override func layout() {
         super.layout()
         let b = bounds
-        dot.frame = NSRect(x: 6, y: b.midY - 4, width: 8, height: 8)
-        detail.frame = NSRect(x: b.width - 30, y: b.midY - 8, width: 24, height: 16)
-        label.frame = NSRect(x: 20, y: b.midY - 9, width: b.width - 54, height: 18)
+        dot.frame = NSRect(x: 18, y: b.midY - 4, width: 8, height: 8)
+        detail.frame = NSRect(x: b.width - 42, y: b.midY - 8, width: 24, height: 16)
+        label.frame = NSRect(x: 34, y: b.midY - 9, width: b.width - 80, height: 18)
     }
 }

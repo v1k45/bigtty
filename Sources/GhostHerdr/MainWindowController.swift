@@ -19,6 +19,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// Pane views for the visible tab, reused across layout changes.
     private var paneViews: [String: PaneContainerView] = [:]
     private var lastFocusedPane: String?
+    private var theme: Theme
+    private var root: RootView!
+    private var main: MainContentView!
 
     var onClose: (() -> Void)?
 
@@ -36,6 +39,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window.minSize = NSSize(width: 600, height: 360)
         window.setFrameAutosaveName("GhostHerdrMain")
         window.tabbingMode = .disallowed
+        theme = Theme(controller: terminalController)
         super.init(window: window)
         window.delegate = self
         buildLayout()
@@ -51,26 +55,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func buildLayout() {
         guard let window else { return }
-        let sidebarEffect = NSVisualEffectView()
-        sidebarEffect.material = .sidebar
-        sidebarEffect.blendingMode = .behindWindow
-        sidebar.frame = sidebarEffect.bounds
-        sidebar.autoresizingMask = [.width, .height]
-        sidebarEffect.addSubview(sidebar)
-
-        let main = MainContentView(tabStrip: tabStrip, content: splitTree)
+        main = MainContentView(tabStrip: tabStrip, content: splitTree)
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.alignment = .center
         main.addSubview(emptyLabel)
         main.emptyLabel = emptyLabel
 
-        window.contentView = RootView(sidebar: sidebarEffect, main: main)
+        root = RootView(sidebar: sidebar, main: main)
+        root.onAppearanceChange = { [weak self] in self?.applyTheme() }
+        window.contentView = root
+        applyTheme()
 
         splitTree.paneView = { [weak self] id in self?.paneView(for: id) }
         splitTree.onRatioChange = { [weak self] path, ratio in
             guard let self, let tabID = self.tabID else { return }
             self.store.perform { try await $0.setSplitRatio(tabID: tabID, path: path, ratio: ratio) }
         }
+    }
+
+    /// Follows the system appearance: Ghostty picks the matching light or
+    /// dark theme, and the chrome is derived from its background.
+    private func applyTheme() {
+        guard let window else { return }
+        let dark = window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        terminalController.setColorScheme(dark ? .dark : .light)
+        theme = Theme(controller: terminalController)
+        Theme.current = theme
+        window.backgroundColor = theme.background
+        root.sidebarBackground = theme.sidebar
+        main.background = theme.chrome
+        for view in paneViews.values { view.apply(theme) }
+        func redraw(_ view: NSView) {
+            view.needsDisplay = true
+            view.subviews.forEach(redraw)
+        }
+        window.contentView.map(redraw)
     }
 
     private func wireActions() {
@@ -141,6 +160,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
         terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
         let view = PaneContainerView(paneID: id, content: terminal)
+        view.apply(theme)
         view.update(pane: pane)
         paneViews[id] = view
         return view
@@ -298,6 +318,13 @@ private final class RootView: NSView {
     private let main: NSView
     private var sidebarWidth: CGFloat = 220
     private var dragging = false
+    var onAppearanceChange: (() -> Void)?
+    var sidebarBackground: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
 
     init(sidebar: NSView, main: NSView) {
         self.sidebar = sidebar
@@ -318,7 +345,9 @@ private final class RootView: NSView {
     }
 
     override func draw(_: NSRect) {
-        NSColor.separatorColor.setFill()
+        sidebarBackground.setFill()
+        NSRect(x: 0, y: 0, width: sidebarWidth, height: bounds.height).fill()
+        (Theme.current?.divider ?? .separatorColor).setFill()
         NSRect(x: sidebarWidth, y: 0, width: 1, height: bounds.height).fill()
     }
 
@@ -347,6 +376,12 @@ private final class MainContentView: NSView {
     let tabStrip: TabStripView
     let content: NSView
     weak var emptyLabel: NSTextField?
+    var background: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
+
+    override func draw(_: NSRect) {
+        background.setFill()
+        bounds.fill()
+    }
 
     init(tabStrip: TabStripView, content: NSView) {
         self.tabStrip = tabStrip

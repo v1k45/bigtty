@@ -65,4 +65,5 @@ GHR_TEST_SESSION=ghrtest swift test          # + live socket/terminal tests
 
 Debug hooks on a running app: `kill -USR1 <pid>` writes window, pane and
 on-screen terminal text to `$TMPDIR/ghostherdr-debug.txt`;
-`kill -USR2 <pid>` pastes `$TMPDIR/ghostherdr-type.txt` into the focused pane.
+the key window is also rendered to `ghostherdr-debug.png` beside it (no
+screen-recording permission needed); `kill -USR2 <pid>` pastes `$TMPDIR/ghostherdr-type.txt` into the focused pane.

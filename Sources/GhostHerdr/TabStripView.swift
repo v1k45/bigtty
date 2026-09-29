@@ -40,7 +40,7 @@ final class TabStripView: NSView {
     }
 
     override func draw(_: NSRect) {
-        NSColor.separatorColor.setFill()
+        (Theme.current?.divider ?? .separatorColor).setFill()
         NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 

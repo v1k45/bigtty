@@ -113,7 +113,7 @@ final class SplitNodeView: NSView {
     }
 
     override func draw(_: NSRect) {
-        NSColor.separatorColor.setFill()
+        (Theme.current?.divider ?? .separatorColor).setFill()
         dividerRect.fill()
     }
 

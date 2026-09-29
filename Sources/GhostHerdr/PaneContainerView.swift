@@ -50,11 +50,17 @@ final class PaneContainerView: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
+    func apply(_ theme: Theme) {
+        layer?.backgroundColor = theme.chrome.cgColor
+    }
+
     func update(pane: Pane?) {
         guard let pane else { return }
         var title = pane.displayName
-        if let cwd = pane.foregroundCwd ?? pane.cwd, title != (cwd as NSString).lastPathComponent {
-            title += "  ·  " + (cwd as NSString).abbreviatingWithTildeInPath
+        if let cwd = (pane.foregroundCwd ?? pane.cwd).map({ ($0 as NSString).abbreviatingWithTildeInPath }),
+           !title.contains(cwd), title != (cwd as NSString).lastPathComponent
+        {
+            title += "  ·  " + cwd
         }
         header.stringValue = title
         status = pane.agentStatus
