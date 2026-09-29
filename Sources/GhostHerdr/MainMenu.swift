@@ -20,6 +20,7 @@ import AppKit
     func previousTab(_ sender: Any?)
     func newWorkspace(_ sender: Any?)
     func selectTabByNumber(_ sender: Any?)
+    func toggleSidebar(_ sender: Any?)
 }
 
 @MainActor
@@ -71,7 +72,13 @@ enum MainMenu {
             i.tag = n
         }
 
+        let view = submenu(main, "View")
+        item(view, "Show Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
+        item(view, "One Window per Space", #selector(AppDelegate.toggleWindowPerSpace(_:)), "")
+
         let window = submenu(main, "Window")
+        item(window, "Jump to Next Unread", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
+        window.addItem(.separator())
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         item(window, "Toggle Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
         NSApp.windowsMenu = window

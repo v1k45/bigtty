@@ -24,6 +24,10 @@ public final class SessionStore {
     private var eventObservers: [UUID: @MainActor (HerdrEvent) -> Void] = [:]
 
     private var stream: EventStream?
+    /// Panes the current stream watches for agent status; a different pane
+    /// set means resubscribing.
+    private var subscribedPanes: Set<String> = []
+    private var resubscribing = false
     private var refreshTask: Task<Void, Never>?
     private var refreshPending = false
     private var running = false
@@ -99,10 +103,16 @@ public final class SessionStore {
         var backoff: UInt64 = 500_000_000
         while running {
             do {
-                state = .connecting
+                if case .connected = state {} else { state = .connecting }
                 let endpoint = client.endpoint
-                let stream = try await Task.detached { try EventStream(endpoint: endpoint) }.value
+                // Snapshot first to learn the panes, subscribe, then re-read
+                // so nothing between the two is missed.
+                let panes = try await client.snapshot().panes.map(\.paneID)
+                let stream = try await Task.detached {
+                    try EventStream(endpoint: endpoint, agentStatusPanes: panes)
+                }.value
                 self.stream = stream
+                subscribedPanes = Set(panes)
                 try await refresh()
                 state = .connected(version: snapshot.version)
                 backoff = 500_000_000
@@ -121,13 +131,17 @@ public final class SessionStore {
                     for handler in eventObservers.values { handler(event) }
                     scheduleRefresh()
                 }
-                state = .disconnected("event stream ended")
+                if !resubscribing { state = .disconnected("event stream ended") }
             } catch {
-                state = .disconnected(String(describing: error))
+                if !resubscribing { state = .disconnected(String(describing: error)) }
             }
             stream?.close()
             stream = nil
             guard running else { break }
+            if resubscribing {
+                resubscribing = false
+                continue
+            }
             try? await Task.sleep(nanoseconds: backoff)
             backoff = min(backoff * 2, 5_000_000_000)
         }
@@ -158,6 +172,11 @@ public final class SessionStore {
             for try await layout in group {
                 if let layout { layouts[layout.tabID] = layout }
             }
+        }
+        let panes = Set(snapshot.panes.map(\.paneID))
+        if stream != nil, panes != subscribedPanes, !resubscribing {
+            resubscribing = true
+            stream?.close()
         }
         guard snapshot != self.snapshot || layouts != self.layouts else { return }
         self.snapshot = snapshot

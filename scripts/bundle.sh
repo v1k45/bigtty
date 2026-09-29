@@ -16,9 +16,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/GhostHerdr" "$app/Contents/MacOS/GhostHerdr"
 cp "$bin/ghr" "$app/Contents/MacOS/ghr"
-# SwiftPM's generated Bundle.module looks next to the app bundle's root.
+# SwiftPM resource bundles: its generated Bundle.module looks at the app
+# root, which code signing forbids, then at the absolute .build path. Dev
+# bundles rely on the latter so they can be signed; a distributable build
+# needs an Xcode project (milestone 8).
 for bundle in "$bin"/*.bundle; do
-    cp -R "$bundle" "$app/"
+    cp -R "$bundle" "$app/Contents/Resources/"
 done
 
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -38,5 +41,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Ad-hoc signing gives the app a stable identity, which notifications need.
+codesign --force --sign - --identifier dev.ghostherdr.GhostHerdr "$app/Contents/MacOS/ghr"
+codesign --force --sign - --identifier dev.ghostherdr.GhostHerdr "$app"
 
 echo "$app"

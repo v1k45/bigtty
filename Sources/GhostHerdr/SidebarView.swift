@@ -14,6 +14,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let footer = NSTextField(labelWithString: "")
     private let addButton = NSButton()
     private var workspaces: [Workspace] = []
+    private var badges: [String: Int] = [:]
     private var selectedID: String?
     private var suppressSelection = false
 
@@ -60,10 +61,11 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         footer.frame = NSRect(x: 10, y: 6, width: b.width - 44, height: 14)
     }
 
-    func update(workspaces: [Workspace], selected: String?, status: String) {
+    func update(workspaces: [Workspace], badges: [String: Int], selected: String?, status: String) {
         footer.stringValue = status
-        guard workspaces != self.workspaces || selected != selectedID else { return }
+        guard workspaces != self.workspaces || badges != self.badges || selected != selectedID else { return }
         self.workspaces = workspaces
+        self.badges = badges
         selectedID = selected
         suppressSelection = true
         table.reloadData()
@@ -80,7 +82,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor _: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: WorkspaceCell.identifier, owner: nil) as? WorkspaceCell
             ?? WorkspaceCell()
-        cell.configure(workspaces[row])
+        cell.configure(workspaces[row], badge: badges[workspaces[row].workspaceID] ?? 0)
         return cell
     }
 
@@ -130,6 +132,7 @@ private final class WorkspaceCell: NSTableCellView {
     private let label = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private let dot = NSView()
+    private let badge = BadgeView()
 
     init() {
         super.init(frame: .zero)
@@ -141,15 +144,17 @@ private final class WorkspaceCell: NSTableCellView {
         detail.alignment = .right
         dot.wantsLayer = true
         dot.layer?.cornerRadius = 4
-        for v in [label, detail, dot] { addSubview(v) }
+        for v in [label, detail, dot, badge] { addSubview(v) }
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
-    func configure(_ workspace: Workspace) {
+    func configure(_ workspace: Workspace, badge count: Int) {
         label.stringValue = workspace.label
-        detail.stringValue = workspace.tabCount > 1 ? "\(workspace.tabCount)" : ""
+        badge.count = count
+        detail.stringValue = count == 0 && workspace.tabCount > 1 ? "\(workspace.tabCount)" : ""
+        needsLayout = true
         dot.layer?.backgroundColor = workspace.agentStatus.color?.cgColor ?? NSColor.clear.cgColor
         toolTip = "\(workspace.label) — \(workspace.agentStatus.rawValue)"
     }
@@ -160,5 +165,7 @@ private final class WorkspaceCell: NSTableCellView {
         dot.frame = NSRect(x: 18, y: b.midY - 4, width: 8, height: 8)
         detail.frame = NSRect(x: b.width - 42, y: b.midY - 8, width: 24, height: 16)
         label.frame = NSRect(x: 34, y: b.midY - 9, width: b.width - 80, height: 18)
+        let size = badge.intrinsicContentSize
+        badge.frame = NSRect(x: b.width - 18 - size.width, y: b.midY - size.height / 2, width: size.width, height: size.height)
     }
 }

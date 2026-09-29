@@ -7,17 +7,22 @@ import HerdrKit
 /// herdr through a `TerminalChannel`.
 @MainActor
 final class HerdrTerminalView: AppTerminalView {
+    typealias Mode = TerminalChannel.Mode
+
     let paneID: String
     private let endpoint: HerdrEndpoint
     private let terminalID: String
     private var session: InMemoryTerminalSession!
     private var channel: TerminalChannel?
+    private(set) var mode: Mode = .control
     private var viewport: InMemoryTerminalViewport?
     private var scrollAccumulator: CGFloat = 0
 
     var onFocus: (() -> Void)?
     /// herdr ended the stream, e.g. another client took control.
     var onDetached: ((String) -> Void)?
+    /// Control moved to or from this view.
+    var onModeChange: ((Mode) -> Void)?
 
     init(pane: Pane, endpoint: HerdrEndpoint, controller: TerminalController) {
         paneID = pane.paneID
@@ -28,7 +33,7 @@ final class HerdrTerminalView: AppTerminalView {
         let box = WeakBox<HerdrTerminalView>()
         session = InMemoryTerminalSession(
             write: { data in
-                DispatchQueue.main.async { box.value?.channel?.sendInput(data) }
+                DispatchQueue.main.async { box.value?.userInput(data) }
             },
             resize: { viewport in
                 DispatchQueue.main.async { box.value?.viewportChanged(viewport) }
@@ -48,21 +53,40 @@ final class HerdrTerminalView: AppTerminalView {
 
     private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
         self.viewport = viewport
-        if let channel, channel.isRunning {
+        if let channel, channel.isRunning, mode == .control {
             channel.resize(
                 columns: Int(viewport.columns), rows: Int(viewport.rows),
                 cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels)
             )
         } else if window != nil {
-            attach()
+            // An observer's size is fixed at start, so restart it to follow.
+            startChannel()
         }
     }
 
-    /// Starts (or restarts) the stream, taking control from any other client.
+    /// Joins the pane in whatever mode the arbiter assigns.
     func attach() {
+        mode = ControlArbiter.shared.register(self)
+        startChannel()
+    }
+
+    /// Takes control from other windows and from other herdr clients.
+    func takeControl() {
+        ControlArbiter.shared.claim(self)
+    }
+
+    /// Called by the arbiter.
+    func setMode(_ mode: Mode) {
+        guard mode != self.mode || channel == nil else { return }
+        self.mode = mode
+        onModeChange?(mode)
+        if window != nil { startChannel() }
+    }
+
+    private func startChannel() {
         guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return }
         channel?.close()
-        let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID)
+        let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: mode)
         let session = session!
         channel.onFrame = { session.receive($0) }
         let box = WeakBox<HerdrTerminalView>()
@@ -87,6 +111,13 @@ final class HerdrTerminalView: AppTerminalView {
     func detach() {
         channel?.close()
         channel = nil
+        ControlArbiter.shared.release(self)
+    }
+
+    /// Typing into an observing view takes control first, then delivers.
+    private func userInput(_ data: Data) {
+        if mode == .observe { takeControl() }
+        channel?.sendInput(data)
     }
 
     override func viewDidMoveToWindow() {
@@ -105,7 +136,8 @@ final class HerdrTerminalView: AppTerminalView {
     override var debugDescription: String {
         let grid = viewport.map { "\($0.columns)x\($0.rows)" } ?? "none"
         let text = session.readViewportText() ?? "<no surface>"
-        return "viewport=\(grid) channel=\(channel?.isRunning == true ? "running" : "none")\n\(text)"
+        let state = channel?.isRunning == true ? "\(mode)" : "none"
+        return "viewport=\(grid) channel=\(state)\n\(text)"
     }
 
     // MARK: - Input routing
@@ -121,7 +153,10 @@ final class HerdrTerminalView: AppTerminalView {
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok { onFocus?() }
+        if ok {
+            if mode == .observe { takeControl() }
+            onFocus?()
+        }
         return ok
     }
 

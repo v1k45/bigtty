@@ -16,6 +16,7 @@ final class PaneContainerView: NSView {
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
     var isFocusedPane = false { didSet { updateChrome() } }
     private var status: AgentStatus = .unknown
+    private var attention: Attention.Reason?
 
     static let headerHeight: CGFloat = 22
 
@@ -54,8 +55,9 @@ final class PaneContainerView: NSView {
         layer?.backgroundColor = theme.chrome.cgColor
     }
 
-    func update(pane: Pane?) {
+    func update(pane: Pane?, attention: Attention.Reason?) {
         guard let pane else { return }
+        self.attention = attention
         var title = pane.displayName
         if let cwd = (pane.foregroundCwd ?? pane.cwd).map({ ($0 as NSString).abbreviatingWithTildeInPath }),
            !title.contains(cwd), title != (cwd as NSString).lastPathComponent
@@ -69,8 +71,12 @@ final class PaneContainerView: NSView {
 
     private func updateChrome() {
         statusDot.layer?.backgroundColor = status.color?.cgColor ?? NSColor.clear.cgColor
-        let needsAttention = status == .blocked || (status == .done && !isFocusedPane)
-        ring.borderColor = needsAttention ? NSColor.systemBlue.cgColor : NSColor.clear.cgColor
+        // cmux-style ring: blocked panes want input, finished ones want a look.
+        ring.borderColor = switch attention {
+        case .blocked: NSColor.systemOrange.cgColor
+        case .done: NSColor.systemBlue.cgColor
+        case nil: NSColor.clear.cgColor
+        }
         header.textColor = isFocusedPane ? .labelColor : .secondaryLabelColor
     }
 
@@ -83,7 +89,7 @@ final class PaneContainerView: NSView {
 
     @objc private func takeControl() {
         overlay.isHidden = true
-        terminal?.attach()
+        terminal?.takeControl()
         window?.makeFirstResponder(content)
     }
 

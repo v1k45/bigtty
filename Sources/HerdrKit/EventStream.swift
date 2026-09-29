@@ -21,9 +21,16 @@ public final class EventStream: @unchecked Sendable {
 
     /// Connects and waits for `subscription_started`, so a snapshot taken
     /// after this returns cannot miss an event.
-    public init(endpoint: HerdrEndpoint, types: [String] = EventStream.allEventTypes) throws {
+    public init(
+        endpoint: HerdrEndpoint,
+        types: [String] = EventStream.allEventTypes,
+        agentStatusPanes: [String] = []
+    ) throws {
         socket = try UnixSocket(path: endpoint.socketPath, timeout: nil)
-        let subscriptions = JSONValue.array(types.map { ["type": .string($0)] })
+        let perPane: [JSONValue] = agentStatusPanes.map {
+            ["type": "pane.agent_status_changed", "pane_id": .string($0)]
+        }
+        let subscriptions = JSONValue.array(types.map { ["type": .string($0)] } + perPane)
         let request: JSONValue = [
             "id": "subscribe",
             "method": "events.subscribe",
