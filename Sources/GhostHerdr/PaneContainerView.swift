@@ -14,6 +14,9 @@ final class PaneContainerView: NSView {
     private let ring = CALayer()
 
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
+    var browser: BrowserPaneView? { content as? BrowserPaneView }
+    /// What this view was built for; a pane re-tagged as another kind is rebuilt.
+    var hostKind: HostPaneKind? { browser != nil ? .browser : nil }
     var isFocusedPane = false { didSet { updateChrome() } }
     private var status: AgentStatus = .unknown
     private var attention: Attention.Reason?

@@ -21,6 +21,8 @@ import AppKit
     func newWorkspace(_ sender: Any?)
     func selectTabByNumber(_ sender: Any?)
     func toggleSidebar(_ sender: Any?)
+    func newBrowserPane(_ sender: Any?)
+    func openLocation(_ sender: Any?)
 }
 
 @MainActor
@@ -52,6 +54,9 @@ enum MainMenu {
         item(pane, "Split Right", #selector(PaneActions.splitRight(_:)), "d")
         item(pane, "Split Down", #selector(PaneActions.splitDown(_:)), "d", [.command, .shift])
         item(pane, "Zoom Pane", #selector(PaneActions.zoomPane(_:)), "\r", [.command, .shift])
+        pane.addItem(.separator())
+        item(pane, "New Browser Pane", #selector(PaneActions.newBrowserPane(_:)), "b", [.command, .option])
+        item(pane, "Open Location…", #selector(PaneActions.openLocation(_:)), "l")
         pane.addItem(.separator())
         item(pane, "Focus Left", #selector(PaneActions.focusLeft(_:)), arrow(.leftArrow), [.command, .option])
         item(pane, "Focus Right", #selector(PaneActions.focusRight(_:)), arrow(.rightArrow), [.command, .option])

@@ -6,7 +6,7 @@ import HerdrKit
 /// its own: herdr's frames are written into it, and its input goes back to
 /// herdr through a `TerminalChannel`.
 @MainActor
-final class HerdrTerminalView: AppTerminalView {
+final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, TerminalSurfaceTitleDelegate {
     typealias Mode = TerminalChannel.Mode
 
     let paneID: String
@@ -23,6 +23,8 @@ final class HerdrTerminalView: AppTerminalView {
     var onDetached: ((String) -> Void)?
     /// Control moved to or from this view.
     var onModeChange: ((Mode) -> Void)?
+    /// A link in the terminal was opened (⌘-click).
+    var onOpenURL: ((String) -> Void)?
 
     init(pane: Pane, endpoint: HerdrEndpoint, controller: TerminalController) {
         paneID = pane.paneID
@@ -43,6 +45,7 @@ final class HerdrTerminalView: AppTerminalView {
         box.value = self
         self.controller = controller
         configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        delegate = self
     }
 
     isolated deinit {
@@ -139,6 +142,19 @@ final class HerdrTerminalView: AppTerminalView {
         let state = channel?.isRunning == true ? "\(mode)" : "none"
         return "viewport=\(grid) channel=\(state)\n\(text)"
     }
+
+    // MARK: - Surface callbacks
+
+    func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+        if let onOpenURL, url.hasPrefix("http://") || url.hasPrefix("https://") {
+            onOpenURL(url)
+        } else if let url = URL(string: url) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// herdr owns titles; the surface's own title changes are ignored.
+    func terminalDidChangeTitle(_: String) {}
 
     // MARK: - Input routing
 

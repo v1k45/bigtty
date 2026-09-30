@@ -189,7 +189,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         if let current = lastFocusedPane, !visible.contains(current) { lastFocusedPane = nil }
         let focused = lastFocusedPane ?? herdrFocus
+        // A pane tagged as a browser (or untagged) since its view was built
+        // keeps the same layout, so the tree must be rebuilt explicitly.
+        let retagged = paneViews.filter { id, view in store.pane(id).map { $0.hostKind != view.hostKind } ?? false }
+        for (id, view) in retagged {
+            view.terminal?.detach()
+            view.removeFromSuperview()
+            paneViews.removeValue(forKey: id)
+            if id == lastFocusedPane || id == herdrFocus { pendingFocus = id }
+        }
         splitTree.show(layout?.root, zoomedPane: layout?.zoomed == true ? herdrFocus : nil)
+        if !retagged.isEmpty { splitTree.rebuild() }
         for (id, view) in paneViews {
             view.update(pane: store.pane(id), attention: attention.reason(for: id))
             view.isFocusedPane = id == focused
@@ -205,7 +215,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         if let target = pendingFocus ?? (lastFocusedPane == nil ? focused : nil), let view = paneViews[target] {
             pendingFocus = nil
             lastFocusedPane = target
-            window?.makeFirstResponder(view.content)
+            if let browser = view.browser {
+                if pendingAddressFocus, browser.webView.url == nil {
+                    pendingAddressFocus = false
+                    browser.focusAddressBar()
+                } else {
+                    window?.makeFirstResponder(browser.webView)
+                }
+            } else {
+                window?.makeFirstResponder(view.content)
+            }
         }
         window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
     }
@@ -219,16 +238,92 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     private func paneView(for id: String) -> NSView? {
-        if let view = paneViews[id] { return view }
-        guard let pane = store.pane(id) else { return nil }
-        let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
-        terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
-        let view = PaneContainerView(paneID: id, content: terminal)
+        guard let pane = store.pane(id) else { return paneViews[id] }
+        if let view = paneViews[id] {
+            if view.hostKind == pane.hostKind { return view }
+            // The pane was tagged (or untagged) as a host pane since: rebuild.
+            view.terminal?.detach()
+            view.removeFromSuperview()
+            paneViews.removeValue(forKey: id)
+        }
+        let content: NSView
+        if pane.hostKind == .browser, let hostID = pane.hostID {
+            content = makeBrowser(pane: pane, hostID: hostID)
+        } else {
+            let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
+            terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
+            terminal.onOpenURL = { [weak self] url in self?.openURL(url, from: id) }
+            content = terminal
+        }
+        let view = PaneContainerView(paneID: id, content: content)
         view.apply(theme)
         view.update(pane: pane, attention: attention.reason(for: id))
         paneViews[id] = view
         return view
     }
+
+    private func makeBrowser(pane: Pane, hostID: String) -> BrowserPaneView {
+        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
+        state.paneID = pane.paneID
+        HostPaneStore.shared[hostID] = state
+        let browser = BrowserPaneView(hostID: hostID, state: state)
+        let id = pane.paneID
+        browser.onFocus = { [weak self] in self?.paneGainedFocus(id) }
+        browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        return browser
+    }
+
+    /// Mirrors a browser pane's page title to herdr, at most once a second.
+    private var titleUpdates: [String: DispatchWorkItem] = [:]
+
+    private func hostTitleChanged(paneID: String, hostID: String, state: HostPaneState) {
+        titleUpdates[paneID]?.cancel()
+        let title = HostPaneStore.hostTitle(state)
+        let work = DispatchWorkItem { [weak self] in
+            self?.store.perform { client in
+                try await client.reportMetadata(
+                    paneID: paneID, title: title, tokens: ["ghr_kind": state.kind.rawValue, "ghr_id": hostID]
+                )
+            }
+        }
+        titleUpdates[paneID] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    /// A link clicked in a terminal opens in the tab's browser pane, or in a
+    /// new one split off to the right of that terminal.
+    func openURL(_ url: String, from paneID: String) {
+        guard let tabID = store.pane(paneID)?.tabID else { return }
+        if let browserPane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
+           let browser = paneViews[browserPane.paneID]?.browser
+        {
+            browser.load(url)
+            return
+        }
+        HostPaneStore.open(HostPaneState(kind: .browser, url: url), beside: paneID, direction: .right, store: store)
+    }
+
+    /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
+    @objc func debugOpenURL(_ sender: Any?) {
+        if let url = sender as? String, let pane = focusedPaneID { openURL(url, from: pane) }
+    }
+
+    @objc func newBrowserPane(_: Any?) {
+        guard let target = focusedPaneID else { return }
+        pendingAddressFocus = true
+        HostPaneStore.open(HostPaneState(kind: .browser), beside: target, direction: .right, store: store)
+    }
+
+    /// ⌘L: the focused browser pane's address bar, or a new browser pane.
+    @objc func openLocation(_ sender: Any?) {
+        if let id = focusedPaneID, let browser = paneViews[id]?.browser {
+            browser.focusAddressBar()
+        } else {
+            newBrowserPane(sender)
+        }
+    }
+
+    private var pendingAddressFocus = false
 
     private func paneGainedFocus(_ id: String) {
         lastFocusedPane = id
@@ -393,7 +488,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         var out = "window=\(window?.frame ?? .zero) tree=\(splitTree.frame)\n"
         out += "workspace=\(workspaceID ?? "-") tab=\(tabID ?? "-") focused=\(focusedPaneID ?? "-")\n"
         for (id, view) in paneViews.sorted(by: { $0.key < $1.key }) {
-            out += "pane \(id) frame=\(view.frame) \(view.terminal?.debugDescription ?? "")\n"
+            let browser = view.browser.map { "browser url=\($0.webView.url?.absoluteString ?? "-") title=\($0.webView.title ?? "-")" }
+            out += "pane \(id) frame=\(view.frame) \(view.terminal?.debugDescription ?? browser ?? "")\n"
         }
         return out
     }

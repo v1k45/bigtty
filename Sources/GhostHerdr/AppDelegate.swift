@@ -32,7 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         attention.reveal = { [weak self] pane in self?.reveal(pane) }
         NSApp.mainMenu = MainMenu.build()
         NSApp.windowsMenu?.delegate = self
-        store.observe { [weak self] in self?.reconcileSpaceWindows() }
+        store.observe { [weak self] in
+            guard let self else { return }
+            self.reconcileSpaceWindows()
+            if case .connected = self.store.state {
+                HostPaneStore.shared.prune(keeping: Set(self.store.snapshot.panes.compactMap(\.hostID)))
+            }
+        }
         store.start()
         DebugDump.install { [weak self] in self?.debugDescription ?? "" }
         DebugDump.installTyping { NSApp.keyWindow?.firstResponder as? HerdrTerminalView
