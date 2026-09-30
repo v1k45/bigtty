@@ -97,6 +97,20 @@ extension LayoutNode {
 }
 
 extension HerdrClient {
+    /// Puts `source` beside `target` in the same tab: out to a temporary
+    /// tab and straight back next to the target (herdr won't move a pane
+    /// within its own tab), then a swap for left/top. Two or three calls,
+    /// against a rebuild's two per pane.
+    public func movePane(_ source: String, beside target: String, zone: DropZone, tabID: String, workspaceID: String) async throws {
+        guard source != target, zone != .center else {
+            if zone == .center { try await swapPanes(source, target) }
+            return
+        }
+        try await movePaneToNewTab(source, workspaceID: workspaceID)
+        try await movePane(source, toTab: tabID, beside: target, split: zone == .left || zone == .right ? "right" : "down")
+        if zone == .left || zone == .top { try await swapPanes(source, target) }
+    }
+
     /// Rebuilds `tabID` into `desired`, keeping every pane and its process.
     /// herdr only splits single panes and won't move a pane within its own
     /// tab, so: park every pane but one in a temporary tab, split them back

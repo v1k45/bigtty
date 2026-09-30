@@ -12,6 +12,9 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private let forward = NSButton()
     private let reload = NSButton()
     private let external = NSButton()
+    private let closeButton = NSButton()
+    /// The pane's × button.
+    var onClose: (() -> Void)?
     private let address = NSTextField()
     private let addressBox = NSView()
     private let toolbarLine = NSView()
@@ -74,6 +77,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         configure(forward, "chevron.right", "Forward", #selector(goForward))
         configure(reload, "arrow.clockwise", "Reload", #selector(reloadPage))
         configure(external, "safari", "Open in Default Browser", #selector(openExternally))
+        configure(closeButton, "xmark", "Close Pane", #selector(closePane))
         address.placeholderString = "Search or enter address"
         address.font = .systemFont(ofSize: 12)
         address.isBezeled = false
@@ -96,7 +100,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         automationStrip.onTakeOver = { [weak self] in self?.hideAutomation() }
         errorPage.isHidden = true
         errorPage.onReload = { [weak self] in self?.reloadPage() }
-        for view in [back, forward, reload, addressBox, external, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
+        for view in [back, forward, reload, addressBox, external, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
             addSubview(view)
         }
         wantsLayer = true
@@ -150,10 +154,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let y = b.height - h + (h - 24) / 2
         back.frame = NSRect(x: 8, y: y, width: 26, height: 24)
         forward.frame = NSRect(x: 34, y: y, width: 26, height: 24)
-        reload.frame = NSRect(x: b.width - 36, y: y, width: 26, height: 24)
-        external.frame = NSRect(x: b.width - 62, y: y, width: 26, height: 24)
+        closeButton.frame = NSRect(x: b.width - 34, y: y, width: 26, height: 24)
+        reload.frame = NSRect(x: b.width - 60, y: y, width: 26, height: 24)
+        external.frame = NSRect(x: b.width - 86, y: y, width: 26, height: 24)
         // A centered, Safari-like address field.
-        let available = b.width - 70 - 70
+        let available = b.width - 94 - 94
         let fieldWidth = max(120, min(available, max(available * 0.8, 260)))
         addressBox.frame = NSRect(x: (b.width - fieldWidth) / 2, y: y, width: fieldWidth, height: 24)
         addressBox.layer?.backgroundColor = theme?.field.cgColor
@@ -280,6 +285,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             webView.reload()
         }
     }
+
+    @objc private func closePane() { onClose?() }
 
     @objc private func openExternally() {
         if let url = webView.url { NSWorkspace.shared.open(url) }

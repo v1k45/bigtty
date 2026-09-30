@@ -41,6 +41,20 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "dimUnfocused") }
     }
 
+    /// The window's translucent material behind the gaps between panes,
+    /// not just the sidebar.
+    static var translucentWindow: Bool {
+        get { UserDefaults.standard.object(forKey: "translucentWindow") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "translucentWindow") }
+    }
+
+    /// Terminal background opacity (1 = opaque); below 1 the window's
+    /// material shows through terminals too.
+    static var terminalOpacity: Double {
+        get { UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "terminalOpacity") }
+    }
+
     static var notify: Notify {
         get { UserDefaults.standard.string(forKey: "notify").flatMap(Notify.init) ?? .needsYouOrFinishes }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "notify") }
@@ -69,6 +83,8 @@ final class SettingsWindowController: NSWindowController {
     private let windows = NSPopUpButton()
     private let sidebar = NSSwitch()
     private let dim = NSSwitch()
+    private let translucent = NSSwitch()
+    private let opacity = NSPopUpButton()
     private let notify = NSPopUpButton()
     private let links = NSPopUpButton()
     private let herdr = NSTextField(labelWithString: "")
@@ -177,12 +193,15 @@ final class SettingsWindowController: NSWindowController {
         sidebar.action = #selector(sidebarChanged)
         dim.target = self
         dim.action = #selector(dimChanged)
+        translucent.target = self
+        translucent.action = #selector(translucentChanged)
         herdr.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
         herdr.textColor = .secondaryLabelColor
         return form([
             [label("Windows:"), stack(windows, "Spaces live in one window's sidebar, or each gets its own window.")],
             [label("Sidebar:"), stack(sidebar, "Show machines and spaces in new windows. ⌃⌘S toggles it per window.")],
             [label("Dim unfocused panes:"), dim],
+            [label("Translucent window:"), stack(translucent, "The sidebar’s material also shows between panes.")],
             [label("Notify when an agent:"), stack(notify, "Only for panes you aren’t looking at.")],
             [label("Open terminal links:"), links],
             [label("herdr:"), herdr],
@@ -223,6 +242,12 @@ final class SettingsWindowController: NSWindowController {
 
         contrast.target = self
         contrast.action = #selector(terminalChanged)
+        for (title, value) in Self.opacities {
+            opacity.addItem(withTitle: title)
+            opacity.lastItem?.representedObject = value
+        }
+        opacity.target = self
+        opacity.action = #selector(terminalChanged)
 
         configPath.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
         configPath.textColor = .secondaryLabelColor
@@ -246,10 +271,13 @@ final class SettingsWindowController: NSWindowController {
             [label("Theme:"), stack(theme, "The paired themes follow the system’s light and dark appearance.")],
             [label("Font:"), font],
             [label("Size:"), size],
+            [label("Background:"), stack(opacity, "Below opaque, the window’s material shows through terminals.")],
             [label("Contrast boost:"), stack(contrast, "Lifts text too close to its background, like dim gray on dark.")],
             [label("Ghostty config:"), config],
         ])
     }
+
+    private static let opacities: [(String, Double)] = [("Opaque", 1), ("Translucent (90%)", 0.9), ("More translucent (80%)", 0.8), ("Glass (70%)", 0.7)]
 
     /// Installed fixed-pitch families, the usual terminal fonts.
     private static func monospacedFamilies() -> [String] {
@@ -270,6 +298,9 @@ final class SettingsWindowController: NSWindowController {
         windows.selectItem(at: Settings.windowPerSpace ? 1 : 0)
         sidebar.state = Settings.sidebarVisible ? .on : .off
         dim.state = Settings.dimUnfocused ? .on : .off
+        translucent.state = Settings.translucentWindow ? .on : .off
+        let opacityIndex = Self.opacities.firstIndex { abs($0.1 - Settings.terminalOpacity) < 0.001 } ?? 0
+        opacity.selectItem(at: opacityIndex)
         notify.selectItem(at: Settings.Notify.allCases.firstIndex(of: Settings.notify) ?? 0)
         links.selectItem(at: Settings.Links.allCases.firstIndex(of: Settings.links) ?? 0)
         herdr.stringValue = herdrDescription()
@@ -317,6 +348,7 @@ final class SettingsWindowController: NSWindowController {
         Settings.fontFamily = font.indexOfSelectedItem <= 0 ? "" : font.titleOfSelectedItem ?? ""
         Settings.fontSize = size.indexOfSelectedItem <= 0 ? 0 : Double(size.selectedItem?.tag ?? 0)
         Settings.contrast = ContrastBoost.allCases[max(0, contrast.selectedSegment)]
+        Settings.terminalOpacity = opacity.selectedItem?.representedObject as? Double ?? 1
         onTerminalChange?()
         refresh()
     }
@@ -339,6 +371,11 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func sidebarChanged() {
         Settings.sidebarVisible = sidebar.state == .on
+        Settings.changed()
+    }
+
+    @objc private func translucentChanged() {
+        Settings.translucentWindow = translucent.state == .on
         Settings.changed()
     }
 

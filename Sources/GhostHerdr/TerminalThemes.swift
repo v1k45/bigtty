@@ -291,6 +291,7 @@ enum TerminalAppearance {
             if !family.isEmpty { builder.withFontFamily(family) }
             if Settings.fontSize > 0 { builder.withFontSize(Float(Settings.fontSize)) }
             if let ratio = Settings.contrast.ratio { builder.withMinimumContrast(ratio) }
+            if Settings.terminalOpacity < 1 { builder.withBackgroundOpacity(Settings.terminalOpacity) }
         }
     }
 

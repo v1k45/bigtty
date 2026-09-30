@@ -19,6 +19,9 @@ struct HostPaneState: Codable, Equatable {
     /// The file shown in a files pane, and its mode ("files" or "changes").
     var selection: String?
     var mode: String?
+    /// Whether the files pane shows its tree; unset: only when opened on a
+    /// folder (a file opens on its own, full width).
+    var showsTree: Bool?
     /// A line to reveal once (from `ghr open file:line`); not persisted meaningfully.
     var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.

@@ -104,7 +104,10 @@ final class PaneContainerView: NSView {
     required init?(coder _: NSCoder) { fatalError() }
 
     func apply(_ theme: Theme) {
-        layer?.backgroundColor = theme.pane.cgColor
+        // Terminals honour the background opacity setting; the card behind
+        // them must be as see-through, or the material can't show.
+        let alpha = terminal != nil ? CGFloat(Settings.terminalOpacity) : 1
+        layer?.backgroundColor = theme.pane.withAlphaComponent(alpha).cgColor
         updateRing()
     }
 

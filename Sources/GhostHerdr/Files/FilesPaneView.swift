@@ -18,6 +18,12 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private let modeControl = NSSegmentedControl(labels: ["Files", "Changes"], trackingMode: .selectOne, target: nil, action: nil)
     private let titleLabel = NSTextField(labelWithString: "")
+    private let closeButton = NSButton()
+    private let treeButton = NSButton()
+    /// The tree (or changes list) beside the file; a file opens without it.
+    private var showsTree: Bool
+    /// The pane's × button.
+    var onClose: (() -> Void)?
     private let outline = NSOutlineView()
     private let outlineScroll = NSScrollView()
     private let divider = PaneDivider()
@@ -59,6 +65,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         mode = state.kind == .diff || state.mode == Mode.changes.rawValue ? .changes : .files
         selection = state.selection
         pendingLine = state.line
+        showsTree = state.showsTree ?? (state.selection == nil)
         tree = FileNode(path: root, isDirectory: true)
         super.init(frame: .zero)
         clipsToBounds = true
@@ -72,6 +79,23 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingHead
         addSubview(modeControl)
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        closeButton.isBordered = false
+        closeButton.bezelStyle = .regularSquare
+        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.toolTip = "Close Pane"
+        closeButton.target = self
+        closeButton.action = #selector(closeClicked)
+        addSubview(closeButton)
+        treeButton.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Show Files")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        treeButton.isBordered = false
+        treeButton.bezelStyle = .regularSquare
+        treeButton.target = self
+        treeButton.action = #selector(toggleTree)
+        addSubview(treeButton)
+        updateTreeButton()
         addSubview(titleLabel)
 
         let column = NSTableColumn(identifier: .init("name"))
@@ -148,12 +172,14 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         let b = bounds
         let h = Self.toolbarHeight
         let y = b.height - h + (h - 22) / 2
+        treeButton.frame = NSRect(x: 6, y: y - 1, width: 24, height: 24)
         let control = modeControl.fittingSize
-        modeControl.frame = NSRect(x: 8, y: y, width: control.width, height: 22)
-        titleLabel.frame = NSRect(x: modeControl.frame.maxX + 10, y: y + 3, width: max(0, b.width - modeControl.frame.maxX - 20), height: 16)
+        modeControl.frame = NSRect(x: treeButton.frame.maxX + 4, y: y, width: control.width, height: 22)
+        closeButton.frame = NSRect(x: b.width - 30, y: y - 1, width: 24, height: 24)
+        titleLabel.frame = NSRect(x: modeControl.frame.maxX + 10, y: y + 3, width: max(0, closeButton.frame.minX - modeControl.frame.maxX - 16), height: 16)
         let body = max(0, b.height - h)
         // Narrow panes give the file itself the room; the tree comes back when wider.
-        let tree: CGFloat = b.width < 420 ? 0 : min(treeWidth, max(140, b.width * 0.35))
+        let tree: CGFloat = !showsTree ? 0 : b.width < 420 ? min(b.width * 0.45, 180) : min(treeWidth, max(140, b.width * 0.35))
         outlineScroll.isHidden = tree == 0
         divider.isHidden = tree == 0
         outlineScroll.frame = NSRect(x: 0, y: 0, width: tree, height: body)
@@ -180,8 +206,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private func apply(status: GitClient.Status, listings: [String: [FileSource.Entry]]) {
         self.status = status
-        titleLabel.stringValue = displayPath(root)
-            + (git == nil ? "" : "  ·  \(status.changes.count) changed")
+        updateTitle()
         let expanded = expandedPaths()
         switch mode {
         case .files:
@@ -259,6 +284,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         selection = path
         pendingLine = line
         showSelection()
+        updateTitle()
         publish()
         guard mode == .files, path.hasPrefix(root) else { return reselect() }
         let parts = String(path.dropFirst(root.count)).split(separator: "/").map(String.init).dropLast()
@@ -351,8 +377,37 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         state.path = root
         state.selection = selection
         state.mode = mode.rawValue
+        state.showsTree = showsTree
         HostPaneStore.shared[hostID] = state
         onStateChange?(state)
+    }
+
+    @objc private func closeClicked() { onClose?() }
+
+    @objc private func toggleTree() {
+        showsTree.toggle()
+        updateTreeButton()
+        updateTitle()
+        needsLayout = true
+        reload()
+        publish()
+    }
+
+    /// The folder and change count beside the tree; just the file's name
+    /// when it's shown on its own (its path is in the tooltip).
+    private func updateTitle() {
+        if !showsTree, let selection {
+            titleLabel.stringValue = (selection as NSString).lastPathComponent
+            titleLabel.toolTip = displayPath(selection)
+        } else {
+            titleLabel.stringValue = displayPath(root) + (git == nil ? "" : "  ·  \(status.changes.count) changed")
+            titleLabel.toolTip = nil
+        }
+    }
+
+    private func updateTreeButton() {
+        treeButton.contentTintColor = showsTree ? .controlAccentColor : .secondaryLabelColor
+        treeButton.toolTip = showsTree ? "Hide Files" : "Show Files"
     }
 
     @objc private func modeChanged() {

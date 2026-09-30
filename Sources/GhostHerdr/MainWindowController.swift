@@ -140,6 +140,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         Theme.current = theme
         window.backgroundColor = theme.window
         root.background = theme.window
+        root.translucentContent = Settings.translucentWindow
         placeholder.background = theme.pane
         for view in paneViews.values {
             view.apply(theme)
@@ -196,7 +197,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     // MARK: - Rendering
 
+    /// A pane move is in flight; see `drop(_:on:)`.
+    private var rearranging = false
+
     private func render() {
+        if rearranging { return }
         if case .connected = store.state { HostPaneStore.restoreTags(store: store, remote: !machine.isLocal) }
         if Settings.terminalMode == .herdrClient { return renderClient() }
         let snapshot = store.snapshot
@@ -636,9 +641,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             return
         }
         let desired = root.dropping(source, on: target)
-        store.perform { client in
-            try await client.applyLayout(desired, current: root, tabID: tabID, workspaceID: workspaceID)
-            try? await client.focusPane(source)
+        guard !desired.sameArrangement(as: root) else { return }
+        // Panes pass through a temporary tab on the way; hold this window
+        // still until the move is done, so their terminals aren't torn
+        // down and rebuilt for every intermediate step.
+        rearranging = true
+        let client = store.client
+        Task { [weak self] in
+            do {
+                if case let .pane(other, zone) = target {
+                    try await client.movePane(source, beside: other, zone: zone, tabID: tabID, workspaceID: workspaceID)
+                } else {
+                    try await client.applyLayout(desired, current: root, tabID: tabID, workspaceID: workspaceID)
+                }
+                try? await client.focusPane(source)
+            } catch {
+                NSLog("ghostherdr: moving pane failed: \(error)")
+            }
+            guard let self else { return }
+            self.rearranging = false
+            self.store.scheduleRefresh()
+            self.render()
         }
     }
 
@@ -666,6 +689,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self?.paneGainedFocus(id)
         }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        browser.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return browser
     }
 
@@ -679,6 +703,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         files.onFocus = { [weak self] in self?.paneGainedFocus(id) }
         files.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         files.onInsertPath = { [weak self] path in self?.insertPath(path, near: id) }
+        files.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return files
     }
 
@@ -971,6 +996,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func focusRight(_: Any?) { moveFocus("right") }
     @objc func focusUp(_: Any?) { moveFocus("up") }
     @objc func focusDown(_: Any?) { moveFocus("down") }
+
+    @objc func nextPane(_: Any?) { cyclePane(by: 1) }
+    @objc func previousPane(_: Any?) { cyclePane(by: -1) }
+
+    /// ⌘] / ⌘[: the next or previous pane in layout order, wrapping.
+    private func cyclePane(by offset: Int) {
+        guard let tabID, let panes = store.layouts[tabID]?.root.paneIDs, panes.count > 1 else { return }
+        let current = panes.firstIndex(of: focusedPaneID ?? "") ?? 0
+        let next = panes[(current + offset + panes.count) % panes.count]
+        if let view = paneViews[next] {
+            pendingFocus = next
+            window?.makeFirstResponder(view.browser?.webView ?? view.content)
+            paneGainedFocus(next)
+        } else {
+            lastFocusedPane = nil
+            store.perform { try await $0.focusPane(next) }
+        }
+    }
 
     private func moveFocus(_ direction: String) {
         let pane = focusedPaneID
@@ -1315,8 +1358,14 @@ private final class RootView: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
+    /// The material spans the window (gaps between panes too), or only
+    /// the sidebar with an opaque content side.
+    var translucentContent = true {
+        didSet { needsLayout = true; needsDisplay = true }
+    }
+
     override func draw(_: NSRect) {
-        // Only the content side is opaque; the sidebar shows its material.
+        guard !translucentContent else { return }
         background.setFill()
         NSRect(x: sidebarVisible ? sidebarWidth : 0, y: 0, width: bounds.width, height: bounds.height).fill()
     }
@@ -1327,8 +1376,8 @@ private final class RootView: NSView {
         let b = bounds
         let w = sidebarVisible ? sidebarWidth : 0
         sidebar.frame = NSRect(x: 0, y: 0, width: w, height: b.height)
-        material.frame = sidebar.frame
-        material.isHidden = !sidebarVisible
+        material.frame = translucentContent ? b : sidebar.frame
+        material.isHidden = !sidebarVisible && !translucentContent
         main.frame = NSRect(x: w, y: 0, width: b.width - w, height: b.height)
         main.leadingPadding = sidebarVisible ? 0 : 8
     }
