@@ -103,6 +103,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "browserFullscreen") }
     }
 
+    /// Selecting text in a terminal copies it.
+    static var copyOnSelect: Bool {
+        get { UserDefaults.standard.object(forKey: "copyOnSelect") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "copyOnSelect") }
+    }
+
     static var notify: Notify {
         get { UserDefaults.standard.string(forKey: "notify").flatMap(Notify.init) ?? .needsYouOrFinishes }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "notify") }
@@ -140,6 +146,7 @@ final class SettingsWindowController: NSWindowController {
     private let herdr = NSTextField(labelWithString: "")
 
     private let engine = NSPopUpButton()
+    private let copySelect = NSSwitch()
     private let theme = NSPopUpButton()
     private let font = NSPopUpButton()
     private let size = NSPopUpButton()
@@ -300,6 +307,8 @@ final class SettingsWindowController: NSWindowController {
 
         contrast.target = self
         contrast.action = #selector(terminalChanged)
+        copySelect.target = self
+        copySelect.action = #selector(terminalChanged)
         for (title, value) in Self.opacities {
             opacity.addItem(withTitle: title)
             opacity.lastItem?.representedObject = value
@@ -330,6 +339,7 @@ final class SettingsWindowController: NSWindowController {
             [label("Font:"), font],
             [label("Size:"), size],
             [label("Background:"), stack(opacity, "Below opaque, the window’s material shows through terminals.")],
+            [label("Copy on select:"), stack(copySelect, "Selected text goes straight to the clipboard.")],
             [label("Contrast boost:"), stack(contrast, "Lifts text too close to its background, like dim gray on dark.")],
             [label("Ghostty config:"), config],
         ])
@@ -374,6 +384,7 @@ final class SettingsWindowController: NSWindowController {
             font.selectItem(withTitle: Settings.fontFamily)
         }
         if !size.selectItem(withTag: Int(Settings.fontSize)) || Settings.fontSize == 0 { size.selectItem(at: 0) }
+        copySelect.state = Settings.copyOnSelect ? .on : .off
         contrast.selectedSegment = ContrastBoost.allCases.firstIndex(of: Settings.contrast) ?? 1
         configPath.stringValue = TerminalAppearance.configPath().map { ($0 as NSString).abbreviatingWithTildeInPath }
             ?? "None yet: Edit Config creates ~/.config/ghostty/config.ghostty"
@@ -409,6 +420,7 @@ final class SettingsWindowController: NSWindowController {
         Settings.fontSize = size.indexOfSelectedItem <= 0 ? 0 : Double(size.selectedItem?.tag ?? 0)
         Settings.contrast = ContrastBoost.allCases[max(0, contrast.selectedSegment)]
         Settings.terminalOpacity = opacity.selectedItem?.representedObject as? Double ?? 1
+        Settings.copyOnSelect = copySelect.state == .on
         onTerminalChange?()
         refresh()
     }

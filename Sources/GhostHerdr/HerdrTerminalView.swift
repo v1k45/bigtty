@@ -247,6 +247,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// ⌘-click on a link or a path. Web links go to the browser pane,
     /// paths (and file:// links) to the files pane; see `openURL(_:from:)`.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+        openedLinkThisClick = true
         if let onOpenURL {
             onOpenURL(url)
         } else if let link = URL(string: url), link.scheme != nil {
@@ -358,9 +359,38 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     }
 
     override func mouseUp(with event: NSEvent) {
+        openedLinkThisClick = false
         super.mouseUp(with: event)
         // ⌘-click opens links; that's Ghostty's, not the app's.
-        if !event.modifierFlags.contains(.command) { released(event) }
+        guard event.modifierFlags.contains(.command) else { return released(event) }
+        // Nothing Ghostty saw as a link: the word under the pointer may
+        // still be a file name ("workspace.png" in an agent's table).
+        guard !draggedSincePress, let cell = cellPosition(of: event) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, !self.openedLinkThisClick, let word = self.word(atColumn: cell.column, row: cell.row) else { return }
+            self.onOpenURL?(word)
+        }
+    }
+
+    private var openedLinkThisClick = false
+
+    /// The path-like word at a cell of the viewport, if it looks like a
+    /// file name (has a dot or a slash).
+    private func word(atColumn column: Int, row: Int) -> String? {
+        guard let text = session.readViewportText() else { return nil }
+        let lines = text.components(separatedBy: "\n")
+        guard row < lines.count else { return nil }
+        let chars = Array(lines[row])
+        guard column < chars.count else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-/~+@:#"))
+        func ok(_ c: Character) -> Bool { c.unicodeScalars.allSatisfy { allowed.contains($0) } }
+        guard ok(chars[column]) else { return nil }
+        var start = column, end = column
+        while start > 0, ok(chars[start - 1]) { start -= 1 }
+        while end + 1 < chars.count, ok(chars[end + 1]) { end += 1 }
+        let word = String(chars[start...end]).trimmingCharacters(in: CharacterSet(charactersIn: ".:,"))
+        guard word.count > 1, word.contains(".") || word.contains("/") else { return nil }
+        return word
     }
 
     /// Pointer motion, once per cell, for apps that track it (hover

@@ -295,6 +295,8 @@ enum TerminalAppearance {
             // clear and the pane card paints the color once, at the chosen
             // opacity (both painting it doubled the opacity toward black).
             if Settings.terminalOpacity < 1 { builder.withBackgroundOpacity(0) }
+            // Selecting text copies it (to the system clipboard).
+            builder.withCustom("copy-on-select", Settings.copyOnSelect ? "clipboard" : "false")
         }
     }
 

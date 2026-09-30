@@ -923,16 +923,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let cwd = pane?.foregroundCwd ?? pane?.cwd ?? machine.homeDirectory ?? "/"
         let path = target.resolved(cwd: cwd, home: machine.homeDirectory)
         let line = target.line
+        let relative = !target.path.hasPrefix("/") && !target.path.hasPrefix("~")
         Task.detached {
             let exists = source.exists(path)
             let isDirectory = exists && source.isDirectory(path)
-            let repo = exists ? GitClient.repository(containing: path, runner: source.runner) : nil
+            let repo = GitClient.repository(containing: exists ? path : cwd, runner: source.runner)
+            // A bare name ("workspace.png" in an agent's table): find it in
+            // the project.
+            let matches = !exists && relative ? (repo?.files(named: target.path) ?? []) : []
             await MainActor.run {
-                guard exists else { NSSound.beep(); return }
-                let folder = isDirectory ? path : (path as NSString).deletingLastPathComponent
-                self.showInFiles(path: isDirectory ? nil : path, root: repo?.root ?? folder, line: line, beside: paneID)
+                if exists {
+                    let folder = isDirectory ? path : (path as NSString).deletingLastPathComponent
+                    self.showInFiles(path: isDirectory ? nil : path, root: repo?.root ?? folder, line: line, beside: paneID)
+                } else if matches.count == 1, let match = matches.first {
+                    self.showInFiles(path: match, root: repo?.root ?? (match as NSString).deletingLastPathComponent, line: line, beside: paneID)
+                } else if matches.count > 1, let repo {
+                    self.chooseFile(matches, root: repo.root, line: line, beside: paneID)
+                } else {
+                    NSSound.beep()
+                }
             }
         }
+    }
+
+    /// Several project files share the clicked name: a menu at the pointer.
+    private func chooseFile(_ paths: [String], root: String, line: Int?, beside paneID: String) {
+        let menu = NSMenu()
+        for path in paths.sorted(by: { $0.count < $1.count }).prefix(12) {
+            let shown = path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : path
+            menu.addItem(ClosureMenuItem(title: shown, keyEquivalent: "") { [weak self] in
+                self?.showInFiles(path: path, root: root, line: line, beside: paneID)
+            })
+        }
+        guard let view = window?.contentView else { return }
+        let point = view.convert(window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+        menu.popUp(positioning: nil, at: point, in: view)
     }
 
     /// Selects `path` in the tab's files pane when it covers `root`, else

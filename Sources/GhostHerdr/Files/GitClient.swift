@@ -42,6 +42,16 @@ struct GitClient: Sendable {
         runner.run("git", ["-C", root] + args, okStatuses: okStatuses)
     }
 
+    /// Repository files (tracked and untracked, not ignored) whose name is
+    /// `name`, or whose path ends in `name` ("screenshots/workspace.png").
+    func files(named name: String) -> [String] {
+        guard let out = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]) else { return [] }
+        let suffix = "/" + name
+        return out.split(separator: "\0").map(String.init)
+            .filter { $0 == name || $0.hasSuffix(suffix) }
+            .map { (root as NSString).appendingPathComponent($0) }
+    }
+
     func status() -> Status {
         var changes: [String: Change] = [:]
         guard let out = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else {

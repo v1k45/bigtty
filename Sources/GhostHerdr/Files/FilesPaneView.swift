@@ -56,6 +56,9 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     static let toolbarHeight: CGFloat = 30
     nonisolated static let maxFileBytes = 4_000_000
+    /// Images and PDFs are shown, not read as text: a full-resolution
+    /// screenshot easily passes 4 MB, and a cut-off one can't be decoded.
+    nonisolated static let maxPreviewBytes = 200_000_000
 
     init(hostID: String, state: HostPaneState, source: FileSource = .local) {
         self.hostID = hostID
@@ -337,6 +340,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         let git = git
         let untracked = status.changes[selection] == .untracked
         let isDirectoryHint = tree.find(selection)?.isDirectory
+        let isPreview = ImagePreview.canShow(selection)
         Task.detached {
             if mode == .changes, let git {
                 let diff = git.diff(selection, untracked: untracked)
@@ -348,7 +352,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             }
             let isDirectory = isDirectoryHint ?? source.isDirectory(selection)
             let modified = source.modified(selection)
-            let data = isDirectory ? nil : source.read(selection, limit: Self.maxFileBytes + 1)
+            let data = isDirectory ? nil : source.read(selection, limit: (isPreview ? Self.maxPreviewBytes : Self.maxFileBytes) + 1)
             await MainActor.run {
                 guard token == self.loadToken else { return }
                 self.shownModified = modified
