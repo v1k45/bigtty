@@ -273,6 +273,9 @@ final class Machine {
         return versionWarning.map { $0 + " (works; update to match if something looks off)" }
     }
 
+    /// The login's home here, for resolving ~ in clicked paths.
+    var homeDirectory: String? { isLocal ? NSHomeDirectory() : probe?.home }
+
     /// A path on this machine as the sidebar shows it: home as ~.
     func displayPath(_ path: String) -> String {
         if isLocal { return (path as NSString).abbreviatingWithTildeInPath }

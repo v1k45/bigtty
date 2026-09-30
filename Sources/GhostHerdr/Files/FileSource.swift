@@ -65,6 +65,11 @@ final class FileSource: @unchecked Sendable {
     }
 
     /// The home directory, for panes with no better starting point.
+    func exists(_ path: String) -> Bool {
+        guard isRemote else { return FileManager.default.fileExists(atPath: path) }
+        return runner.run("test", ["-e", path]) != nil
+    }
+
     func home() -> String {
         guard isRemote else { return NSHomeDirectory() }
         return runner.run("sh", ["-c", "printf %s \"$HOME\""]) ?? "/"

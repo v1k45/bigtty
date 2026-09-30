@@ -239,11 +239,13 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     // MARK: - Surface callbacks
 
+    /// ⌘-click on a link or a path. Web links go to the browser pane,
+    /// paths (and file:// links) to the files pane; see `openURL(_:from:)`.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
-        if let onOpenURL, url.hasPrefix("http://") || url.hasPrefix("https://") {
+        if let onOpenURL {
             onOpenURL(url)
-        } else if let url = URL(string: url) {
-            NSWorkspace.shared.open(url)
+        } else if let link = URL(string: url), link.scheme != nil {
+            NSWorkspace.shared.open(link)
         }
     }
 

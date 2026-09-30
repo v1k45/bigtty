@@ -522,6 +522,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// A link clicked in a terminal opens in the tab's browser pane, or in a
     /// new one split off to the right of that terminal.
     func openURL(_ url: String, from paneID: String) {
+        let lower = url.lowercased()
+        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else {
+            return openLink(url, from: paneID)
+        }
         if Settings.links == .defaultBrowser, let link = URL(string: url) {
             NSWorkspace.shared.open(link)
             return
@@ -534,6 +538,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             return
         }
         HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.isLocal ? nil : machine.id), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
+    }
+
+    /// A clicked path or non-web link. Paths, `path:line[:col]` and file://
+    /// links open in the tab's files pane, resolved against the pane's
+    /// directory on its machine; other schemes (mailto:) go to macOS.
+    private func openLink(_ raw: String, from paneID: String) {
+        guard let target = ClickedPath(raw) else {
+            if let link = URL(string: raw), link.scheme != nil { NSWorkspace.shared.open(link) }
+            return
+        }
+        let pane = store.pane(paneID)
+        let machine = machine
+        let source = machine.isLocal ? FileSource.local : FileSource(runner: machine.runner)
+        let cwd = pane?.foregroundCwd ?? pane?.cwd ?? machine.homeDirectory ?? "/"
+        let path = target.resolved(cwd: cwd, home: machine.homeDirectory)
+        let line = target.line
+        Task.detached {
+            let exists = source.exists(path)
+            let isDirectory = exists && source.isDirectory(path)
+            let repo = exists ? GitClient.repository(containing: path, runner: source.runner) : nil
+            await MainActor.run {
+                guard exists else { NSSound.beep(); return }
+                let folder = isDirectory ? path : (path as NSString).deletingLastPathComponent
+                self.showInFiles(path: isDirectory ? nil : path, root: repo?.root ?? folder, line: line, beside: paneID)
+            }
+        }
+    }
+
+    /// Selects `path` in the tab's files pane when it covers `root`, else
+    /// opens one beside `paneID`.
+    private func showInFiles(path: String?, root: String, line: Int?, beside paneID: String) {
+        guard let tabID = store.pane(paneID)?.tabID else { return }
+        for existing in store.panes(in: tabID) where existing.hostKind == .files || existing.hostKind == .diff {
+            guard let hostID = existing.hostID, let view = FilesRegistry.shared.existing(hostID) else { continue }
+            let target = path ?? root
+            if target.hasPrefix(view.root == "/" ? "/" : view.root + "/") || target == view.root {
+                view.setMode(.files)
+                if let path { view.select(path: path, line: line) }
+                pendingFocus = existing.paneID
+                return
+            }
+        }
+        HostPaneStore.open(
+            HostPaneState(kind: .files, path: root, selection: path, mode: FilesPaneView.Mode.files.rawValue, line: line,
+                          machine: machine.isLocal ? nil : machine.id),
+            beside: paneID, direction: .right, store: store, remote: !machine.isLocal
+        )
     }
 
     /// Debug hook: scrolls the focused terminal by N lines (negative: down).
