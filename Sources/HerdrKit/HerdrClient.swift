@@ -128,23 +128,6 @@ public struct HerdrClient: Sendable {
         try await call("pane.move", ["pane_id": .string(paneID), "destination": ["type": "new_tab", "workspace_id": .string(workspaceID)]])
     }
 
-    /// Drag-and-drop: puts `source` on `zone` of `target`, which may be in
-    /// another tab. herdr can't move a pane within its own tab, so a
-    /// same-tab move goes out to a temporary tab and back (herdr drops the
-    /// emptied tab); split only goes right or down, so left and top swap
-    /// the pair afterwards. The pane and its process are kept throughout.
-    public func rearrange(_ source: String, onto target: String, zone: DropZone,
-                          sourceTab: String, targetTab: String, workspaceID: String) async throws {
-        guard source != target else { return }
-        if zone == .center { return try await swapPanes(source, target) }
-        if sourceTab == targetTab {
-            try await movePaneToNewTab(source, workspaceID: workspaceID)
-        }
-        let split = zone == .left || zone == .right ? "right" : "down"
-        try await movePane(source, toTab: targetTab, beside: target, split: split)
-        if zone == .left || zone == .top { try await swapPanes(source, target) }
-    }
-
     public func closePane(_ paneID: String) async throws {
         try await call("pane.close", ["pane_id": .string(paneID)])
     }

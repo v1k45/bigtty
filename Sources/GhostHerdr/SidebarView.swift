@@ -156,6 +156,7 @@ private final class MessageRow: NSView, SidebarRow {
         label.stringValue = text
         label.font = .systemFont(ofSize: 12)
         label.textColor = .tertiaryLabelColor
+        label.isSelectable = false
         addSubview(label)
     }
 
@@ -178,6 +179,8 @@ private final class MachineHeader: NSView, SidebarRow {
     // click instead, over their whole area, even in an inactive window.
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
     var onClick: (() -> Void)?
     private let isProblem: Bool
@@ -231,6 +234,18 @@ private final class SpaceCard: NSView, SidebarRow {
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
 
+    /// The whole card is one button (labels must not take the click or
+    /// show a text cursor); only its tab rows are separate.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        var view: NSView? = hit
+        while let current = view, current !== self {
+            if current is TabRow { return current }
+            view = current.superview
+        }
+        return self
+    }
+
     let space: SidebarModel.Space
     var onClick: (() -> Void)?
     var onTab: ((String) -> Void)?
@@ -274,6 +289,7 @@ private final class SpaceCard: NSView, SidebarRow {
         line.maximumNumberOfLines = space.alert ? 2 : 1
         line.lineBreakMode = .byTruncatingTail
         line.isHidden = space.line == nil
+        line.isSelectable = false
         for view in [dot, name, shortcut, meta, line] { addSubview(view) }
 
         for port in space.ports.prefix(3) {
@@ -379,6 +395,8 @@ private final class TabRow: NSView {
     // click instead, over their whole area, even in an inactive window.
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
     var onClick: (() -> Void)?
     private let icon = NSImageView()

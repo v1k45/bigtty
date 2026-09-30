@@ -13,7 +13,6 @@ final class PaneContainerView: NSView {
     private let detached = DetachedOverlay()
     private let zoomPill = ZoomPill()
     private let grip = PaneGrip()
-    private let dropHighlight = DropHighlight()
     private let dropCatcher = DropCatcher()
     private var dragObserver: NSObjectProtocol?
     private var hoverArea: NSTrackingArea?
@@ -22,10 +21,12 @@ final class PaneContainerView: NSView {
     var dragPayload: (() -> PaneDragPayload?)?
     /// The pane's name on the drag card.
     var dragTitle: (() -> String)?
-    /// Whether a dragged pane may land here (same machine, not itself).
-    var acceptsDrop: ((PaneDragPayload) -> Bool)?
-    /// A pane was dropped on `zone` of this one.
-    var onDrop: ((PaneDragPayload, HerdrClient.DropZone) -> Void)?
+    /// A pane is dragged over this one at a window point: show where it
+    /// would land; false if it can't.
+    var dropHover: ((PaneDragPayload, NSPoint) -> Bool)?
+    /// Dropped at a window point; true if it was used.
+    var dropCommit: ((PaneDragPayload, NSPoint) -> Bool)?
+    var dropExit: (() -> Void)?
 
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
     var browser: BrowserPaneView? { content as? BrowserPaneView }
@@ -70,7 +71,6 @@ final class PaneContainerView: NSView {
         grip.payload = { [weak self] in self?.dragPayload?() }
         grip.title = { [weak self] in self?.dragTitle?() ?? "Pane" }
         addSubview(grip)
-        addSubview(dropHighlight)
         dropCatcher.target = self
         addSubview(dropCatcher)
         registerForDraggedTypes([.ghostherdrPane])
@@ -78,7 +78,7 @@ final class PaneContainerView: NSView {
             let active = note.object as? Bool ?? false
             MainActor.assumeIsolated {
                 self?.dropCatcher.isHidden = !active
-                if !active { self?.dropHighlight.hide() }
+                if !active { self?.dropExit?() }
             }
         }
 
@@ -184,31 +184,22 @@ final class PaneContainerView: NSView {
     /// for moving the window.
     override var mouseDownCanMoveWindow: Bool { false }
 
-    private func accepts(_ sender: NSDraggingInfo) -> PaneDragPayload? {
-        guard let payload = PaneDragPayload(sender.draggingPasteboard), acceptsDrop?(payload) == true else { return nil }
-        return payload
-    }
-
+    // The window controller decides the target (this pane, or the whole
+    // area's edge) and draws the hint; panes only pass the drag on.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard accepts(sender) != nil else {
-            dropHighlight.hide()
-            return []
-        }
-        let zone = HerdrClient.DropZone.at(convert(sender.draggingLocation, from: nil), in: bounds)
-        dropHighlight.show(zone.highlight(in: bounds))
+        guard let payload = PaneDragPayload(sender.draggingPasteboard),
+              dropHover?(payload, sender.draggingLocation) == true else { return [] }
         return .move
     }
 
-    override func draggingExited(_: NSDraggingInfo?) { dropHighlight.hide() }
-    override func draggingEnded(_: NSDraggingInfo) { dropHighlight.hide() }
+    override func draggingExited(_: NSDraggingInfo?) { dropExit?() }
+    override func draggingEnded(_: NSDraggingInfo) { dropExit?() }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        dropHighlight.hide()
-        guard let payload = accepts(sender) else { return false }
-        onDrop?(payload, HerdrClient.DropZone.at(convert(sender.draggingLocation, from: nil), in: bounds))
-        return true
+        guard let payload = PaneDragPayload(sender.draggingPasteboard) else { return false }
+        return dropCommit?(payload, sender.draggingLocation) ?? false
     }
 
     override func viewDidMoveToWindow() {

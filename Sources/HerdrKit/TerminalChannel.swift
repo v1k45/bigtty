@@ -148,6 +148,18 @@ public final class TerminalChannel: @unchecked Sendable {
     }
 
     /// herdr owns scrollback, so wheel scrolling is forwarded to it.
+    /// One mouse event at a zero-based cell. herdr encodes it for the
+    /// app's mouse mode, and drops it if the app hasn't enabled reporting.
+    /// `action`: down, up, drag, move; `button`: left, right, middle;
+    /// `modifiers`: Shift 1, Ctrl 2, Alt 4.
+    public func mouse(_ action: String, button: String = "left", column: Int, row: Int, modifiers: Int = 0) {
+        send([
+            "type": "terminal.mouse", "action": .string(action), "button": .string(button),
+            "column": .number(Double(max(column, 0))), "row": .number(Double(max(row, 0))),
+            "modifiers": .number(Double(modifiers)),
+        ])
+    }
+
     public func scroll(up: Bool, lines: Int, column: Int? = nil, row: Int? = nil) {
         var message: [String: JSONValue] = [
             "type": "terminal.scroll",

@@ -281,6 +281,80 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// line is its own message, at the cell under the pointer. herdr's frames
     /// don't carry the app's mouse modes, so Ghostty can't tell the difference
     /// itself.
+    // MARK: - Mouse clicks for the app
+
+    // herdr's frames don't carry the app's mouse mode, so the surface never
+    // reports clicks itself. A plain click (no drag) is forwarded as
+    // terminal.mouse, and herdr passes it on only if the app (Claude Code,
+    // vim, htop…) asked for mouse input. Drags stay local text selection.
+    private var pressedCell: (column: Int, row: Int, button: String)?
+    private var draggedSincePress = false
+
+    /// How clicks reach the app.
+    enum ClickRoute {
+        /// herdr ≥ 0.9.2: terminal.mouse, encoded for the app's mouse mode.
+        case herdr
+        /// Older herdr: typed in as SGR mouse reports. Only for apps known
+        /// to keep mouse reporting on (Claude Code), else they'd be text.
+        case sgr
+        case none
+    }
+
+    var clickRoute: () -> ClickRoute = { .none }
+
+    private func pressed(_ event: NSEvent, button: String) {
+        pressedCell = cellPosition(of: event).map { ($0.column, $0.row, button) }
+        draggedSincePress = false
+    }
+
+    private func released(_ event: NSEvent) {
+        defer { pressedCell = nil }
+        guard let press = pressedCell, !draggedSincePress, mode == .control, !displaced,
+              let cell = cellPosition(of: event), cell.column == press.column, cell.row == press.row else { return }
+        let modifiers = (event.modifierFlags.contains(.shift) ? 1 : 0)
+            | (event.modifierFlags.contains(.control) ? 2 : 0)
+            | (event.modifierFlags.contains(.option) ? 4 : 0)
+        switch clickRoute() {
+        case .herdr:
+            channel?.mouse("down", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
+            channel?.mouse("up", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
+        case .sgr:
+            // Button 0 left, 2 right; +4 Shift, +8 Alt, +16 Ctrl; 1-based cells.
+            let code = (press.button == "right" ? 2 : 0) + (modifiers & 1 != 0 ? 4 : 0)
+                + (modifiers & 4 != 0 ? 8 : 0) + (modifiers & 2 != 0 ? 16 : 0)
+            let at = "\(code);\(cell.column + 1);\(cell.row + 1)"
+            channel?.sendInput(Data("\u{1b}[<\(at)M\u{1b}[<\(at)m".utf8))
+        case .none:
+            break
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressed(event, button: "left")
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        draggedSincePress = true
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        // ⌘-click opens links; that's Ghostty's, not the app's.
+        if !event.modifierFlags.contains(.command) { released(event) }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        pressed(event, button: "right")
+        super.rightMouseDown(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        super.rightMouseUp(with: event)
+        released(event)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let lineHeight: CGFloat = event.hasPreciseScrollingDeltas ? 16 : 1
         scrollAccumulator += event.scrollingDeltaY / lineHeight
@@ -295,11 +369,16 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     /// Zero-based grid cell under the event, from the surface's cell size.
     private func cellPosition(of event: NSEvent) -> (column: Int, row: Int)? {
-        guard let viewport, viewport.cellWidthPixels > 0, viewport.cellHeightPixels > 0 else { return nil }
-        let scale = window?.backingScaleFactor ?? 2
+        guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return nil }
         let point = convert(event.locationInWindow, from: nil)
-        let column = Int(point.x * scale) / Int(viewport.cellWidthPixels)
-        let row = Int((bounds.height - point.y) * scale) / Int(viewport.cellHeightPixels)
+        let scale = window?.backingScaleFactor ?? 2
+        // Cell size from the surface when it reports one, else the grid
+        // spread over the view.
+        let cellWidth = viewport.cellWidthPixels > 0 ? CGFloat(viewport.cellWidthPixels) / scale : bounds.width / CGFloat(viewport.columns)
+        let cellHeight = viewport.cellHeightPixels > 0 ? CGFloat(viewport.cellHeightPixels) / scale : bounds.height / CGFloat(viewport.rows)
+        guard cellWidth > 0, cellHeight > 0 else { return nil }
+        let column = Int(point.x / cellWidth)
+        let row = Int((bounds.height - point.y) / cellHeight)
         return (min(max(column, 0), Int(viewport.columns) - 1), min(max(row, 0), Int(viewport.rows) - 1))
     }
 

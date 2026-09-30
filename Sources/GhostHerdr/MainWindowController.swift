@@ -20,6 +20,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private static let offlineInfo = SpaceInfoCenter(store: offline, attention: offlineAttention)
     private let sidebar = SidebarView()
     private let splitTree = SplitTreeView()
+    private weak var mainArea: MainArea?
     private let topBar = CollapsedTopBar()
     private let placeholder = PlaceholderView()
     private var observers: [(UUID, (UUID) -> Void)] = []
@@ -109,6 +110,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func buildLayout() {
         guard let window else { return }
         let main = MainArea(content: splitTree, placeholder: placeholder, topBar: topBar)
+        mainArea = main
         root = RootView(sidebar: sidebar, main: main)
         root.sidebarVisible = Settings.sidebarVisible
         root.onAppearanceChange = { [weak self] in self?.applyTheme() }
@@ -431,6 +433,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
             terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
             terminal.onOpenURL = { [weak self] url in self?.openURL(url, from: id) }
+            terminal.clickRoute = { [weak self] in self?.clickRoute(for: id) ?? .none }
             content = terminal
         }
         let view = PaneContainerView(paneID: id, content: content)
@@ -441,8 +444,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return view
     }
 
-    /// Panes drag by their top-edge band onto each other: an edge splits
-    /// beside the target, the middle swaps. Only within this window's machine.
+    /// herdr forwards clicks itself from 0.9.2 (terminal.mouse); before
+    /// that, only Claude Code panes get them, as typed-in mouse reports.
+    private func clickRoute(for paneID: String) -> HerdrTerminalView.ClickRoute {
+        if case let .connected(version) = store.state, Self.version(version, atLeast: [0, 9, 2]) { return .herdr }
+        let agent = store.pane(paneID).flatMap { $0.agent ?? $0.displayAgent }?.lowercased() ?? ""
+        return agent.contains("claude") ? .sgr : .none
+    }
+
+    static func version(_ text: String, atLeast minimum: [Int]) -> Bool {
+        let parts = text.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        for (index, want) in minimum.enumerated() {
+            let have = index < parts.count ? parts[index] : 0
+            if have != want { return have > want }
+        }
+        return true
+    }
+
+    /// Panes drag by their top-edge band. Over a pane: an edge splits
+    /// beside it, the middle swaps. Along the outer edge of the whole area:
+    /// the pane spans it (full width or height). Only within this window's
+    /// machine and tab.
     private func wireDrag(_ view: PaneContainerView) {
         let id = view.paneID
         view.dragPayload = { [weak self] in
@@ -450,27 +472,83 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             return PaneDragPayload(machineID: self.machine.id, paneID: id)
         }
         view.dragTitle = { [weak self] in self?.store.pane(id)?.displayName ?? "Pane" }
-        view.acceptsDrop = { [weak self] payload in
-            guard let self else { return false }
-            return payload.machineID == self.machine.id && payload.paneID != id && self.store.pane(payload.paneID) != nil
-        }
-        view.onDrop = { [weak self] payload, zone in self?.dropPane(payload.paneID, onto: id, zone: zone) }
+        view.dropHover = { [weak self] payload, point in self?.hoverDrop(payload, at: point) ?? false }
+        view.dropCommit = { [weak self] payload, point in self?.commitDrop(payload, at: point) ?? false }
+        view.dropExit = { [weak self] in self?.mainArea?.dropHint.hide() }
     }
 
-    /// Debug hook: "source target zone", as if dragged and dropped.
+    /// Width of the outer band that means "span the whole area".
+    private static let edgeBand: CGFloat = 26
+
+    /// The drop under a window point, and the area it would take (in the
+    /// main area's coordinates).
+    private func dropTarget(_ payload: PaneDragPayload, at point: NSPoint) -> (PaneDropTarget, NSRect)? {
+        guard payload.machineID == machine.id, let tabID, let root = store.layouts[tabID]?.root,
+              root.paneIDs.contains(payload.paneID), let main = mainArea else { return nil }
+        let tree = splitTree.convert(splitTree.bounds, to: main)
+        let p = main.convert(point, from: nil)
+        guard tree.contains(p) else { return nil }
+        let band = Self.edgeBand
+        let edges: [(HerdrClient.DropZone, CGFloat)] = [
+            (.left, p.x - tree.minX), (.right, tree.maxX - p.x), (.bottom, p.y - tree.minY), (.top, tree.maxY - p.y),
+        ]
+        if let (zone, distance) = edges.min(by: { $0.1 < $1.1 }), distance < band, root.paneIDs.count > 1 {
+            let span: NSRect = switch zone {
+            case .left: NSRect(x: tree.minX, y: tree.minY, width: tree.width / 3, height: tree.height)
+            case .right: NSRect(x: tree.maxX - tree.width / 3, y: tree.minY, width: tree.width / 3, height: tree.height)
+            case .top: NSRect(x: tree.minX, y: tree.maxY - tree.height / 3, width: tree.width, height: tree.height / 3)
+            case .bottom, .center: NSRect(x: tree.minX, y: tree.minY, width: tree.width, height: tree.height / 3)
+            }
+            return (.tabEdge(zone), span)
+        }
+        for (paneID, view) in paneViews where view.window != nil && paneID != payload.paneID {
+            let frame = view.convert(view.bounds, to: main)
+            guard frame.contains(p) else { continue }
+            let local = view.convert(point, from: nil)
+            let zone = HerdrClient.DropZone.at(local, in: view.bounds)
+            let rect = view.convert(zone.highlight(in: view.bounds), to: main)
+            return (.pane(paneID, zone), rect)
+        }
+        return nil
+    }
+
+    private func hoverDrop(_ payload: PaneDragPayload, at point: NSPoint) -> Bool {
+        guard let (_, rect) = dropTarget(payload, at: point) else {
+            mainArea?.dropHint.hide()
+            return false
+        }
+        mainArea?.dropHint.show(rect)
+        return true
+    }
+
+    private func commitDrop(_ payload: PaneDragPayload, at point: NSPoint) -> Bool {
+        mainArea?.dropHint.hide()
+        guard let (target, _) = dropTarget(payload, at: point) else { return false }
+        drop(payload.paneID, on: target)
+        return true
+    }
+
+    /// Rearranges this tab: swaps directly, otherwise rebuilds the layout
+    /// into the dropped arrangement (herdr keeps every pane and process).
+    private func drop(_ source: String, on target: PaneDropTarget) {
+        guard let tabID, let root = store.layouts[tabID]?.root, let workspaceID = store.pane(source)?.workspaceID else { return }
+        pendingFocus = source
+        if case let .pane(other, .center) = target {
+            store.perform { try await $0.swapPanes(source, other) }
+            return
+        }
+        let desired = root.dropping(source, on: target)
+        store.perform { client in
+            try await client.applyLayout(desired, current: root, tabID: tabID, workspaceID: workspaceID)
+            try? await client.focusPane(source)
+        }
+    }
+
+    /// Debug hook: "source target zone" (target "tab" for the outer edge).
     @objc func debugDropPane(_ sender: Any?) {
         let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
         guard parts.count == 3, let zone = HerdrClient.DropZone(rawValue: parts[2]) else { return }
-        dropPane(parts[0], onto: parts[1], zone: zone)
-    }
-
-    private func dropPane(_ source: String, onto target: String, zone: HerdrClient.DropZone) {
-        guard let from = store.pane(source), let to = store.pane(target) else { return }
-        pendingFocus = source
-        store.perform { client in
-            try await client.rearrange(source, onto: target, zone: zone,
-                                       sourceTab: from.tabID, targetTab: to.tabID, workspaceID: from.workspaceID)
-        }
+        drop(parts[0], on: parts[1] == "tab" ? .tabEdge(zone) : .pane(parts[1], zone))
     }
 
     private func makeBrowser(pane: Pane, hostID: String) -> BrowserPaneView {
@@ -1103,6 +1181,8 @@ private final class MainArea: NSView {
     let content: NSView
     let placeholder: PlaceholderView
     let topBar: CollapsedTopBar
+    /// Where a dragged pane will land, over the whole split area.
+    let dropHint = DropHighlight()
     var showsTopBar = false { didSet { topBar.isHidden = !showsTopBar; needsLayout = true } }
     var leadingPadding: CGFloat = 0 { didSet { needsLayout = true } }
 
@@ -1115,6 +1195,7 @@ private final class MainArea: NSView {
         addSubview(content)
         addSubview(placeholder)
         addSubview(topBar)
+        addSubview(dropHint)
     }
 
     @available(*, unavailable)
