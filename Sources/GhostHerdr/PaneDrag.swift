@@ -54,6 +54,8 @@ extension HerdrClient.DropZone {
 final class PaneGrip: NSView, NSDraggingSource {
     var payload: (() -> PaneDragPayload?)?
     var title: (() -> String)?
+    /// This pane's drag started (true) or ended (false).
+    var onDragChange: ((Bool) -> Void)?
     private var downEvent: NSEvent?
 
     override init(frame: NSRect) {
@@ -126,12 +128,14 @@ final class PaneGrip: NSView, NSDraggingSource {
         dragging.setDraggingFrame(NSRect(x: origin.x - image.size.width / 2, y: origin.y - image.size.height / 2,
                                          width: image.size.width, height: image.size.height), contents: image)
         beginDraggingSession(with: [dragging], event: down, source: self)
+        onDragChange?(true)
         NotificationCenter.default.post(name: .ghostherdrPaneDrag, object: true)
     }
 
     func draggingSession(_: NSDraggingSession, sourceOperationMaskFor _: NSDraggingContext) -> NSDragOperation { .move }
 
     func draggingSession(_: NSDraggingSession, endedAt _: NSPoint, operation _: NSDragOperation) {
+        onDragChange?(false)
         NotificationCenter.default.post(name: .ghostherdrPaneDrag, object: false)
     }
 
@@ -158,25 +162,50 @@ extension Notification.Name {
     static let ghostherdrPaneDrag = Notification.Name("GhostHerdrPaneDrag")
 }
 
-/// Laid over a pane's content during a pane drag. Terminals, web views and
-/// text views register their own drag types and would otherwise take the
-/// drop without accepting it; this catches it for the pane instead.
-final class DropCatcher: NSView {
-    weak var target: NSDraggingDestination?
+/// Covers the whole pane area (gaps and margins too) while a pane is
+/// dragged: terminals, web and text views would otherwise take the drop,
+/// and gaps would drop nothing. The window controller resolves targets.
+final class DropSurface: NSView {
+    var hover: ((PaneDragPayload, NSPoint) -> Bool)?
+    var commit: ((PaneDragPayload, NSPoint) -> Bool)?
+    var exit: (() -> Void)?
+    private var observer: NSObjectProtocol?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.ghostherdrPane])
         isHidden = true
+        observer = NotificationCenter.default.addObserver(forName: .ghostherdrPaneDrag, object: nil, queue: .main) { [weak self] note in
+            let active = note.object as? Bool ?? false
+            MainActor.assumeIsolated {
+                self?.isHidden = !active
+                if !active { self?.exit?() }
+            }
+        }
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { target?.draggingEntered?(sender) ?? [] }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { target?.draggingUpdated?(sender) ?? [] }
-    override func draggingExited(_ sender: NSDraggingInfo?) { target?.draggingExited?(sender) }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { target?.performDragOperation?(sender) ?? false }
+    isolated deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let payload = PaneDragPayload(sender.draggingPasteboard),
+              hover?(payload, sender.draggingLocation) == true else { return [] }
+        return .move
+    }
+
+    override func draggingExited(_: NSDraggingInfo?) { exit?() }
+    override func draggingEnded(_: NSDraggingInfo) { exit?() }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let payload = PaneDragPayload(sender.draggingPasteboard) else { return false }
+        return commit?(payload, sender.draggingLocation) ?? false
+    }
 }
 
 /// Shows where a dropped pane will land.
@@ -197,8 +226,9 @@ final class DropHighlight: NSView {
     func show(_ rect: NSRect) {
         layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
         layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.8).cgColor
+        // Follows the pointer at once; an animated hint trails behind it.
         CATransaction.begin()
-        CATransaction.setAnimationDuration(0.12)
+        CATransaction.setDisableActions(true)
         frame = rect.insetBy(dx: 4, dy: 4)
         CATransaction.commit()
         isHidden = false

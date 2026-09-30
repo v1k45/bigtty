@@ -119,6 +119,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let window else { return }
         let main = MainArea(content: splitTree, placeholder: placeholder, topBar: topBar)
         mainArea = main
+        main.dropSurface.hover = { [weak self] payload, point in self?.hoverDrop(payload, at: point) ?? false }
+        main.dropSurface.commit = { [weak self] payload, point in self?.commitDrop(payload, at: point) ?? false }
+        main.dropSurface.exit = { [weak main] in main?.dropHint.hide() }
         root = RootView(sidebar: sidebar, main: main)
         root.sidebarVisible = Settings.sidebarVisible
         root.onAppearanceChange = { [weak self] in self?.applyTheme() }
@@ -586,13 +589,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             return PaneDragPayload(machineID: self.machine.id, paneID: id)
         }
         view.dragTitle = { [weak self] in self?.store.pane(id)?.displayName ?? "Pane" }
-        view.dropHover = { [weak self] payload, point in self?.hoverDrop(payload, at: point) ?? false }
-        view.dropCommit = { [weak self] payload, point in self?.commitDrop(payload, at: point) ?? false }
-        view.dropExit = { [weak self] in self?.mainArea?.dropHint.hide() }
     }
 
-    /// Width of the outer band that means "span the whole area".
-    private static let edgeBand: CGFloat = 26
+    /// The outer strip (from the area's edge inward) that means "span the
+    /// whole area"; everything inside it targets the nearest pane.
+    private static let edgeBand: CGFloat = 14
 
     /// The drop under a window point, and the area it would take (in the
     /// main area's coordinates).
@@ -601,12 +602,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
               root.paneIDs.contains(payload.paneID), let main = mainArea else { return nil }
         let tree = splitTree.convert(splitTree.bounds, to: main)
         let p = main.convert(point, from: nil)
-        guard tree.contains(p) else { return nil }
-        let band = Self.edgeBand
+        guard main.bounds.contains(p) else { return nil }
+        // Close to (or beyond) the area's edge: span it.
         let edges: [(HerdrClient.DropZone, CGFloat)] = [
             (.left, p.x - tree.minX), (.right, tree.maxX - p.x), (.bottom, p.y - tree.minY), (.top, tree.maxY - p.y),
         ]
-        if let (zone, distance) = edges.min(by: { $0.1 < $1.1 }), distance < band, root.paneIDs.count > 1 {
+        if root.paneIDs.count > 1, let (zone, distance) = edges.min(by: { $0.1 < $1.1 }), distance < Self.edgeBand {
             let span: NSRect = switch zone {
             case .left: NSRect(x: tree.minX, y: tree.minY, width: tree.width / 3, height: tree.height)
             case .right: NSRect(x: tree.maxX - tree.width / 3, y: tree.minY, width: tree.width / 3, height: tree.height)
@@ -615,15 +616,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             }
             return (.tabEdge(zone), span)
         }
-        for (paneID, view) in paneViews where view.window != nil && paneID != payload.paneID {
-            let frame = view.convert(view.bounds, to: main)
-            guard frame.contains(p) else { continue }
-            let local = view.convert(point, from: nil)
-            let zone = HerdrClient.DropZone.at(local, in: view.bounds)
-            let rect = view.convert(zone.highlight(in: view.bounds), to: main)
-            return (.pane(paneID, zone), rect)
+        // Otherwise the pane under the point, or the nearest one across a gap.
+        let candidates = paneViews.filter { $0.value.window != nil && $0.key != payload.paneID }
+            .map { (id: $0.key, view: $0.value, frame: $0.value.convert($0.value.bounds, to: main)) }
+        func distance(_ r: NSRect) -> CGFloat {
+            let dx = max(r.minX - p.x, 0, p.x - r.maxX), dy = max(r.minY - p.y, 0, p.y - r.maxY)
+            return hypot(dx, dy)
         }
-        return nil
+        guard let nearest = candidates.min(by: { distance($0.frame) < distance($1.frame) }),
+              distance(nearest.frame) < 24 else { return nil }
+        let clamped = NSPoint(x: min(max(p.x, nearest.frame.minX), nearest.frame.maxX),
+                              y: min(max(p.y, nearest.frame.minY), nearest.frame.maxY))
+        let local = nearest.view.convert(clamped, from: main)
+        let zone = HerdrClient.DropZone.at(local, in: nearest.view.bounds)
+        let rect = nearest.view.convert(zone.highlight(in: nearest.view.bounds), to: main)
+        return (.pane(nearest.id, zone), rect)
     }
 
     private func hoverDrop(_ payload: PaneDragPayload, at point: NSPoint) -> Bool {
@@ -648,6 +655,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let tabID, let root = store.layouts[tabID]?.root, let workspaceID = store.pane(source)?.workspaceID else { return }
         pendingFocus = source
         if case let .pane(other, .center) = target {
+            splitTree.show(root.dropping(source, on: target), zoomedPane: nil)
             store.perform { try await $0.swapPanes(source, other) }
             return
         }
@@ -657,6 +665,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         // still until the move is done, so their terminals aren't torn
         // down and rebuilt for every intermediate step.
         rearranging = true
+        // Show the new arrangement now; herdr catches up underneath.
+        splitTree.show(desired, zoomedPane: nil)
         let client = store.client
         Task { [weak self] in
             do {
@@ -674,6 +684,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self.store.scheduleRefresh()
             self.render()
         }
+    }
+
+    /// Debug hook: "source x y" (window points from the top-left): logs the
+    /// drop target there.
+    @objc func debugDropTargetAt(_ sender: Any?) {
+        let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
+        guard parts.count == 3, let x = Double(parts[1]), let y = Double(parts[2]), let height = window?.contentView?.bounds.height else { return }
+        let point = NSPoint(x: x, y: height - y)
+        let target = dropTarget(PaneDragPayload(machineID: machine.id, paneID: parts[0]), at: point)
+        NSLog("ghr-droptarget \(parts[1]),\(parts[2]) -> \(target.map { "\($0.0)" } ?? "none")")
     }
 
     /// Debug hook: "source target zone" (target "tab" for the outer edge).
@@ -1431,6 +1451,12 @@ private final class MainArea: NSView {
     let topBar: CollapsedTopBar
     /// Where a dragged pane will land, over the whole split area.
     let dropHint = DropHighlight()
+    /// Catches pane drags anywhere over the panes, gaps included.
+    let dropSurface = DropSurface()
+
+    /// The gaps between panes aren't window background: a grab that just
+    /// misses a pane's edge must not drag the window.
+    override var mouseDownCanMoveWindow: Bool { false }
     var showsTopBar = false { didSet { topBar.isHidden = !showsTopBar; needsLayout = true } }
     var leadingPadding: CGFloat = 0 { didSet { needsLayout = true } }
 
@@ -1444,6 +1470,7 @@ private final class MainArea: NSView {
         addSubview(placeholder)
         addSubview(topBar)
         addSubview(dropHint)
+        addSubview(dropSurface)
     }
 
     @available(*, unavailable)
@@ -1457,6 +1484,7 @@ private final class MainArea: NSView {
         let area = NSRect(x: leadingPadding, y: 8, width: b.width - leadingPadding - 8, height: b.height - top - 8)
         content.frame = area
         placeholder.frame = area
+        dropSurface.frame = b
     }
 }
 

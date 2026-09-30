@@ -13,20 +13,14 @@ final class PaneContainerView: NSView {
     private let detached = DetachedOverlay()
     private let zoomPill = ZoomPill()
     private let grip = PaneGrip()
-    private let dropCatcher = DropCatcher()
-    private var dragObserver: NSObjectProtocol?
     private var hoverArea: NSTrackingArea?
 
     /// What a drag of this pane carries; nil turns dragging off.
     var dragPayload: (() -> PaneDragPayload?)?
     /// The pane's name on the drag card.
     var dragTitle: (() -> String)?
-    /// A pane is dragged over this one at a window point: show where it
-    /// would land; false if it can't.
-    var dropHover: ((PaneDragPayload, NSPoint) -> Bool)?
-    /// Dropped at a window point; true if it was used.
-    var dropCommit: ((PaneDragPayload, NSPoint) -> Bool)?
-    var dropExit: (() -> Void)?
+    /// Being dragged: dimmed so it's clear what moves.
+    private var isDragSource = false { didSet { updateDimming() } }
 
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
     var browser: BrowserPaneView? { content as? BrowserPaneView }
@@ -71,16 +65,7 @@ final class PaneContainerView: NSView {
         grip.payload = { [weak self] in self?.dragPayload?() }
         grip.title = { [weak self] in self?.dragTitle?() ?? "Pane" }
         addSubview(grip)
-        dropCatcher.target = self
-        addSubview(dropCatcher)
-        registerForDraggedTypes([.ghostherdrPane])
-        dragObserver = NotificationCenter.default.addObserver(forName: .ghostherdrPaneDrag, object: nil, queue: .main) { [weak self] note in
-            let active = note.object as? Bool ?? false
-            MainActor.assumeIsolated {
-                self?.dropCatcher.isHidden = !active
-                if !active { self?.dropExit?() }
-            }
-        }
+        grip.onDragChange = { [weak self] dragging in self?.isDragSource = dragging }
 
         ring.borderWidth = 1.5
         ring.cornerRadius = Self.cornerRadius
@@ -122,7 +107,7 @@ final class PaneContainerView: NSView {
     }
 
     private func updateDimming() {
-        alphaValue = isFocusedPane || !dimsWhenUnfocused ? 1 : 0.72
+        alphaValue = isDragSource ? 0.4 : (isFocusedPane || !dimsWhenUnfocused ? 1 : 0.72)
     }
 
     private func takeControl() {
@@ -153,7 +138,6 @@ final class PaneContainerView: NSView {
             ? NSRect(x: (b.width - min(b.width - 16, detached.fittingSize.width)) / 2, y: 10,
                      width: min(b.width - 16, detached.fittingSize.width), height: 30)
             : b
-        dropCatcher.frame = b
         // The whole top edge is the handle; the pill shows in its middle.
         grip.frame = NSRect(x: 0, y: b.height - PaneGrip.bandHeight, width: b.width, height: PaneGrip.bandHeight)
         let pill = zoomPill.fittingSize
@@ -187,24 +171,6 @@ final class PaneContainerView: NSView {
     /// for moving the window.
     override var mouseDownCanMoveWindow: Bool { false }
 
-    // The window controller decides the target (this pane, or the whole
-    // area's edge) and draws the hint; panes only pass the drag on.
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
-
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let payload = PaneDragPayload(sender.draggingPasteboard),
-              dropHover?(payload, sender.draggingLocation) == true else { return [] }
-        return .move
-    }
-
-    override func draggingExited(_: NSDraggingInfo?) { dropExit?() }
-    override func draggingEnded(_: NSDraggingInfo) { dropExit?() }
-
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let payload = PaneDragPayload(sender.draggingPasteboard) else { return false }
-        return dropCommit?(payload, sender.draggingLocation) ?? false
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { needsLayout = true }
@@ -212,7 +178,6 @@ final class PaneContainerView: NSView {
 
     /// Hands a borrowed browser back rather than taking it down with us.
     isolated deinit {
-        if let dragObserver { NotificationCenter.default.removeObserver(dragObserver) }
         if content.superview === self, browser != nil || files != nil { content.removeFromSuperview() }
     }
 

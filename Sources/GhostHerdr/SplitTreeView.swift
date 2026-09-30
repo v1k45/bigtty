@@ -5,6 +5,9 @@ import HerdrKit
 /// window controller caches so terminals survive layout changes.
 @MainActor
 final class SplitTreeView: NSView {
+    /// Gaps between panes are for resizing, never for moving the window.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     var paneView: (String) -> NSView? = { _ in nil }
     /// A divider drag ended: `path` walks from the root (false = first child).
     var onRatioChange: ((_ path: [Bool], _ ratio: Double) -> Void)?
@@ -61,6 +64,9 @@ final class SplitTreeView: NSView {
 /// Two children and a draggable divider.
 @MainActor
 final class SplitNodeView: NSView {
+    /// Gaps between panes are for resizing, never for moving the window.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     let direction: SplitDirection
     private(set) var ratio: Double
     private let first: NSView
