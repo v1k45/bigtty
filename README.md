@@ -86,6 +86,7 @@ terminal opens it in the tab's browser pane, or a new one to the right.
 swift test                                   # model tests
 herdr --session ghrtest server &             # isolated server for live tests
 GHR_TEST_SESSION=ghrtest swift test          # + live socket/terminal tests
+# (quit any GhostHerdr attached to that session: it takes control of new panes)
 ```
 
 Debug hooks on a running app: `kill -USR1 <pid>` writes window, pane and
