@@ -96,8 +96,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let a = manager.observe { [weak self] in self?.render() }
         observers = [(a, { manager.removeObserver($0) })]
         settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
-            // The terminal theme may have changed; the chrome follows it.
-            MainActor.assumeIsolated { self?.applyTheme(); self?.render() }
+            // The terminal theme (or mode) may have changed; the chrome follows.
+            MainActor.assumeIsolated {
+                self?.applyTerminalMode()
+                self?.applyTheme()
+                self?.render()
+            }
         }
         render()
     }
@@ -117,6 +121,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window.contentView = root
         applyTheme()
 
+        applyTerminalMode()
         splitTree.paneView = { [weak self] id in self?.paneView(for: id) }
         splitTree.onRatioChange = { [weak self] path, ratio in
             guard let self, let tabID = self.tabID else { return }
@@ -192,6 +197,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     // MARK: - Rendering
 
     private func render() {
+        if Settings.terminalMode == .herdrClient { return renderClient() }
         let snapshot = store.snapshot
         if let pinned = pinnedWorkspaceID {
             if store.workspace(pinned) == nil {
@@ -271,6 +277,95 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
     }
 
+    // MARK: - herdr client mode
+
+    private var clientHost: ClientHost?
+
+    /// Swaps the content area between GhostHerdr's panes and herdr's client.
+    private func applyTerminalMode() {
+        guard let mainArea else { return }
+        if Settings.terminalMode == .herdrClient {
+            for view in paneViews.values {
+                view.terminal?.detach()
+                view.removeFromSuperview()
+            }
+            paneViews.removeAll()
+            splitTree.show(nil, zoomedPane: nil)
+            let host = ensureClient()
+            mainArea.content = host
+        } else {
+            clientHost?.teardown()
+            clientHost = nil
+            mainArea.content = splitTree
+        }
+    }
+
+    @discardableResult
+    private func ensureClient() -> ClientHost {
+        if let clientHost, clientHost.machineID == machine.id { return clientHost }
+        clientHost?.teardown()
+        let host = ClientHost(machineID: machine.id, endpoint: store.client.endpoint, controller: terminalController)
+        host.onLayoutNeeded = { [weak self] in self?.refreshOverlays() }
+        host.onExit = { [weak self] in
+            // herdr detached or quit: start a fresh client.
+            guard let self else { return }
+            self.clientHost?.teardown()
+            self.clientHost = nil
+            self.applyTerminalMode()
+            self.render()
+        }
+        host.onClientFocus = { [weak self] in self?.lastFocusedPane = nil }
+        clientHost = host
+        mainArea?.content = host
+        return host
+    }
+
+    private func renderClient() {
+        let snapshot = store.snapshot
+        // The client shows herdr's focused space and tab; follow it.
+        if let focused = snapshot.focusedWorkspaceID, store.workspace(focused) != nil {
+            workspaceID = focused
+        } else if store.workspace(workspaceID) == nil {
+            workspaceID = snapshot.workspaces.first?.workspaceID
+        }
+        tabID = workspaceID.flatMap { store.workspace($0)?.activeTabID }
+        sidebar.update(sidebarModel())
+        let connected: Bool = if case .connected = store.state { true } else { false }
+        if connected { ensureClient() }
+        placeholder.state = connected ? .hidden : placeholderState(hasLayout: false)
+        topBar.update(space: store.workspace(workspaceID)?.label, tab: store.tab(tabID).map(tabLabel), alert: firstAlertElsewhere())
+        window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
+        refreshOverlays()
+    }
+
+    /// Native browser and files views over their herdr panes, placed by
+    /// the pane rectangles herdr reports for the current tab.
+    private func refreshOverlays() {
+        guard let host = clientHost, let tabID else { return }
+        let hostPanes = store.panes(in: tabID).filter { $0.hostKind != nil }
+        guard let anyPane = store.panes(in: tabID).first?.paneID else { return host.setOverlays([:], rects: [:]) }
+        var views: [String: NSView] = [:]
+        for pane in hostPanes {
+            guard let hostID = pane.hostID else { continue }
+            views[pane.paneID] = pane.hostKind == .browser ? makeBrowser(pane: pane, hostID: hostID) : makeFiles(pane: pane, hostID: hostID)
+        }
+        let client = store.client
+        Task { [weak self, weak host] in
+            let layout = try? await client.call("pane.layout", ["pane_id": .string(anyPane)])
+            var rects: [String: ClientHost.CellRect] = [:]
+            if case let .array(panes)? = layout?["layout"]?["panes"] {
+                for pane in panes {
+                    guard let id = pane["pane_id"]?.stringValue, let rect = pane["rect"],
+                          let x = rect["x"]?.intValue, let y = rect["y"]?.intValue,
+                          let w = rect["width"]?.intValue, let h = rect["height"]?.intValue else { continue }
+                    rects[id] = .init(column: x, row: y, columns: w, rows: h)
+                }
+            }
+            guard self != nil else { return }
+            host?.setOverlays(views, rects: rects)
+        }
+    }
+
     /// What to show instead of panes, for this window's machine.
     private func placeholderState(hasLayout: Bool) -> PlaceholderView.State {
         if machine.isLocal {
@@ -309,6 +404,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             view.removeFromSuperview()
         }
         paneViews.removeAll()
+        clientHost?.teardown()
+        clientHost = nil
         machine = target
         workspaceID = nil
         tabID = nil
@@ -748,6 +845,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// The pane the user is looking at in this window, if it is key.
     var viewedPane: String? {
+        if Settings.terminalMode == .herdrClient {
+            guard window?.isKeyWindow == true, window?.isVisible == true, let tabID else { return nil }
+            return store.layouts[tabID]?.focusedPaneID
+        }
         guard window?.isKeyWindow == true, window?.isVisible == true,
               let id = lastFocusedPane, paneViews[id] != nil else { return nil }
         return id
@@ -805,6 +906,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     // MARK: - Selection
 
     func selectWorkspace(_ id: String) {
+        if Settings.terminalMode == .herdrClient {
+            // The client shows herdr's focus; move it there.
+            store.perform { try await $0.focusWorkspace(id) }
+        }
         guard id != workspaceID else { return }
         workspaceID = id
         tabID = nil
@@ -1043,8 +1148,81 @@ final class ClosureMenuItem: NSMenuItem {
     @objc private func run() { handler() }
 }
 
-/// Sidebar on the left with a draggable edge; the main area on the right.
+/// herdr's client in a Ghostty surface, with native views laid over the
+/// panes they stand for.
 @MainActor
+private final class ClientHost: NSView {
+    struct CellRect: Equatable {
+        let column: Int, row: Int, columns: Int, rows: Int
+    }
+
+    let machineID: String
+    let client: HerdrClientView
+    private var overlays: [String: NSView] = [:]
+    private var rects: [String: CellRect] = [:]
+    var onLayoutNeeded: (() -> Void)?
+    var onExit: (() -> Void)?
+    var onClientFocus: (() -> Void)?
+
+    init(machineID: String, endpoint: HerdrEndpoint, controller: TerminalController) {
+        self.machineID = machineID
+        client = HerdrClientView(endpoint: endpoint, controller: controller)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = PaneContainerView.cornerRadius
+        layer?.masksToBounds = true
+        clipsToBounds = true
+        addSubview(client)
+        client.onGridChange = { [weak self] in
+            self?.needsLayout = true
+            self?.onLayoutNeeded?()
+        }
+        client.onExit = { [weak self] in self?.onExit?() }
+        client.onFocus = { [weak self] in self?.onClientFocus?() }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    func setOverlays(_ views: [String: NSView], rects: [String: CellRect]) {
+        for (id, view) in overlays where views[id] !== view {
+            if view.superview === self { view.removeFromSuperview() }
+        }
+        overlays = views
+        self.rects = rects
+        for view in views.values where view.superview !== self { addSubview(view) }
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        client.frame = bounds.insetBy(dx: 4, dy: 4)
+        for (id, view) in overlays {
+            // herdr's pane rects include its one-cell border; sit inside it.
+            guard let r = rects[id], r.columns > 2, r.rows > 2,
+                  let rect = client.rect(column: r.column + 1, row: r.row + 1, columns: r.columns - 2, rows: r.rows - 2) else {
+                view.isHidden = true
+                continue
+            }
+            view.isHidden = false
+            view.frame = client.convert(rect, to: self)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { window?.makeFirstResponder(client) }
+    }
+
+    func teardown() {
+        for view in overlays.values where view.superview === self { view.removeFromSuperview() }
+        overlays = [:]
+        removeFromSuperview()
+    }
+}
+
 /// The title bar is hidden and our views fill its strip, so they'd swallow
 /// the double-click that zooms or minimizes a window. Catch it here and do
 /// what System Settings ▸ Desktop & Dock says.
@@ -1095,6 +1273,8 @@ final class MainWindow: NSWindow {
     }
 }
 
+/// Sidebar on the left with a draggable edge; the main area on the right.
+@MainActor
 private final class RootView: NSView {
     private let sidebar: NSView
     private let main: MainArea
@@ -1178,7 +1358,14 @@ private final class RootView: NSView {
 /// sidebar is hidden, since the traffic lights then sit over the content.
 @MainActor
 private final class MainArea: NSView {
-    let content: NSView
+    var content: NSView {
+        didSet {
+            guard content !== oldValue else { return }
+            oldValue.removeFromSuperview()
+            addSubview(content, positioned: .below, relativeTo: placeholder)
+            needsLayout = true
+        }
+    }
     let placeholder: PlaceholderView
     let topBar: CollapsedTopBar
     /// Where a dragged pane will land, over the whole split area.
