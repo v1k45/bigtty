@@ -31,8 +31,10 @@ final class PaneContainerView: NSView {
     private var attention: Attention.Reason?
 
     static let cornerRadius: CGFloat = 8
-    /// Space between the card edge and terminal text, so glyphs clear the corners.
-    static let contentInset: CGFloat = 5
+    /// Space between the card edge and terminal text, so glyphs clear the
+    /// corners. The right edge also collects whatever is left of a partial
+    /// cell column, so it gets less of its own.
+    static let contentInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 8)
 
     init(paneID: String, content: NSView) {
         self.paneID = paneID
@@ -102,8 +104,13 @@ final class PaneContainerView: NSView {
         let b = bounds
         // Terminals get an inset so text clears the rounded corners; browser
         // and files panes run edge to edge.
-        let inset = terminal != nil ? Self.contentInset : 0
-        content.frame = b.insetBy(dx: inset, dy: inset)
+        if terminal != nil {
+            let i = Self.contentInsets
+            content.frame = NSRect(x: i.left, y: i.bottom,
+                                   width: max(0, b.width - i.left - i.right), height: max(0, b.height - i.top - i.bottom))
+        } else {
+            content.frame = b
+        }
         detached.frame = b
         let pill = zoomPill.fittingSize
         zoomPill.frame = NSRect(x: b.width - pill.width - 12, y: b.height - pill.height - 10, width: pill.width, height: pill.height)
