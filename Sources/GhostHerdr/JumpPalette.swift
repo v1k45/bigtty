@@ -144,16 +144,18 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 title = ((state?.selection ?? state?.path ?? "Files") as NSString).lastPathComponent
                 symbol = kind == .diff ? "plus.forwardslash.minus" : "folder"
             case nil:
-                title = agent ?? pane.displayName
+                // What the pane is about (Claude's conversation title) over
+                // the program's name; the agent goes in the detail.
+                title = pane.shownTitle ?? agent ?? pane.displayName
                 symbol = agent == nil ? "terminal" : "sparkle"
             }
             let reason = attention.reason(for: pane.paneID)
             let status = reason == .blocked ? "needs you" : reason == .done ? "finished" : (agent != nil ? pane.agentStatus.rawValue : "")
             items.append(Item(
                 section: agent != nil ? "Agents" : "Panes", title: title,
-                detail: [space, status].filter { !$0.isEmpty }.joined(separator: " · "),
+                detail: [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · "),
                 symbol: symbol, alert: reason == .blocked, target: .pane(machine.id, pane),
-                haystack: "\(title) \(space) \(pane.foregroundCwd ?? pane.cwd ?? "")".lowercased()
+                haystack: "\(title) \(agent ?? "") \(pane.terminalTitle ?? "") \(space) \(pane.foregroundCwd ?? pane.cwd ?? "")".lowercased()
             ))
         }
         return items

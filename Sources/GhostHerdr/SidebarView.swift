@@ -28,6 +28,8 @@ struct SidebarModel: Equatable {
         /// ⌘ held: the shortcut stands out.
         var hinting = false
         var audible = false
+        /// "3 tabs · first · second +1" for a space that isn't selected.
+        var tabSummary: String? = nil
     }
 
     /// This Mac's session switcher.
@@ -451,6 +453,7 @@ private final class SpaceCard: NSView, SidebarRow {
     private let speaker = NSImageView()
     private let meta = NSTextField(labelWithString: "")
     private let line = NSTextField(wrappingLabelWithString: "")
+    private let tabSummary = NSTextField(labelWithString: "")
     private var chips: [NSTextField] = []
     private var tabRows: [TabRow] = []
     private var hovering = false { didSet { updateBackground() } }
@@ -490,7 +493,12 @@ private final class SpaceCard: NSView, SidebarRow {
         line.lineBreakMode = .byTruncatingTail
         line.isHidden = space.line == nil
         line.isSelectable = false
-        for view in [dot, name, shortcut, meta, line] { addSubview(view) }
+        tabSummary.stringValue = space.tabSummary ?? ""
+        tabSummary.font = .systemFont(ofSize: 11)
+        tabSummary.textColor = .tertiaryLabelColor
+        tabSummary.lineBreakMode = .byTruncatingTail
+        tabSummary.isHidden = space.tabSummary == nil
+        for view in [dot, name, shortcut, meta, line, tabSummary] { addSubview(view) }
 
         for port in space.ports.prefix(3) {
             let chip = NSTextField(labelWithString: ":\(port)")
@@ -546,6 +554,7 @@ private final class SpaceCard: NSView, SidebarRow {
         var h: CGFloat = 8 + 17 + 16
         if !line.isHidden || !chips.isEmpty { h += 3 + max(lineHeight, chips.isEmpty ? 0 : 16) }
         if !tabRows.isEmpty { h += 6 + CGFloat(tabRows.count) * 23 }
+        if !tabSummary.isHidden { h += 16 }
         return h + 9
     }
 
@@ -572,6 +581,10 @@ private final class SpaceCard: NSView, SidebarRow {
             line.frame = NSRect(x: lx, y: y, width: w - lx - 10, height: lineHeight)
         }
         if !line.isHidden || !chips.isEmpty { y += max(lineHeight, chips.isEmpty ? 0 : 16) + 3 }
+        if !tabSummary.isHidden {
+            tabSummary.frame = NSRect(x: 10, y: y, width: w - 20, height: 15)
+            y += 16
+        }
         y += 3
         for row in tabRows {
             row.frame = NSRect(x: 6, y: y, width: w - 12, height: 22)

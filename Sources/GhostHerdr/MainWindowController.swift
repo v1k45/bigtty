@@ -622,8 +622,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         render()
     }
 
+    /// A tab's name: one it was given, else what its focused pane shows
+    /// (Claude Code's conversation title, a shell's directory), else "tab N".
     private func tabLabel(_ tab: Tab) -> String {
-        tab.label == String(tab.number) ? "tab \(tab.number)" : tab.label
+        Self.tabTitle(tab, store: store)
+    }
+
+    static func tabTitle(_ tab: Tab, store: SessionStore) -> String {
+        if tab.label != String(tab.number), !tab.label.isEmpty { return tab.label }
+        let panes = store.panes(in: tab.tabID)
+        let lead = panes.first { $0.focused } ?? panes.first
+        if let title = lead?.shownTitle { return title }
+        if let agent = lead?.displayAgent ?? lead?.agent { return agent }
+        return "tab \(tab.number)"
     }
 
     /// The sidebar: every machine with its spaces; the selected one lists its tabs.
@@ -680,6 +691,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                         hint: showsHints && index < 9 ? "⌃\(index + 1)" : nil
                     )
                 } : []
+                // Unselected spaces with several tabs: how many, and the
+                // first two by name.
+                let allTabs = store.tabs(in: workspace.workspaceID)
+                var tabSummary: String?
+                if !selected, allTabs.count > 1 {
+                    let names = allTabs.prefix(2).map { Self.tabTitle($0, store: store) }
+                    let more = allTabs.count - names.count
+                    tabSummary = "\(allTabs.count) tabs · " + names.joined(separator: " · ") + (more > 0 ? " +\(more)" : "")
+                }
                 let finished = store.snapshot.panes.contains {
                     $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
                 }
@@ -690,7 +710,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
                     finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : [],
                     hinting: showsHints,
-                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
+                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) },
+                    tabSummary: tabSummary
                 )
             }
             model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem,

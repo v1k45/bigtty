@@ -85,6 +85,17 @@ public struct Pane: Sendable, Codable, Equatable, Identifiable {
         case label, title, terminalTitle = "terminal_title_stripped", tokens, revision
     }
 
+    /// What the pane says it's about: its label, else the title its program
+    /// set (Claude Code's conversation title, a shell's user@host:dir),
+    /// without a leading status glyph ("✳ ", a spinner). Nil if neither.
+    public var shownTitle: String? {
+        if let label, !label.isEmpty { return label }
+        guard let raw = title ?? terminalTitle else { return nil }
+        let cleaned = raw.drop { !$0.isLetter && !$0.isNumber && $0 != "~" && $0 != "/" && $0 != "#" && $0 != "(" && $0 != "[" }
+            .trimmingCharacters(in: .whitespaces)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
     /// Best short name for headers: explicit label, agent, title, then cwd.
     public var displayName: String {
         if let label, !label.isEmpty { return label }
