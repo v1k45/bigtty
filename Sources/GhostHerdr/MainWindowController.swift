@@ -590,6 +590,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
         var number = 0
+        let numbering = numberingStart(count: orderedSpaces.count, selected: selectedSpaceIndex)
         for machine in visibleMachines {
             guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
                   case .connected = store.state
@@ -622,7 +623,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                         detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
                         selected: selected && tab.tabID == tabID, alert: alert,
                         audible: store.panes(in: tab.tabID).contains(where: Self.isAudible),
-                        hint: selected && showsHints && index < 9 ? "⌃\(index + 1)" : nil
+                        hint: selected && showsHints && index < 9 ? "⌃\(index + 1)" : nil,
+                        working: store.panes(in: tab.tabID).contains { $0.agentStatus == .working }
                     )
                 } : []
                 if !selected, allTabs.count > 2 {
@@ -633,12 +635,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 }
                 return .init(
                     id: ref.key, name: workspace.label,
-                    shortcut: number <= 9 ? "⌘\(number)" : "",
+                    shortcut: spaceShortcut(position: number - 1, start: numbering),
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
                     finished: finished, selected: selected, tabs: tabs,
                     hinting: showsHints,
-                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
+                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) },
+                    working: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && $0.agentStatus == .working }
                 )
             }
             model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem,
@@ -1525,12 +1528,34 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         selectTab(tabs[(index + offset + tabs.count) % tabs.count].tabID)
     }
 
-    /// ⌘1…⌘9: spaces, in sidebar order.
+    /// ⌘1…⌘9: the first nine spaces, or with numbers that follow you the
+    /// nine around the selected one (see `numberingStart`).
     @objc func selectSpaceByNumber(_ sender: Any?) {
-        guard let n = Self.number(sender) else { return }
+        guard let n = Self.number(sender), (1...9).contains(n) else { return }
         let spaces = orderedSpaces
-        guard n - 1 < spaces.count else { return }
-        sidebar.onSelectSpace?(spaces[n - 1].key)
+        let target = numberingStart(count: spaces.count, selected: selectedSpaceIndex) + n - 1
+        guard spaces.indices.contains(target) else { return NSSound.beep() }
+        sidebar.onSelectSpace?(spaces[target].key)
+    }
+
+    /// Where ⌘1 points: the first space, or with numbers that follow you
+    /// four above the selected space (so ⌘1–9 cover the spaces above and
+    /// below it, the selected one in the middle), kept inside the list.
+    private func numberingStart(count: Int, selected: Int?) -> Int {
+        guard Settings.relativeSpaceNumbers, let selected, count > 9 else { return 0 }
+        return min(max(selected - 4, 0), count - 9)
+    }
+
+    /// Where the selected space sits in sidebar order.
+    private var selectedSpaceIndex: Int? {
+        guard let workspaceID else { return nil }
+        return orderedSpaces.firstIndex { $0.machine == machine.id && $0.workspace == workspaceID }
+    }
+
+    /// A space's shortcut label, ⌘1–9 within the numbered window.
+    private func spaceShortcut(position: Int, start: Int) -> String {
+        let n = position - start + 1
+        return (1...9).contains(n) ? "⌘\(n)" : ""
     }
 
     /// ⌃1…⌃8: tabs of this space; ⌃9 is the last tab, as in browsers.

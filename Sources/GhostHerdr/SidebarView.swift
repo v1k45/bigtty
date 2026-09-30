@@ -12,6 +12,8 @@ struct SidebarModel: Equatable {
         var audible = false
         /// Its shortcut, shown while ⌘ is held.
         var hint: String? = nil
+        /// Its agent is working.
+        var working = false
     }
 
     struct Space: Equatable {
@@ -30,6 +32,8 @@ struct SidebarModel: Equatable {
         var audible = false
         /// "3 tabs · first · second +1" for a space that isn't selected.
         var tabSummary: String? = nil
+        /// An agent in it is working (a quieter dot than "needs you").
+        var working = false
     }
 
     /// This Mac's session switcher.
@@ -487,8 +491,13 @@ private final class SpaceCard: NSView, SidebarRow {
 
         dot.wantsLayer = true
         dot.layer?.cornerRadius = 3.5
-        dot.layer?.backgroundColor = space.alert ? NSColor.controlAccentColor.cgColor : NSColor.systemBlue.withAlphaComponent(0.8).cgColor
-        dot.isHidden = !(space.alert || space.finished)
+        // Needs you (accent) over finished (blue) over working (green,
+        // breathing slowly).
+        dot.layer?.backgroundColor = space.alert ? NSColor.controlAccentColor.cgColor
+            : space.finished ? NSColor.systemBlue.withAlphaComponent(0.8).cgColor
+            : NSColor.systemGreen.cgColor
+        dot.isHidden = !(space.alert || space.finished || space.working)
+        if space.working, !space.alert, !space.finished { Self.breathe(dot) }
 
         speaker.image = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "Playing audio")
         speaker.symbolConfiguration = .init(pointSize: 10, weight: .regular)
@@ -587,8 +596,9 @@ private final class SpaceCard: NSView, SidebarRow {
             dot.frame = NSRect(x: 10, y: 13, width: 7, height: 7)
             x = 23
         }
-        name.frame = NSRect(x: x, y: 8, width: w - x - (space.audible ? 58 : 40), height: 17)
-        shortcut.frame = NSRect(x: w - 42, y: 9, width: 32, height: 15)
+        name.frame = NSRect(x: x, y: 8, width: w - x - (space.audible ? 58 : 40) - max(0, ceil(shortcut.intrinsicContentSize.width) - 30), height: 17)
+        let shortcutWidth = max(32, ceil(shortcut.intrinsicContentSize.width) + 2)
+        shortcut.frame = NSRect(x: w - 10 - shortcutWidth, y: 9, width: shortcutWidth, height: 15)
         speaker.frame = NSRect(x: w - 58, y: 10, width: 14, height: 13)
         meta.frame = NSRect(x: 10, y: 26, width: w - 20, height: 15)
         var y: CGFloat = 44
@@ -637,6 +647,8 @@ private final class TabRow: NSView {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    /// Its agent is working: a small breathing dot before the detail.
+    private let workingDot = NSView()
 
     init(tab: SidebarModel.Tab) {
         super.init(frame: .zero)
@@ -662,6 +674,12 @@ private final class TabRow: NSView {
         detail.textColor = tab.alert ? .controlAccentColor : .secondaryLabelColor
         detail.alignment = .right
         for view in [icon, label, detail] { addSubview(view) }
+        workingDot.wantsLayer = true
+        workingDot.layer?.cornerRadius = 3
+        workingDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        workingDot.isHidden = !tab.working || tab.alert
+        addSubview(workingDot)
+        if !workingDot.isHidden { NSView.breathe(workingDot) }
         setAccessibilityRole(.button)
         setAccessibilityLabel("Tab \(tab.label)")
     }
@@ -676,7 +694,9 @@ private final class TabRow: NSView {
         // The name takes whatever the detail ("needs you", "2 panes") leaves.
         let detailWidth = detail.stringValue.isEmpty ? 0 : ceil(detail.intrinsicContentSize.width) + 4
         detail.frame = NSRect(x: bounds.width - detailWidth - 6, y: (h - 14) / 2, width: detailWidth, height: 14)
-        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: max(0, bounds.width - 24 - detailWidth - 12), height: 15)
+        let dotSpace: CGFloat = workingDot.isHidden ? 0 : 12
+        workingDot.frame = NSRect(x: bounds.width - detailWidth - 6 - 10, y: (h - 6) / 2, width: 6, height: 6)
+        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: max(0, bounds.width - 24 - detailWidth - dotSpace - 12), height: 15)
     }
 
     override func mouseDown(with _: NSEvent) { onClick?() }
@@ -729,4 +749,20 @@ final class StripButton: NSButton {
 
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+}
+
+extension NSView {
+    /// A slow opacity pulse for "working" dots. Core Animation runs it on
+    /// the render server: no timers or redraws in the app.
+    static func breathe(_ view: NSView) {
+        guard let layer = view.layer, layer.animation(forKey: "breathe") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.35
+        pulse.duration = 1.1
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(pulse, forKey: "breathe")
+    }
 }

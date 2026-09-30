@@ -95,19 +95,24 @@ final class AttentionCenter: NSObject {
     }
 
     private func notify(_ transition: Attention.Transition) {
-        guard notificationsAvailable, let pane = store.pane(transition.paneID) else { return }
+        guard let pane = store.pane(transition.paneID) else { return }
         switch Settings.notify {
         case .never: return
         case .needsYou: if transition.reason == .done { return }
         case .needsYouOrFinishes: break
         }
+        // The app's own sound (Settings ▸ Sound), so it plays whether or not
+        // macOS shows the banner; and a Dock bounce when an agent needs you
+        // while you're in another app.
+        if !Settings.sound.isEmpty { NSSound(named: Settings.sound)?.play() }
+        if transition.reason == .blocked, !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+        guard notificationsAvailable else { return }
         let workspace = store.workspace(pane.workspaceID)?.label ?? pane.workspaceID
         let agent = pane.displayAgent ?? pane.agent ?? "Agent"
         let content = UNMutableNotificationContent()
         switch transition.reason {
         case .blocked:
             content.title = "\(agent) needs you"
-            content.sound = .default
         case .done:
             content.title = "\(agent) finished"
         }
@@ -151,6 +156,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
     }
 
     func userNotificationCenter(_: UNUserNotificationCenter, willPresent _: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        // The app plays its own sound (Settings ▸ Sound).
+        [.banner, .list]
     }
 }
