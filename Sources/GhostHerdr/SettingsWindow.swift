@@ -51,7 +51,7 @@ enum Settings {
     /// Terminal background opacity (1 = opaque); below 1 the window's
     /// material shows through terminals too.
     static var terminalOpacity: Double {
-        get { UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 0.7 }
+        get { UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 0.9 }
         set { UserDefaults.standard.set(newValue, forKey: "terminalOpacity") }
     }
 
