@@ -64,6 +64,25 @@ public struct HerdrEndpoint: Sendable, Equatable {
         return nil
     }
 
+    /// Whether a server answers on `path`: a connect, nothing sent.
+    public static func isServing(_ path: String) -> Bool {
+        (try? UnixSocket(path: path, timeout: 0.5)).map { _ in true } ?? false
+    }
+
+    /// herdr's sessions on this Mac from its config folder, no CLI: nil
+    /// name for the default one.
+    public static func localSessions() -> [(name: String?, running: Bool)] {
+        let base = (defaultSocketPath(session: nil) as NSString).deletingLastPathComponent
+        var result: [(String?, Bool)] = [(nil, isServing(defaultSocketPath(session: nil)))]
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: base + "/sessions")) ?? []
+        for name in names.sorted() where !name.hasPrefix(".") {
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: base + "/sessions/" + name, isDirectory: &isDir), isDir.boolValue else { continue }
+            result.append((name, isServing(defaultSocketPath(session: name))))
+        }
+        return result
+    }
+
     /// Arguments that select this endpoint's session on the herdr CLI.
     public var sessionArguments: [String] {
         forwarded ? [] : (session.map { ["--session", $0] } ?? [])

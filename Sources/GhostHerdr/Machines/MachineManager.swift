@@ -103,17 +103,12 @@ final class MachineManager {
         return machine
     }
 
-    /// Re-reads `herdr session list`: running sessions get connected.
+    /// Re-reads herdr's sessions (its config folder, a connect to each
+    /// socket; no process): running sessions get connected.
     func refreshSessions() {
-        guard Self.discovers, let herdr = HerdrEndpoint.locateHerdr() else { return }
+        guard Self.discovers else { return }
         Task.detached {
-            guard let json = CommandRunner.local.run(herdr, ["session", "list", "--json"]),
-                  let value = try? JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)),
-                  case let .array(entries)? = value["sessions"] else { return }
-            let found = entries.compactMap { entry -> SessionInfo? in
-                guard let name = entry["name"]?.stringValue else { return nil }
-                return SessionInfo(name: entry["default"]?.boolValue == true ? nil : name, running: entry["running"]?.boolValue == true)
-            }
+            let found = HerdrEndpoint.localSessions().map { SessionInfo(name: $0.name, running: $0.running) }
             await MainActor.run { self.sessionsListed(found) }
         }
     }

@@ -17,6 +17,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     private var session: InMemoryTerminalSession!
     /// Frames pass through here, held while the app redraws for a new size.
     private var gate: FrameGate!
+    /// The grid this view asked herdr for, readable off the main thread.
+    private let expectedSize = LockedSize()
     private var channel: TerminalChannel?
     private(set) var mode: Mode = .control
     private var viewport: InMemoryTerminalViewport?
@@ -74,6 +76,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
             // A new size makes the app redraw; show the result, not the
             // frames in between (except while dragging the window edge).
             if window?.inLiveResize != true { gate.hold() }
+            expectedSize.set(Int(viewport.columns), Int(viewport.rows))
             channel.resize(
                 columns: Int(viewport.columns), rows: Int(viewport.rows),
                 cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels)
@@ -124,6 +127,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
               Date().timeIntervalSince(lastSizeFix) > 0.5 else { return }
         lastSizeFix = Date()
         gate.hold()
+        expectedSize.set(Int(viewport.columns), Int(viewport.rows))
         source.resize(columns: Int(viewport.columns), rows: Int(viewport.rows),
                       cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels))
     }
@@ -152,6 +156,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         gate.hold()
         wire(channel)
         do {
+            // An observer mirrors another client's size: nothing to expect.
+            if displaced || mode == .observe { expectedSize.clear() } else { expectedSize.set(Int(viewport.columns), Int(viewport.rows)) }
             try channel.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
             self.channel = channel
         } catch {
@@ -170,7 +176,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         channel.onFrame = { gate.feed($0) }
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
+        // Compared on the reader thread against the size last sent; the
+        // main thread only hears about a mismatch.
+        let expected = expectedSize
         channel.onFrameSize = { columns, rows in
+            guard let want = expected.value, want.columns != columns || want.rows != rows else { return }
             DispatchQueue.main.async { box.value?.frameSize(columns: columns, rows: rows, from: channel) }
         }
         let id = ObjectIdentifier(channel)
@@ -240,6 +250,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         guard displaced, reclaimProbe === probe else { return }
         reclaimProbe = nil
         channel?.close()
+        if let viewport { expectedSize.set(Int(viewport.columns), Int(viewport.rows)) }
         wire(probe)
         channel = probe
         setDisplaced(false)

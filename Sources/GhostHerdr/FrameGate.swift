@@ -8,12 +8,13 @@ import Foundation
 /// `hold()` starts buffering; the buffer is drawn in one go once frames go
 /// quiet for `quiet` seconds, or after `limit` at the latest.
 final class FrameGate: @unchecked Sendable {
+    private let lock = NSLock()
     private let queue = DispatchQueue(label: "dev.ghostherdr.frame-gate")
     private let sink: @Sendable (Data) -> Void
     private var holding = false
-    private var buffer: [Data] = []
+    private var buffer = Data()
     private var deadline: DispatchTime = .now()
-    private var flushWork: DispatchWorkItem?
+    private var generation = 0
     private let quiet: Double = 0.045
     private let limit: Double = 0.3
 
@@ -23,37 +24,44 @@ final class FrameGate: @unchecked Sendable {
 
     /// Buffer frames until the terminal settles.
     func hold() {
-        queue.async { [self] in
+        lock.withLock {
             if !holding { deadline = .now() + limit }
             holding = true
-            schedule()
         }
+        schedule()
     }
 
+    /// Straight through on the caller's thread unless holding: no hop
+    /// per frame in the common case.
     func feed(_ data: Data) {
-        queue.async { [self] in
-            guard holding else { return sink(data) }
+        let held = lock.withLock { () -> Bool in
+            guard holding else { return false }
             buffer.append(data)
-            schedule()
+            return true
         }
+        if held { schedule() } else { sink(data) }
     }
 
     /// Flush after `quiet` without frames, never later than the deadline.
     private func schedule() {
-        flushWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.flush() }
-        flushWork = work
-        let quietAt = DispatchTime.now() + quiet
-        queue.asyncAfter(deadline: min(quietAt, deadline), execute: work)
+        let (token, at) = lock.withLock { () -> (Int, DispatchTime) in
+            generation += 1
+            return (generation, min(.now() + quiet, deadline))
+        }
+        queue.asyncAfter(deadline: at) { [weak self] in self?.flush(token) }
     }
 
-    private func flush() {
-        holding = false
-        flushWork = nil
-        let frames = buffer
-        buffer = []
+    private func flush(_ token: Int) {
+        let frames = lock.withLock { () -> Data? in
+            // A later frame (or hold) rescheduled: unless past the
+            // deadline, that one flushes.
+            guard holding, token == generation || DispatchTime.now() >= deadline else { return nil }
+            holding = false
+            defer { buffer = Data() }
+            return buffer
+        }
         // One write: the surface draws the settled screen once.
-        if !frames.isEmpty { sink(frames.reduce(into: Data()) { $0.append($1) }) }
+        if let frames, !frames.isEmpty { sink(frames) }
     }
 }
 
@@ -68,4 +76,14 @@ final class OnceFlag: @unchecked Sendable {
             return !taken
         }
     }
+}
+
+/// A grid size shared with a reader thread.
+final class LockedSize: @unchecked Sendable {
+    private let lock = NSLock()
+    private var size: (columns: Int, rows: Int)?
+
+    var value: (columns: Int, rows: Int)? { lock.withLock { size } }
+    func set(_ columns: Int, _ rows: Int) { lock.withLock { size = (columns, rows) } }
+    func clear() { lock.withLock { size = nil } }
 }

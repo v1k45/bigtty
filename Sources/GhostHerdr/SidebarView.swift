@@ -147,31 +147,57 @@ final class SidebarView: NSView {
 
     /// Re-applies theme colors (appearance changes).
     func refreshTheme() {
-        rebuild()
+        rebuild(force: true)
         needsLayout = true
     }
 
-    private func rebuild() {
-        list.subviews.forEach { $0.removeFromSuperview() }
+    /// Rows are kept while their content is unchanged, so a small update
+    /// (a ping time, one agent's status) rebuilds one row, not the list.
+    private func rebuild(force: Bool = false) {
+        var oldHeaders: [String: MachineHeader] = [:]
+        var oldCards: [String: SpaceCard] = [:]
+        if !force {
+            for view in list.subviews {
+                if let header = view as? MachineHeader { oldHeaders[header.machine.id] = header }
+                if let card = view as? SpaceCard { oldCards[card.space.id] = card }
+            }
+        }
+        var rows: [NSView] = []
         for machine in model.machines {
+            if let kept = oldHeaders[machine.id], kept.machine == machine {
+                rows.append(kept)
+                if let message = model.message, machine == model.machines.first { rows.append(MessageRow(text: message)) }
+                for space in machine.spaces {
+                    rows.append(oldCards[space.id].flatMap { $0.space == space ? $0 : nil } ?? makeCard(space))
+                }
+                continue
+            }
             let header = MachineHeader(machine: machine)
             header.onClick = { [weak self, weak header] in
                 guard let self else { return }
                 if machine.session != nil, let header { self.popUpSessionMenu(under: header) } else { self.onMachineClick?(machine.id) }
             }
-            list.addSubview(header)
+            rows.append(header)
             if let message = model.message, machine == model.machines.first {
-                list.addSubview(MessageRow(text: message))
+                rows.append(MessageRow(text: message))
             }
             for space in machine.spaces {
-                let card = SpaceCard(space: space)
-                card.onClick = { [weak self] in self?.onSelectSpace?(space.id) }
-                card.onTab = { [weak self] tab in self?.onSelectTab?(space.id, tab) }
-                card.menuProvider = { [weak self] in self?.onSpaceMenu?(space.id) }
-                list.addSubview(card)
+                rows.append(oldCards[space.id].flatMap { $0.space == space ? $0 : nil } ?? makeCard(space))
             }
         }
+        // Swap in the new order; views that stay keep their layers.
+        for view in list.subviews where !rows.contains(where: { $0 === view }) { view.removeFromSuperview() }
+        for view in rows where view.superview !== list { list.addSubview(view) }
+        list.subviews = rows
         layoutList()
+    }
+
+    private func makeCard(_ space: SidebarModel.Space) -> SpaceCard {
+        let card = SpaceCard(space: space)
+        card.onClick = { [weak self] in self?.onSelectSpace?(space.id) }
+        card.onTab = { [weak self] tab in self?.onSelectTab?(space.id, tab) }
+        card.menuProvider = { [weak self] in self?.onSpaceMenu?(space.id) }
+        return card
     }
 
     private func layoutList() {
@@ -298,7 +324,10 @@ private final class MachineHeader: NSView, SidebarRow {
     private var hovering = false { didSet { updateChip() } }
     var pressed = false { didSet { updateChip() } }
 
+    let machine: SidebarModel.Machine
+
     init(machine: SidebarModel.Machine) {
+        self.machine = machine
         isProblem = machine.statusIsProblem || machine.status.contains("not running")
         isSessionSwitcher = machine.session != nil
         super.init(frame: .zero)
