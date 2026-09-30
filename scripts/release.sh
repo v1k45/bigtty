@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a distributable GhostHerdr.app (Intel + Apple Silicon) and zips it.
-#   scripts/release.sh <version>   → build/release/GhostHerdr-<version>.zip
+#   scripts/release.sh <version>   → build/release/GhostHerdr-<version>.{dmg,zip}
 #
 # Built with xcodebuild rather than `swift build`: Xcode's resource lookup
 # for package resources checks the app's Contents/Resources, so the
@@ -59,4 +59,16 @@ codesign --verify --strict "$app"
 
 zip="$out/GhostHerdr-${version}.zip"
 ditto -c -k --keepParent "$app" "$zip"
+
+# A disk image to drag the app into Applications from.
+staging="$out/dmg"
+mkdir -p "$staging"
+cp -R "$app" "$staging/"
+ln -s /Applications "$staging/Applications"
+dmg="$out/GhostHerdr-${version}.dmg"
+hdiutil create -volname "GhostHerdr ${version}" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$dmg" -quiet
+rm -rf "$staging"
+codesign --force --sign - "$dmg"
+
 echo "$zip"
+echo "$dmg"
