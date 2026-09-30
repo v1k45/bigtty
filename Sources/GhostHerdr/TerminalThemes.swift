@@ -126,30 +126,7 @@ enum ContrastBoost: String, CaseIterable {
     }
 }
 
-/// How panes are shown: GhostHerdr's own per-pane terminals, or herdr's
-/// own client in one terminal per window.
-enum TerminalMode: String, CaseIterable {
-    case panes, herdrClient
-
-    var title: String {
-        switch self {
-        case .panes: "GhostHerdr panes"
-        case .herdrClient: "herdr client (native)"
-        }
-    }
-}
-
 extension Settings {
-    /// `GHOSTHERDR_TERMINAL_MODE` (panes / herdrClient) overrides it for one
-    /// launch, e.g. a test copy beside the one in use.
-    static var terminalMode: TerminalMode {
-        get {
-            if let forced = ProcessInfo.processInfo.environment["GHOSTHERDR_TERMINAL_MODE"].flatMap(TerminalMode.init) { return forced }
-            return UserDefaults.standard.string(forKey: "terminalMode").flatMap(TerminalMode.init) ?? .panes
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminalMode") }
-    }
-
     static var terminalTheme: String {
         get {
             if let chosen = UserDefaults.standard.string(forKey: "terminalTheme") { return chosen }

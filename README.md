@@ -148,9 +148,7 @@ font, size, background translucency, contrast boost and copy on select.
 
 Clicks, hover, scrolling and pastes reach apps like Claude Code, vim and htop
 the way they do in Ghostty. ⌘V with a screenshot on the clipboard pastes it as
-a file (uploaded first for a pane on another machine), so Claude Code attaches it. Prefer herdr's own interface? **Settings ▸
-Terminal ▸ herdr client** runs herdr itself in each window, with the native
-sidebar, palette and browser around it.
+a file (uploaded first for a pane on another machine), so Claude Code attaches it.
 
 ### Attention and notifications
 

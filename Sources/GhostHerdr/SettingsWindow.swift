@@ -157,7 +157,6 @@ final class SettingsWindowController: NSWindowController {
     private let extensionsFolder = NSButton(title: "Open Folder", target: nil, action: nil)
     private let extensionsStatus = NSTextField(wrappingLabelWithString: "")
 
-    private let engine = NSPopUpButton()
     private let copySelect = NSSwitch()
     private let theme = NSPopUpButton()
     private let font = NSPopUpButton()
@@ -353,9 +352,6 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func buildTerminal() -> NSView {
-        for mode in TerminalMode.allCases { engine.addItem(withTitle: mode.title) }
-        engine.target = self
-        engine.action = #selector(engineChanged)
         for choice in TerminalThemeChoice.all {
             if choice.id == TerminalThemeChoice.ghosttyConfig { theme.menu?.addItem(.separator()) }
             theme.addItem(withTitle: choice.name)
@@ -413,7 +409,6 @@ final class SettingsWindowController: NSWindowController {
         config.spacing = 6
 
         return form([
-            [label("Terminal:"), stack(engine, "herdr client runs herdr itself in each window, exactly like herdr in Ghostty; GhostHerdr panes draw each pane natively.")],
             [label("Theme:"), stack(theme, "The paired themes follow the system’s light and dark appearance.")],
             [label("Font:"), font],
             [label("Size:"), size],
@@ -454,7 +449,6 @@ final class SettingsWindowController: NSWindowController {
         paneKeys.selectItem(at: Settings.PaneKeys.allCases.firstIndex(of: Settings.paneKeys) ?? 0)
         herdr.stringValue = herdrDescription()
 
-        engine.selectItem(at: TerminalMode.allCases.firstIndex(of: Settings.terminalMode) ?? 0)
         let themeIndex = theme.itemArray.firstIndex { $0.representedObject as? String == Settings.terminalTheme } ?? 0
         theme.selectItem(at: themeIndex)
         if Settings.fontFamily.isEmpty || font.item(withTitle: Settings.fontFamily) == nil {
@@ -487,11 +481,6 @@ final class SettingsWindowController: NSWindowController {
             frame.size = size
             window.setFrame(frame, display: true, animate: true)
         }
-    }
-
-    @objc private func engineChanged() {
-        Settings.terminalMode = TerminalMode.allCases[max(0, engine.indexOfSelectedItem)]
-        Settings.changed()
     }
 
     @objc private func terminalChanged() {
