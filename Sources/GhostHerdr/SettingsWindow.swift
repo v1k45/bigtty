@@ -109,6 +109,10 @@ final class SettingsWindowController: NSWindowController {
         let controller = NSViewController()
         controller.view = view
         controller.title = title
+        // Each tab keeps its own height; the window resizes when switching,
+        // instead of stretching the shorter form's rows apart.
+        view.layoutSubtreeIfNeeded()
+        controller.preferredContentSize = view.fittingSize
         let item = NSTabViewItem(viewController: controller)
         item.label = title
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
