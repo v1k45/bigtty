@@ -94,7 +94,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let a = manager.observe { [weak self] in self?.render() }
         observers = [(a, { manager.removeObserver($0) })]
         settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.render() }
+            // The terminal theme may have changed; the chrome follows it.
+            MainActor.assumeIsolated { self?.applyTheme(); self?.render() }
         }
         render()
     }
@@ -232,6 +233,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             if id == lastFocusedPane || id == herdrFocus { pendingFocus = id }
         }
         let zoomed = layout?.zoomed == true ? herdrFocus : nil
+        noteShown(tab: tabID, zoomed: zoomed)
         splitTree.show(layout?.root, zoomedPane: zoomed)
         if !retagged.isEmpty { splitTree.rebuild() }
         let dim = Settings.dimUnfocused
@@ -584,6 +586,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return id
     }
 
+    /// Everything the user is looking at: the focused pane at once, and the
+    /// rest of the tab once it has been on screen a moment, since a ring you
+    /// can see is a ring you've seen.
+    var viewedPanes: Set<String> {
+        guard let focused = viewedPane else { return [] }
+        guard zoomedPane == nil, let since = shownSince, Date().timeIntervalSince(since) >= Self.seenAfter else { return [focused] }
+        return Set(paneViews.keys)
+    }
+
+    private static let seenAfter: TimeInterval = 2
+    private var shownSince: Date?
+    private var shownKey: String?
+    private var zoomedPane: String?
+
+    /// Starts the "seen" clock when the tab (or zoom) on screen changes.
+    private func noteShown(tab: String?, zoomed: String?) {
+        zoomedPane = zoomed
+        let key = (tab ?? "") + "|" + (zoomed ?? "")
+        guard key != shownKey else { return }
+        shownKey = key
+        restartSeenClock()
+    }
+
+    private func restartSeenClock() {
+        let started = Date()
+        shownSince = started
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.seenAfter + 0.1) { [weak self] in
+            guard let self, self.shownSince == started else { return }
+            self.attention.viewChanged()
+        }
+    }
+
     /// The space this window shows.
     var shownWorkspaceID: String? { workspaceID }
 
@@ -703,11 +737,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// ⌘1…⌘9: spaces, in sidebar order.
-    @objc func selectTabByNumber(_ sender: Any?) {
-        guard let n = (sender as? NSMenuItem)?.tag ?? (sender as? String).flatMap(Int.init) else { return }
+    @objc func selectSpaceByNumber(_ sender: Any?) {
+        guard let n = Self.number(sender) else { return }
         let spaces = orderedSpaces
         guard n - 1 < spaces.count else { return }
         sidebar.onSelectSpace?(spaces[n - 1].key)
+    }
+
+    /// ⌃1…⌃8: tabs of this space; ⌃9 is the last tab, as in browsers.
+    @objc func selectTabByNumber(_ sender: Any?) {
+        guard let n = Self.number(sender), let workspaceID else { return }
+        let tabs = store.tabs(in: workspaceID)
+        guard !tabs.isEmpty else { return }
+        if n == 9 { return selectTab(tabs[tabs.count - 1].tabID) }
+        guard n - 1 < tabs.count else { return NSSound.beep() }
+        selectTab(tabs[n - 1].tabID)
+    }
+
+    @objc func nextSpace(_: Any?) { cycleSpace(by: 1) }
+    @objc func previousSpace(_: Any?) { cycleSpace(by: -1) }
+
+    private func cycleSpace(by offset: Int) {
+        let spaces = orderedSpaces
+        guard !spaces.isEmpty else { return }
+        let current = spaces.firstIndex { $0.machine == machine.id && $0.workspace == workspaceID } ?? 0
+        sidebar.onSelectSpace?(spaces[(current + offset + spaces.count) % spaces.count].key)
+    }
+
+    /// A menu item's tag, or a number passed by a debug hook.
+    private static func number(_ sender: Any?) -> Int? {
+        (sender as? NSMenuItem)?.tag ?? (sender as? String).flatMap(Int.init)
     }
 
     /// The folder new spaces start in: the focused pane's working directory.
@@ -780,6 +839,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_: Notification) {
+        restartSeenClock()
         // Coming back to a window takes control of the pane it shows.
         if let id = lastFocusedPane, let terminal = paneViews[id]?.terminal, terminal.mode == .observe {
             terminal.takeControl()

@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             NSApp.appearance = NSAppearance(named: look == "light" ? .aqua : .darkAqua)
         }
         terminalController = Self.makeTerminalController()
+        watchGhosttyConfig()
         let endpoint = HerdrEndpoint(session: env["GHOSTHERDR_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
         manager = MachineManager(localEndpoint: endpoint)
         NSApp.mainMenu = MainMenu.build()
@@ -58,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         for machine in manager.all where machine.viewedPanesUnset {
             machine.viewedPanes = { [weak self, weak machine] in
                 guard let self, let machine else { return [] }
-                return Set(self.windows.filter { $0.machine === machine }.compactMap(\.viewedPane))
+                return Set(self.windows.filter { $0.machine === machine }.reduce(into: Set<String>()) { $0.formUnion($1.viewedPanes) })
             }
             machine.reveal = { [weak self, weak machine] pane in
                 guard let self, let machine else { return }
@@ -80,17 +81,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// Uses the user's own Ghostty config, so fonts, theme and keybinds match.
+    /// The user's own Ghostty config, with Settings ▸ Terminal on top.
     private static func makeTerminalController() -> TerminalController {
-        let home = NSHomeDirectory()
-        let candidates = [
-            home + "/.config/ghostty/config.ghostty",
-            home + "/.config/ghostty/config",
-            home + "/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
-            home + "/Library/Application Support/com.mitchellh.ghostty/config",
-        ]
-        let path = candidates.first { FileManager.default.fileExists(atPath: $0) }
-        return TerminalController(configFilePath: path)
+        TerminalAppearance.makeController()
+    }
+
+    /// Edits to the Ghostty config apply live.
+    private var configWatcher: FileWatcher?
+
+    private func watchGhosttyConfig() {
+        let dir = ((TerminalAppearance.configPath() ?? NSHomeDirectory() + "/.config/ghostty/config.ghostty") as NSString)
+            .deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        configWatcher = FileWatcher(path: dir) { [weak self] paths in
+            guard let self, paths.contains(where: { ($0 as NSString).lastPathComponent.hasPrefix("config") }) else { return }
+            TerminalAppearance.apply(to: self.terminalController)
+        }
     }
 
     /// In space mode closing every window just hides the spaces; the app
@@ -354,6 +360,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showSpace(SpaceRef(machine: machine.id, workspace: first.workspaceID))
     }
 
+    /// Debug hook: re-apply terminal settings, as Settings ▸ Reload does.
+    @objc func debugReloadTerminal(_: Any?) {
+        TerminalAppearance.apply(to: terminalController)
+    }
+
     /// Debug hook: filter the open palette.
     @objc func debugPaletteType(_ sender: Any?) {
         JumpPalette.shared.debugType(sender as? String ?? "")
@@ -411,6 +422,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return "\((endpoint.herdrBinary as NSString).abbreviatingWithTildeInPath) · \(version) · \(session)"
         }
         settings.onWindowModeChange = { [weak self] in self?.toggleWindowPerSpace(nil) }
+        settings.onTerminalChange = { [weak self] in
+            guard let self else { return }
+            TerminalAppearance.apply(to: self.terminalController)
+        }
         settings.show()
     }
 

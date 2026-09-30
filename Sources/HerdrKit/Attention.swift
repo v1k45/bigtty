@@ -2,10 +2,11 @@ import Foundation
 
 /// Which panes need the user, from this client's point of view.
 ///
-/// A pane needs attention while its agent is `blocked`, or once it turns
-/// `done` until someone looks at it. herdr tracks "seen" per client, so the
-/// unseen set is ours: a pane counts as seen when it is visible and focused
-/// in the key window (`viewed`).
+/// A pane needs attention once its agent turns `blocked` or `done`, until
+/// someone looks at it. herdr tracks "seen" per client, so the unseen sets
+/// are ours: a pane counts as seen when it is visible and focused in the key
+/// window (`viewed`). A blocked pane that was seen stays quiet until it
+/// stops being blocked and gets blocked again.
 public struct Attention: Sendable, Equatable {
     public enum Reason: String, Sendable { case blocked, done }
 
@@ -17,6 +18,8 @@ public struct Attention: Sendable, Equatable {
     private var lastStatus: [String: AgentStatus] = [:]
     public private(set) var unseenDone: Set<String> = []
     public private(set) var blocked: Set<String> = []
+    /// Blocked panes the user has already looked at.
+    public private(set) var seenBlocked: Set<String> = []
 
     public init() {}
 
@@ -42,6 +45,7 @@ public struct Attention: Sendable, Equatable {
         }
         lastStatus = seen
         blocked = Set(panes.filter { $0.agentStatus == .blocked }.map(\.paneID))
+        seenBlocked.formIntersection(blocked)
         unseenDone.formIntersection(seen.keys)
         markViewed(viewed)
         return transitions
@@ -49,15 +53,16 @@ public struct Attention: Sendable, Equatable {
 
     public mutating func markViewed(_ viewed: Set<String>) {
         unseenDone.subtract(viewed)
+        seenBlocked.formUnion(viewed.intersection(blocked))
     }
 
     public func reason(for paneID: String) -> Reason? {
-        if blocked.contains(paneID) { return .blocked }
+        if blocked.contains(paneID), !seenBlocked.contains(paneID) { return .blocked }
         if unseenDone.contains(paneID) { return .done }
         return nil
     }
 
-    public var needingAttention: Set<String> { blocked.union(unseenDone) }
+    public var needingAttention: Set<String> { blocked.subtracting(seenBlocked).union(unseenDone) }
 
     /// Panes in the order jump-to-unread visits them: blocked first, then
     /// finished, each in workspace/tab/pane order.
@@ -67,8 +72,8 @@ public struct Attention: Sendable, Equatable {
         return snapshot.panes
             .filter { needingAttention.contains($0.paneID) }
             .sorted { a, b in
-                let ra = blocked.contains(a.paneID) ? 0 : 1
-                let rb = blocked.contains(b.paneID) ? 0 : 1
+                let ra = reason(for: a.paneID) == .blocked ? 0 : 1
+                let rb = reason(for: b.paneID) == .blocked ? 0 : 1
                 if ra != rb { return ra < rb }
                 let wa = workspaceOrder[a.workspaceID] ?? 0, wb = workspaceOrder[b.workspaceID] ?? 0
                 if wa != wb { return wa < wb }

@@ -19,7 +19,10 @@ import AppKit
     func nextTab(_ sender: Any?)
     func previousTab(_ sender: Any?)
     func newWorkspace(_ sender: Any?)
+    func selectSpaceByNumber(_ sender: Any?)
     func selectTabByNumber(_ sender: Any?)
+    func nextSpace(_ sender: Any?)
+    func previousSpace(_ sender: Any?)
     func toggleSidebar(_ sender: Any?)
     func newBrowserPane(_ sender: Any?)
     func openLocation(_ sender: Any?)
@@ -80,12 +83,24 @@ enum MainMenu {
         let tabs = submenu(main, "Go")
         item(tabs, "Jump To…", #selector(AppDelegate.showJump(_:)), "k")
         tabs.addItem(.separator())
-        item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "]", [.command, .shift])
-        item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "[", [.command, .shift])
-        tabs.addItem(.separator())
+        // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and
+        // browsers; ⌘⇧] / ⌘⇧[ kept as alternates.
+        item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "\t", [.control])
+        item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "\t", [.control, .shift])
+        alternate(item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "]", [.command, .shift]))
+        alternate(item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "[", [.command, .shift]))
+        let tabNumbers = NSMenu(title: "Tab")
+        let tabNumbersItem = NSMenuItem(title: "Tab", action: nil, keyEquivalent: "")
+        tabNumbersItem.submenu = tabNumbers
+        tabs.addItem(tabNumbersItem)
         for n in 1...9 {
-            let i = item(tabs, "Space \(n)", #selector(PaneActions.selectTabByNumber(_:)), "\(n)")
-            i.tag = n
+            item(tabNumbers, n == 9 ? "Last Tab" : "Tab \(n)", #selector(PaneActions.selectTabByNumber(_:)), "\(n)", [.control]).tag = n
+        }
+        tabs.addItem(.separator())
+        item(tabs, "Next Space", #selector(PaneActions.nextSpace(_:)), "]", [.command, .control])
+        item(tabs, "Previous Space", #selector(PaneActions.previousSpace(_:)), "[", [.command, .control])
+        for n in 1...9 {
+            item(tabs, "Space \(n)", #selector(PaneActions.selectSpaceByNumber(_:)), "\(n)").tag = n
         }
 
         let view = submenu(main, "View")
@@ -101,6 +116,12 @@ enum MainMenu {
         NSApp.windowsMenu = window
 
         return main
+    }
+
+    /// Hidden duplicate shortcut: works, but not listed twice in the menu.
+    private static func alternate(_ item: NSMenuItem) {
+        item.isHidden = true
+        item.allowsKeyEquivalentWhenHidden = true
     }
 
     private static func submenu(_ main: NSMenu, _ title: String) -> NSMenu {

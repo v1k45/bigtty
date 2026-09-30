@@ -74,6 +74,9 @@ final class SpaceInfoCenter {
                 if question == nil { fetchQuestion(blocked) }
             } else if let done = agents.first(where: { attention.reason(for: $0.paneID) == .done }) {
                 item.line = "\(name(done)) finished"
+            } else if let waiting = agents.first(where: { $0.agentStatus == .blocked }) {
+                // Blocked but already seen: say so, without the alert.
+                item.line = "\(name(waiting)) · waiting for you"
             } else if let working = agents.first(where: { $0.agentStatus == .working }) {
                 item.line = "\(name(working)) · working"
             } else if let idle = agents.first {

@@ -83,7 +83,7 @@ final class PaneContainerView: NSView {
     }
 
     private func updateDimming() {
-        alphaValue = isFocusedPane || !dimsWhenUnfocused ? 1 : 0.62
+        alphaValue = isFocusedPane || !dimsWhenUnfocused ? 1 : 0.72
     }
 
     private func takeControl() {

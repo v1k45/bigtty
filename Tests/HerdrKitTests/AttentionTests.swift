@@ -38,14 +38,28 @@ import Testing
         #expect(attention.reason(for: "p1") == nil)
     }
 
-    @Test func blockedNeedsAttentionUntilUnblocked() {
+    @Test func blockedNeedsAttentionUntilSeen() {
         var attention = Attention()
         _ = attention.update(panes: [pane("p1", .working)], viewed: [])
         #expect(attention.update(panes: [pane("p1", .blocked)], viewed: []) == [.init(paneID: "p1", reason: .blocked)])
-        // Still blocked: no repeat notification, still flagged even if viewed.
-        #expect(attention.update(panes: [pane("p1", .blocked)], viewed: ["p1"]).isEmpty)
         #expect(attention.reason(for: "p1") == .blocked)
+        // Looked at while still blocked: quiet, no repeat notification.
+        #expect(attention.update(panes: [pane("p1", .blocked)], viewed: ["p1"]).isEmpty)
+        #expect(attention.reason(for: "p1") == nil)
+        #expect(attention.needingAttention.isEmpty)
+        _ = attention.update(panes: [pane("p1", .blocked)], viewed: [])
+        #expect(attention.reason(for: "p1") == nil)
+        // Unblocked, then blocked again: needs the user again.
         _ = attention.update(panes: [pane("p1", .working)], viewed: [])
+        #expect(attention.update(panes: [pane("p1", .blocked)], viewed: []).count == 1)
+        #expect(attention.reason(for: "p1") == .blocked)
+    }
+
+    @Test func focusingABlockedPaneClearsIt() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .blocked)], viewed: [])
+        #expect(attention.reason(for: "p1") == .blocked)
+        attention.markViewed(["p1"])
         #expect(attention.reason(for: "p1") == nil)
     }
 
