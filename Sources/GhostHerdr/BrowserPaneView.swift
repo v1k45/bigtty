@@ -5,7 +5,7 @@ import WebKit
 /// `HostPaneStore` so the page comes back after a restart, and the title is
 /// mirrored to herdr so other clients see what the pane shows.
 @MainActor
-final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextFieldDelegate {
+final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextFieldDelegate, WKScriptMessageHandler {
     let hostID: String
     let webView: WKWebView
     private let back = NSButton()
@@ -24,17 +24,39 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     /// One cookie/storage store for every browser pane, persisted on disk.
     private static let dataStore = WKWebsiteDataStore.default()
+    /// Automation runs here, out of the page's reach.
+    static let automationWorld = WKContentWorld.world(name: "ghostherdr")
+
+    struct ConsoleEntry {
+        let level: String
+        let text: String
+        let date: Date
+    }
+
+    private(set) var console: [ConsoleEntry] = []
+    /// Resolved when the current navigation finishes (or fails).
+    private var loadWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var lastNavigationError: String?
 
     init(hostID: String, state: HostPaneState) {
         self.hostID = hostID
         let config = WKWebViewConfiguration()
         config.websiteDataStore = Self.dataStore
+        let content = config.userContentController
+        content.addUserScript(WKUserScript(
+            source: AutomationScript.source, injectionTime: .atDocumentStart,
+            forMainFrameOnly: true, in: Self.automationWorld
+        ))
+        content.addUserScript(WKUserScript(
+            source: AutomationScript.consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true
+        ))
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         webView = WKWebView(frame: .zero, configuration: config)
         super.init(frame: .zero)
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrConsole")
         webView.allowsBackForwardNavigationGestures = true
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -157,6 +179,71 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         onStateChange?(state)
     }
 
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if ProcessInfo.processInfo.environment["GHOSTHERDR_TRACE_BROWSER"] != nil {
+            NSLog("ghostherdr-trace: browser \(hostID) superview=\(String(describing: superview)) \(Thread.callStackSymbols.prefix(8).joined(separator: " | "))")
+        }
+    }
+
+    // MARK: - Console and load state
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any] else { return }
+        console.append(ConsoleEntry(
+            level: body["level"] as? String ?? "log", text: body["text"] as? String ?? "", date: Date()
+        ))
+        if console.count > 500 { console.removeFirst(console.count - 500) }
+    }
+
+    func clearConsole() { console.removeAll() }
+
+    /// After starting a load: waits for it to begin, then to finish, so the
+    /// caller sees the new page's URL and title.
+    func waitForNavigation(timeout: TimeInterval) async {
+        let start = Date()
+        while !webView.isLoading, webView.title?.isEmpty ?? true, Date().timeIntervalSince(start) < 1 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        await waitForLoad(timeout: max(0, timeout - Date().timeIntervalSince(start)))
+        // WebKit publishes the title a moment after the load finishes.
+        let titleDeadline = Date().addingTimeInterval(0.5)
+        while webView.title?.isEmpty ?? true, Date() < titleDeadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// Waits for the page to finish loading, up to `timeout` seconds.
+    func waitForLoad(timeout: TimeInterval) async {
+        guard webView.isLoading else { return }
+        await withCheckedContinuation { continuation in
+            loadWaiters.append(continuation)
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in self?.finishLoad() }
+        }
+    }
+
+    private func finishLoad() {
+        let waiters = loadWaiters
+        loadWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func webView(_: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+        lastNavigationError = nil
+    }
+
+    func webView(_: WKWebView, didFinish _: WKNavigation!) { finishLoad() }
+
+    func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+        lastNavigationError = error.localizedDescription
+        finishLoad()
+    }
+
+    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
+        lastNavigationError = error.localizedDescription
+        finishLoad()
+    }
+
     // MARK: - WKUIDelegate
 
     /// `target=_blank` and `window.open` load in this pane.
@@ -174,5 +261,15 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let hit = super.hitTest(point)
         if hit != nil, NSApp.currentEvent?.type == .leftMouseDown { onFocus?() }
         return hit
+    }
+}
+
+/// WKUserContentController retains its handlers; this breaks the cycle.
+private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+    init(_ target: WKScriptMessageHandler) { self.target = target }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(controller, didReceive: message)
     }
 }

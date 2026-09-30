@@ -83,18 +83,22 @@ final class HostPaneStore {
         Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("ghr").path
     }
 
-    /// Splits `target` and turns the new pane into a host pane.
+    /// Splits `target` and turns the new pane into a host pane. Returns
+    /// the host id at once; the herdr pane appears shortly after.
+    @discardableResult
     static func open(
         _ state: HostPaneState, beside target: String, direction: SplitDirection,
-        store: SessionStore
-    ) {
+        store: SessionStore, onPane: (@MainActor (String) -> Void)? = nil
+    ) -> String {
         let id = newID(state.kind)
         shared[id] = state
         let title = hostTitle(state)
         store.perform { client in
             let pane = try await client.split(paneID: target, direction: direction)
             try await tag(pane: pane.paneID, id: id, kind: state.kind, title: title, client: client)
+            await MainActor.run { onPane?(pane.paneID) }
         }
+        return id
     }
 
     static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient) async throws {

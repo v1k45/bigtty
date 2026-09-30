@@ -98,6 +98,11 @@ final class PaneContainerView: NSView {
 
     override func layout() {
         super.layout()
+        // Browser views are shared (BrowserRegistry). If another container
+        // borrowed ours and let go, take it back.
+        if content.superview !== self, content.window == nil {
+            addSubview(content, positioned: .below, relativeTo: overlay)
+        }
         let h = Self.headerHeight
         let b = bounds
         statusDot.frame = NSRect(x: 8, y: b.height - h / 2 - 4, width: 8, height: 8)
@@ -106,6 +111,16 @@ final class PaneContainerView: NSView {
         overlay.sizeToFit()
         overlay.frame.origin = NSPoint(x: (b.width - overlay.frame.width) / 2, y: (b.height - overlay.frame.height) / 2)
         ring.frame = b.insetBy(dx: 1, dy: 1)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { needsLayout = true }
+    }
+
+    /// Hands a borrowed browser back rather than taking it down with us.
+    isolated deinit {
+        if content.superview === self, browser != nil { content.removeFromSuperview() }
     }
 
     override func mouseDown(with event: NSEvent) {

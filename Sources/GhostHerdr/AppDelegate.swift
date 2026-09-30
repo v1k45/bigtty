@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private(set) var store: SessionStore!
     private(set) var terminalController: TerminalController!
     private(set) var attention: AttentionCenter!
+    private var controlServer: ControlServer?
+    private var controlAPI: ControlAPI!
     private var windows: [MainWindowController] = []
 
     /// Each herdr workspace ("space") gets its own window, cmux-style, and the
@@ -36,10 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return }
             self.reconcileSpaceWindows()
             if case .connected = self.store.state {
-                HostPaneStore.shared.prune(keeping: Set(self.store.snapshot.panes.compactMap(\.hostID)))
+                let live = Set(self.store.snapshot.panes.compactMap(\.hostID))
+                HostPaneStore.shared.prune(keeping: live)
+                BrowserRegistry.shared.prune(keeping: live)
             }
         }
         store.start()
+        startControlServer()
         DebugDump.install { [weak self] in self?.debugDescription ?? "" }
         DebugDump.installTyping { NSApp.keyWindow?.firstResponder as? HerdrTerminalView
             ?? (ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_TYPE_BACK"] == nil ? Array(NSApp.orderedWindows) : NSApp.orderedWindows.reversed()).lazy.compactMap { $0.firstResponder as? HerdrTerminalView }.first }
@@ -82,9 +87,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     func applicationWillTerminate(_: Notification) {
+        controlServer?.stop()
         // Terminal channels release control on deinit; herdr keeps the panes.
         windows.removeAll()
         store.stop()
+    }
+
+    // MARK: - Control socket
+
+    private func startControlServer() {
+        controlAPI = ControlAPI(store: store)
+        controlAPI.focusedPane = { [weak self] in
+            let key = self?.windows.first { $0.window?.isKeyWindow == true } ?? self?.windows.first
+            return key?.focusedPaneForControl
+        }
+        let api = controlAPI!
+        let server = ControlServer { method, params in try await api.handle(method, params) }
+        do {
+            try server.start()
+            controlServer = server
+        } catch {
+            NSLog("ghostherdr: control socket unavailable: \(error)")
+        }
     }
 
     // MARK: - Windows
@@ -215,6 +239,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if windows.isEmpty { openWindow(pinnedTo: nil) }
         let target = windows.first { $0.window?.isKeyWindow == true } ?? windows.first
         target?.reveal(pane)
+    }
+
+    @objc func installAgentSkill(_: Any?) {
+        let done = AgentSkill.install()
+        let alert = NSAlert()
+        alert.messageText = done.isEmpty ? "Nothing was installed" : "Agents can now use ghr"
+        alert.informativeText = done.isEmpty
+            ? "Could not write ~/.local/bin/ghr or any skills folder."
+            : done.joined(separator: "\n") + "\n\nAgents in herdr panes can run `ghr browser …`."
+        alert.runModal()
     }
 
     @objc func jumpToNextUnread(_: Any?) {

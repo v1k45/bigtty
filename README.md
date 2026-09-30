@@ -17,7 +17,7 @@ MIT licensed.
 | 3. Terminal bridge, split tree, split keymap | done (drag-and-drop pane moves pending) |
 | 4. Window per space, control handoff, attention rings, notifications | done |
 | 5. Host panes + browser | done |
-| 6. Control socket, `ghr` CLI, browser automation | – |
+| 6. Control socket, `ghr` CLI, browser automation | done |
 | 7. File viewer + diffs | – |
 
 ## Build and run
@@ -79,6 +79,26 @@ resize, move, close) works on it, layouts survive restarts, and other herdr
 clients see a placeholder. URLs and titles are kept in
 `~/Library/Application Support/GhostHerdr/panes.json`. ⌘-clicking a link in a
 terminal opens it in the tab's browser pane, or a new one to the right.
+
+## Agents: `ghr browser`
+
+Agents in herdr panes drive the browser in their own tab through `ghr`
+(**GhostHerdr ▸ Install ghr and Agent Skill…** links it into `~/.local/bin`
+and writes a skill to `~/.claude/skills` / `~/.agents/skills`):
+
+```sh
+ghr browser open localhost:3000     # beside you, or this tab's browser
+ghr browser snapshot -i             # - textbox "Email" [ref=e3] …
+ghr browser fill @e3 me@example.com
+ghr browser click @e5
+ghr browser wait --text "Welcome"
+ghr browser screenshot out.png
+```
+
+Also: `type`, `press`, `select`, `check`, `scroll`, `hover`, `get`, `eval`,
+`console`, `navigate`/`back`/`forward`/`reload`, `list`, `close`; `--json` for
+raw output. Commands go over `~/Library/Application Support/GhostHerdr/control.sock`
+(user-only). The in-page script runs in an isolated JavaScript world.
 
 ## Development
 

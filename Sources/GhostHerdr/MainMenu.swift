@@ -33,6 +33,8 @@ enum MainMenu {
         let appMenu = submenu(main, "GhostHerdr")
         appMenu.addItem(withTitle: "About GhostHerdr", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Install ghr and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide GhostHerdr", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit GhostHerdr", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 

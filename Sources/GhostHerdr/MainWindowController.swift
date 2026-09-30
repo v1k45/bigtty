@@ -266,9 +266,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
         state.paneID = pane.paneID
         HostPaneStore.shared[hostID] = state
-        let browser = BrowserPaneView(hostID: hostID, state: state)
+        // The registry owns the web view so agents can drive it while no
+        // window shows it; this window borrows it.
+        let browser = BrowserRegistry.shared.view(for: hostID)
         let id = pane.paneID
-        browser.onFocus = { [weak self] in self?.paneGainedFocus(id) }
+        browser.onFocus = { [weak self] in
+            BrowserRegistry.shared.noteFocus(hostID)
+            self?.paneGainedFocus(id)
+        }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         return browser
     }
@@ -332,6 +337,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let tabID, store.layouts[tabID]?.focusedPaneID != id else { return }
         store.perform { try await $0.focusPane(id) }
     }
+
+    /// The focused pane, for control commands issued outside herdr.
+    var focusedPaneForControl: String? { focusedPaneID }
 
     /// The pane the user is looking at in this window, if it is key.
     var viewedPane: String? {
@@ -488,7 +496,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         var out = "window=\(window?.frame ?? .zero) tree=\(splitTree.frame)\n"
         out += "workspace=\(workspaceID ?? "-") tab=\(tabID ?? "-") focused=\(focusedPaneID ?? "-")\n"
         for (id, view) in paneViews.sorted(by: { $0.key < $1.key }) {
-            let browser = view.browser.map { "browser url=\($0.webView.url?.absoluteString ?? "-") title=\($0.webView.title ?? "-")" }
+            let browser = view.browser.map {
+                "browser url=\($0.webView.url?.absoluteString ?? "-") title=\($0.webView.title ?? "-") frame=\($0.frame) attached=\($0.superview === view) web=\($0.webView.frame)"
+            }
             out += "pane \(id) frame=\(view.frame) \(view.terminal?.debugDescription ?? browser ?? "")\n"
         }
         return out
