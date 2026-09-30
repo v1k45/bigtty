@@ -50,6 +50,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     isolated deinit {
         channel?.close()
+        activationObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     // MARK: - Channel
@@ -204,8 +205,35 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         channel?.sendInput(data)
     }
 
+    /// The app you're using owns what it shows: when another client (the
+    /// same session open on another Mac) took this pane, coming back to this
+    /// window takes it back at this window's size, instead of mirroring the
+    /// other client's size until you type.
+    private var activationObservers: [NSObjectProtocol] = []
+
+    private func watchActivation() {
+        activationObservers.forEach(NotificationCenter.default.removeObserver)
+        activationObservers = []
+        guard let window else { return }
+        let box = WeakBox<HerdrTerminalView>()
+        box.value = self
+        let handler: @Sendable (Notification) -> Void = { _ in
+            DispatchQueue.main.async { box.value?.reclaimIfLooking() }
+        }
+        activationObservers = [
+            NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main, using: handler),
+            NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main, using: handler),
+        ]
+    }
+
+    private func reclaimIfLooking() {
+        guard displaced, mode == .control, let window, window.isKeyWindow, NSApp.isActive, !isHiddenOrHasHiddenAncestor else { return }
+        takeControl()
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        watchActivation()
         // A layout rebuild briefly removes and re-adds the view, so only
         // release control if it is still out of a window a moment later.
         if window == nil {
@@ -220,7 +248,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     override var debugDescription: String {
         let grid = viewport.map { "\($0.columns)x\($0.rows)" } ?? "none"
         let text = session.readViewportText() ?? "<no surface>"
-        let state = channel?.isRunning == true ? "\(mode)" : "none"
+        let state = (channel?.isRunning == true ? "\(mode)" : "none") + (displaced ? " displaced" : "")
         return "viewport=\(grid) channel=\(state)\n\(text)"
     }
 
@@ -302,6 +330,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     private static let clickSlop: CGFloat = 5
 
     private func pressed(_ event: NSEvent, button: String) {
+        // A click in a mirrored pane takes it back first.
+        if displaced || mode == .observe { takeControl() }
         pressedCell = cellPosition(of: event).map { ($0.column, $0.row, button) }
         pressedPoint = convert(event.locationInWindow, from: nil)
         draggedSincePress = false
@@ -401,6 +431,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     private static let linesPerNotch: CGFloat = 3
 
     override func scrollWheel(with event: NSEvent) {
+        if displaced, event.phase == .began || event.phase == [] && event.momentumPhase == [] { takeControl() }
         if event.hasPreciseScrollingDeltas {
             // Trackpads: follow the fingers, one row per row height.
             let rowHeight = grid.map { CGFloat($0.cellHeightPixels) / (window?.backingScaleFactor ?? 2) } ?? 16
