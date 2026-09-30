@@ -667,9 +667,37 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// herdr forwards clicks itself from 0.9.2 (terminal.mouse); before
     /// that, only Claude Code panes get them, as typed-in mouse reports.
     private func clickRoute(for paneID: String) -> HerdrTerminalView.ClickRoute {
-        if case let .connected(version) = store.state, Self.version(version, atLeast: [0, 9, 2]) { return .herdr }
+        // terminal.mouse passes through the local herdr CLI (it parses the
+        // stdin commands), so both it and the server must know it: a remote
+        // server can be newer than this Mac's herdr.
+        if case let .connected(version) = store.state, Self.version(version, atLeast: [0, 9, 2]),
+           let cli = LocalHerdr.version(of: store.client.endpoint.herdrBinary), Self.version(cli, atLeast: [0, 9, 2]) {
+            return .herdr
+        }
         let agent = store.pane(paneID).flatMap { $0.agent ?? $0.displayAgent }?.lowercased() ?? ""
         return agent.contains("claude") ? .sgr : .none
+    }
+
+    /// `herdr --version` of the binaries this app runs, asked once each.
+    enum LocalHerdr {
+        nonisolated(unsafe) private static var cache: [String: String] = [:]
+        private static let lock = NSLock()
+
+        static func version(of binary: String) -> String? {
+            if let known = lock.withLock({ cache[binary] }) { return known }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: binary.hasPrefix("/") ? binary : "/usr/bin/env")
+            process.arguments = binary.hasPrefix("/") ? ["--version"] : [binary, "--version"]
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            let version = text.replacingOccurrences(of: "herdr", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            lock.withLock { cache[binary] = version }
+            return version
+        }
     }
 
     static func version(_ text: String, atLeast minimum: [Int]) -> Bool {
