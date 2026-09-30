@@ -78,7 +78,7 @@ public struct Pane: Sendable, Codable, Equatable, Identifiable {
     public let tokens: [String: String]?
     public let revision: Int
     /// The agent's own session (Claude Code's session id), when herdr knows it.
-    public let agentSession: AgentSession?
+    public var agentSession: AgentSession? = nil
 
     public struct AgentSession: Sendable, Codable, Equatable {
         public let agent: String?
