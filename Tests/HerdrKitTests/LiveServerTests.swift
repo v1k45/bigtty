@@ -31,12 +31,21 @@ struct LiveServerTests {
         let received = Received()
         channel.onFrame = { received.append($0) }
         try channel.start(columns: 60, rows: 10)
-        try await Task.sleep(nanoseconds: 800_000_000)
+        // Wait for the shell to draw something, then for our output.
+        try await waitUntil { !received.text.isEmpty }
+        try await Task.sleep(nanoseconds: 500_000_000)
         channel.sendInput(Data("echo ghr-marker-$((20+22))\r".utf8))
-        try await Task.sleep(nanoseconds: 1_500_000_000)
+        try await waitUntil { received.text.contains("ghr-marker-42") }
         channel.close()
         try await client.closeWorkspace(pane.workspaceID)
         #expect(received.text.contains("ghr-marker-42"))
+    }
+}
+
+func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        try await Task.sleep(nanoseconds: 100_000_000)
     }
 }
 
