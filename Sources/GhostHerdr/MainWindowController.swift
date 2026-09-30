@@ -339,7 +339,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 number += 1
                 let ref = SpaceRef(machine: machine.id, workspace: workspace.workspaceID)
                 let info = spaceInfo.info[workspace.workspaceID] ?? .init()
-                let dir = info.directory.map { machine.isLocal ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ""
+                let dir = info.directory.map { machine.displayPath($0) } ?? ""
                 let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
                 let selected = machine === self.machine && workspace.workspaceID == workspaceID
                 let tabs = selected ? store.tabs(in: workspace.workspaceID).map { tab -> SidebarModel.Tab in
@@ -362,7 +362,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : []
                 )
             }
-            model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem, spaces: spaces))
+            model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem, statusTip: machine.statusTip, spaces: spaces))
         }
         return model
     }

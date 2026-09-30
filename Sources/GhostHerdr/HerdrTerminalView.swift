@@ -87,16 +87,35 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     /// Called by the arbiter.
     func setMode(_ mode: Mode) {
-        guard mode != self.mode || channel == nil else { return }
+        guard mode != self.mode || channel == nil || displaced else { return }
         self.mode = mode
+        displaced = false
         onModeChange?(mode)
         if window != nil { startChannel() }
     }
 
+    /// Another herdr client (another app, the TUI) took this pane. We show
+    /// a read-only mirror and quietly take it back once it's let go.
+    private(set) var displaced = false
+    var onDisplacedChange: ((Bool) -> Void)?
+    private var reclaimTimer: Timer?
+    private var reclaimProbe: TerminalChannel?
+
     private func startChannel() {
         guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return }
         channel?.close()
-        let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: mode)
+        let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: displaced ? .observe : mode)
+        wire(channel)
+        do {
+            try channel.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
+            self.channel = channel
+        } catch {
+            onDetached?("could not start herdr: \(error)")
+        }
+    }
+
+    /// Frames go to the surface; a close only matters for the current channel.
+    private func wire(_ channel: TerminalChannel) {
         let session = session!
         channel.onFrame = { session.receive($0) }
         let box = WeakBox<HerdrTerminalView>()
@@ -107,18 +126,70 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
                 guard let self = box.value, let current = self.channel,
                       ObjectIdentifier(current) == id else { return }
                 self.channel = nil
-                self.onDetached?(reason)
+                if reason.contains("taken over"), self.mode == .control, self.window != nil {
+                    self.setDisplaced(true)
+                    self.startChannel()
+                } else {
+                    self.onDetached?(reason)
+                }
             }
-        }
-        do {
-            try channel.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
-            self.channel = channel
-        } catch {
-            onDetached?("could not start herdr: \(error)")
         }
     }
 
+    private func setDisplaced(_ value: Bool) {
+        guard value != displaced else { return }
+        displaced = value
+        onDisplacedChange?(value)
+        reclaimTimer?.invalidate()
+        reclaimTimer = nil
+        reclaimProbe?.close()
+        reclaimProbe = nil
+        guard value else { return }
+        let box = WeakBox<HerdrTerminalView>()
+        box.value = self
+        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            MainActor.assumeIsolated { box.value?.tryReclaim() }
+        }
+    }
+
+    /// Attaches without --takeover: herdr refuses while the other client
+    /// holds the pane, and lets us in once it has gone.
+    private func tryReclaim() {
+        guard displaced, mode == .control, window != nil, reclaimProbe == nil,
+              let viewport, viewport.columns > 0 else { return }
+        let probe = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: .control, takeover: false)
+        let session = session!
+        let box = WeakBox<HerdrTerminalView>()
+        box.value = self
+        probe.onFrame = { data in
+            session.receive(data)
+            DispatchQueue.main.async { box.value?.adopt(probe) }
+        }
+        probe.onClosed = { _ in
+            DispatchQueue.main.async {
+                guard let self = box.value, self.reclaimProbe === probe else { return }
+                self.reclaimProbe = nil
+            }
+        }
+        do {
+            try probe.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
+            reclaimProbe = probe
+        } catch {}
+    }
+
+    /// The probe got in: it becomes the control channel.
+    private func adopt(_ probe: TerminalChannel) {
+        guard displaced, reclaimProbe === probe else { return }
+        reclaimProbe = nil
+        channel?.close()
+        wire(probe)
+        channel = probe
+        setDisplaced(false)
+        onModeChange?(.control)
+    }
+
     func detach() {
+        setDisplaced(false)
         channel?.close()
         channel = nil
         ControlArbiter.shared.release(self)
@@ -126,7 +197,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     /// Typing into an observing view takes control first, then delivers.
     private func userInput(_ data: Data) {
-        if mode == .observe { takeControl() }
+        if mode == .observe || displaced { takeControl() }
         channel?.sendInput(data)
     }
 

@@ -63,6 +63,8 @@ final class SSHTunnel: @unchecked Sendable {
         let herdrBinary: String?
         let running: Bool
         let version: String?
+        /// The login's home, for showing paths as ~/…
+        var home: String? = nil
     }
 
     enum Failure: Error, Equatable, CustomStringConvertible {
@@ -113,7 +115,7 @@ final class SSHTunnel: @unchecked Sendable {
         [ -z "$bin" ] && [ -x "$HOME/.cargo/bin/herdr" ] && bin="$HOME/.cargo/bin/herdr"
         running=no; [ -S "$sock" ] && running=yes
         version=""; [ -n "$bin" ] && version="$("$bin" --version 2>/dev/null | head -1)"
-        printf 'sock=%s\\nbin=%s\\nrunning=%s\\nversion=%s\\n' "$sock" "$bin" "$running" "$version"
+        printf 'sock=%s\\nbin=%s\\nrunning=%s\\nversion=%s\\nhome=%s\\n' "$sock" "$bin" "$running" "$version" "$HOME"
         """
         guard let result = Self.runSSH(config, remoteCommand: "sh -s", stdin: script) else {
             throw Failure.ssh("ssh could not start")
@@ -128,7 +130,8 @@ final class SSHTunnel: @unchecked Sendable {
         }
         let bin = values["bin"].flatMap { $0.isEmpty ? nil : $0 }
         let version = values["version"].flatMap { $0.isEmpty ? nil : $0.replacingOccurrences(of: "herdr ", with: "") }
-        return Probe(apiSocket: values["sock"] ?? "", herdrBinary: bin, running: values["running"] == "yes", version: version)
+        let home = values["home"].flatMap { $0.isEmpty ? nil : $0 }
+        return Probe(apiSocket: values["sock"] ?? "", herdrBinary: bin, running: values["running"] == "yes", version: version, home: home)
     }
 
     /// Starts the herdr server on the machine, detached.

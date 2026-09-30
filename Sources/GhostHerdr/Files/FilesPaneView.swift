@@ -34,6 +34,14 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     private var shownModified: Double?
     private var loadToken = 0
     private var pendingLine: Int?
+    /// The machine's home, to show paths as ~/…
+    private var home = ""
+
+    private func displayPath(_ path: String) -> String {
+        guard home.count > 1 else { return path }
+        if path == home { return "~" }
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
 
     var onFocus: (() -> Void)?
     var onStateChange: ((HostPaneState) -> Void)?
@@ -110,7 +118,9 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             let isDir = source.isDirectory(path)
             let folder = isDir ? path : (path as NSString).deletingLastPathComponent
             let git = GitClient.repository(containing: folder, runner: source.runner)
+            let home = source.home()
             await MainActor.run {
+                self.home = home
                 if !isDir, self.selection == nil { self.selection = path }
                 self.root = wantsRepoRoot ? (git?.root ?? folder) : folder
                 self.git = git
@@ -170,7 +180,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private func apply(status: GitClient.Status, listings: [String: [FileSource.Entry]]) {
         self.status = status
-        titleLabel.stringValue = (source.isRemote ? root : (root as NSString).abbreviatingWithTildeInPath)
+        titleLabel.stringValue = displayPath(root)
             + (git == nil ? "" : "  ·  \(status.changes.count) changed")
         let expanded = expandedPaths()
         switch mode {

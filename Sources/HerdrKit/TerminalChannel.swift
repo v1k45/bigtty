@@ -11,6 +11,9 @@ public final class TerminalChannel: @unchecked Sendable {
 
     public let terminalID: String
     public let mode: Mode
+    /// Control mode only: take the pane from whoever holds it. Without it,
+    /// herdr refuses ("already has an attached client") while it's held.
+    public let takeover: Bool
     private let endpoint: HerdrEndpoint
     private let lock = NSLock()
     private var process: Process?
@@ -23,10 +26,11 @@ public final class TerminalChannel: @unchecked Sendable {
     /// The stream ended; the reason comes from herdr's `terminal.closed`.
     public var onClosed: (@Sendable (String) -> Void)?
 
-    public init(endpoint: HerdrEndpoint, terminalID: String, mode: Mode = .control) {
+    public init(endpoint: HerdrEndpoint, terminalID: String, mode: Mode = .control, takeover: Bool = true) {
         self.endpoint = endpoint
         self.terminalID = terminalID
         self.mode = mode
+        self.takeover = takeover
     }
 
     deinit { close() }
@@ -40,7 +44,7 @@ public final class TerminalChannel: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: endpoint.herdrBinary)
         var args = endpoint.sessionArguments + ["terminal", "session"]
         switch mode {
-        case .control: args += ["control", terminalID, "--takeover"]
+        case .control: args += ["control", terminalID] + (takeover ? ["--takeover"] : [])
         case .observe: args += ["observe", terminalID]
         }
         args += ["--cols", String(max(columns, 2)), "--rows", String(max(rows, 1))]

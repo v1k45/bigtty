@@ -133,12 +133,18 @@ final class MachineManager {
 
     private static let key = "machines"
 
+    /// `GHOSTHERDR_NO_REMOTES=1` runs with this Mac only, e.g. a test copy
+    /// that must not take panes from the instance you're using.
+    private static let remotesDisabled = ProcessInfo.processInfo.environment["GHOSTHERDR_NO_REMOTES"] == "1"
+
     private static func load() -> [Saved] {
+        if remotesDisabled { return [] }
         guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
         return (try? JSONDecoder().decode([Saved].self, from: data)) ?? []
     }
 
     private static func save(_ list: [Saved]) {
+        if remotesDisabled { return }
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key)
     }
 }

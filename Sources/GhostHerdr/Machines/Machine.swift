@@ -250,7 +250,6 @@ final class Machine {
         switch status {
         case .connecting: return "connecting…"
         case .connected:
-            if let versionWarning { return versionWarning }
             return isLocal ? "" : latency.map { "● \($0) ms" } ?? "●"
         case .notRunning: return "not running"
         case .herdrMissing: return "herdr not installed"
@@ -264,9 +263,22 @@ final class Machine {
     var statusIsProblem: Bool {
         switch status {
         case .signIn, .failed, .herdrMissing: true
-        case .connected: versionWarning != nil
         default: false
         }
+    }
+
+    /// Hover text for the header: details too long or too minor for it.
+    var statusTip: String? {
+        guard case .connected = status else { return lastError }
+        return versionWarning.map { $0 + " (works; update to match if something looks off)" }
+    }
+
+    /// A path on this machine as the sidebar shows it: home as ~.
+    func displayPath(_ path: String) -> String {
+        if isLocal { return (path as NSString).abbreviatingWithTildeInPath }
+        guard let home = probe?.home, !home.isEmpty, home != "/" else { return path }
+        if path == home { return "~" }
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     var target: String? {

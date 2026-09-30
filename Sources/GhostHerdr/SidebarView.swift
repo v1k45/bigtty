@@ -29,6 +29,7 @@ struct SidebarModel: Equatable {
         let name: String
         let status: String
         let statusIsProblem: Bool
+        var statusTip: String? = nil
         let spaces: [Space]
     }
 
@@ -173,6 +174,11 @@ private final class MessageRow: NSView, SidebarRow {
 }
 
 private final class MachineHeader: NSView, SidebarRow {
+    // The window drags by its background; rows and cards must take the
+    // click instead, over their whole area, even in an inactive window.
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
     var onClick: (() -> Void)?
     private let isProblem: Bool
     private let icon = NSImageView()
@@ -190,6 +196,7 @@ private final class MachineHeader: NSView, SidebarRow {
         name.font = .systemFont(ofSize: 11, weight: .semibold)
         name.textColor = .secondaryLabelColor
         status.stringValue = machine.status
+        toolTip = machine.statusTip
         status.font = .systemFont(ofSize: 10.5)
         status.textColor = machine.statusIsProblem ? .systemOrange : .secondaryLabelColor
         status.alignment = .right
@@ -219,6 +226,11 @@ private final class MachineHeader: NSView, SidebarRow {
 /// One space: name, shortcut, branch and folder, ports and the agent line;
 /// the selected space also lists its tabs.
 private final class SpaceCard: NSView, SidebarRow {
+    // The window drags by its background; rows and cards must take the
+    // click instead, over their whole area, even in an inactive window.
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
     let space: SidebarModel.Space
     var onClick: (() -> Void)?
     var onTab: ((String) -> Void)?
@@ -363,6 +375,11 @@ private final class SpaceCard: NSView, SidebarRow {
 }
 
 private final class TabRow: NSView {
+    // The window drags by its background; rows and cards must take the
+    // click instead, over their whole area, even in an inactive window.
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
     var onClick: (() -> Void)?
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")

@@ -59,10 +59,15 @@ final class PaneContainerView: NSView {
         ring.zPosition = 10
         layer?.addSublayer(ring)
 
-        terminal?.onDetached = { [weak self] _ in self?.detached.isHidden = false }
+        terminal?.onDetached = { [weak self] reason in self?.detached.show(.disconnected(reason)) }
         terminal?.onModeChange = { [weak self] mode in
-            // A mirror of a pane another window controls.
-            self?.detached.isHidden = mode == .control
+            // A mirror of a pane another of our windows controls.
+            if mode == .control { self?.detached.hide() } else { self?.detached.show(.otherWindow) }
+            self?.needsLayout = true
+        }
+        terminal?.onDisplacedChange = { [weak self] displaced in
+            if displaced { self?.detached.show(.otherClient) } else { self?.detached.hide() }
+            self?.needsLayout = true
         }
     }
 
@@ -89,7 +94,7 @@ final class PaneContainerView: NSView {
     }
 
     private func takeControl() {
-        detached.isHidden = true
+        detached.hide()
         terminal?.takeControl()
         window?.makeFirstResponder(content)
     }
@@ -111,7 +116,11 @@ final class PaneContainerView: NSView {
         } else {
             content.frame = b
         }
-        detached.frame = b
+        // A bar over the live mirror; a full cover only when disconnected.
+        detached.frame = detached.isBanner
+            ? NSRect(x: (b.width - min(b.width - 16, detached.fittingSize.width)) / 2, y: 10,
+                     width: min(b.width - 16, detached.fittingSize.width), height: 30)
+            : b
         let pill = zoomPill.fittingSize
         zoomPill.frame = NSRect(x: b.width - pill.width - 12, y: b.height - pill.height - 10, width: pill.width, height: pill.height)
         CATransaction.begin()
@@ -136,22 +145,36 @@ final class PaneContainerView: NSView {
     }
 }
 
-/// Covers a pane shown read-only because another window or client controls it.
+/// Says why a pane isn't taking input: a slim bar over the live mirror
+/// when another window or herdr client has it, a full cover when the
+/// stream is gone.
 private final class DetachedOverlay: NSView {
+    enum State: Equatable {
+        case otherWindow, otherClient, disconnected(String)
+    }
+
     var onTakeControl: (() -> Void)?
-    private let title = NSTextField(labelWithString: "Open in another window")
-    private let detail = NSTextField(labelWithString: "Showing it read-only. Type or click to take control.")
+    private(set) var state: State?
+    private let title = NSTextField(labelWithString: "")
+    private let detail = NSTextField(labelWithString: "")
     private let button = NSButton(title: "Take Control", target: nil, action: nil)
+
+    var isBanner: Bool {
+        if case .disconnected = state { return false }
+        return true
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.alignment = .center
-        detail.font = .systemFont(ofSize: 12)
+        title.font = .systemFont(ofSize: 12, weight: .medium)
+        title.lineBreakMode = .byTruncatingTail
+        detail.font = .systemFont(ofSize: 11.5)
         detail.textColor = .secondaryLabelColor
         detail.alignment = .center
+        detail.lineBreakMode = .byTruncatingMiddle
         button.bezelStyle = .rounded
+        button.controlSize = .small
         button.target = self
         button.action = #selector(clicked)
         for view in [title, detail, button] { addSubview(view) }
@@ -160,17 +183,64 @@ private final class DetachedOverlay: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
-    override func layout() {
-        super.layout()
-        layer?.backgroundColor = Theme.current?.pane.withAlphaComponent(0.78).cgColor
-        let midY = bounds.midY
-        title.frame = NSRect(x: 0, y: midY + 14, width: bounds.width, height: 18)
-        detail.frame = NSRect(x: 0, y: midY - 6, width: bounds.width, height: 16)
-        button.sizeToFit()
-        button.frame.origin = NSPoint(x: (bounds.width - button.frame.width) / 2, y: midY - 40)
+    func show(_ state: State) {
+        self.state = state
+        switch state {
+        case .otherWindow:
+            title.stringValue = "Open in another window"
+            button.title = "Take Control"
+        case .otherClient:
+            title.stringValue = "In use by another herdr client"
+            button.title = "Take Control"
+        case let .disconnected(reason):
+            title.stringValue = "Disconnected"
+            detail.stringValue = reason
+            button.title = "Reconnect"
+        }
+        button.controlSize = isBanner ? .small : .regular
+        detail.isHidden = isBanner
+        title.alignment = isBanner ? .left : .center
+        isHidden = false
+        needsLayout = true
     }
 
-    override func mouseDown(with _: NSEvent) { onTakeControl?() }
+    func hide() {
+        state = nil
+        isHidden = true
+    }
+
+    override var fittingSize: NSSize {
+        button.sizeToFit()
+        return NSSize(width: 14 + title.intrinsicContentSize.width + 12 + button.frame.width + 6, height: 30)
+    }
+
+    override func layout() {
+        super.layout()
+        button.sizeToFit()
+        if isBanner {
+            layer?.cornerRadius = 15
+            layer?.backgroundColor = (Theme.current?.cardStrong ?? .windowBackgroundColor).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = NSColor.separatorColor.cgColor
+            let buttonX = bounds.width - button.frame.width - 6
+            button.frame.origin = NSPoint(x: buttonX, y: (bounds.height - button.frame.height) / 2)
+            title.frame = NSRect(x: 14, y: (bounds.height - 16) / 2, width: max(0, buttonX - 20), height: 16)
+        } else {
+            layer?.cornerRadius = 0
+            layer?.borderWidth = 0
+            layer?.backgroundColor = Theme.current?.pane.withAlphaComponent(0.85).cgColor
+            let midY = bounds.midY
+            title.frame = NSRect(x: 0, y: midY + 14, width: bounds.width, height: 18)
+            detail.frame = NSRect(x: 16, y: midY - 6, width: bounds.width - 32, height: 16)
+            button.frame.origin = NSPoint(x: (bounds.width - button.frame.width) / 2, y: midY - 40)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // The bar only reacts to its button; the full cover to any click.
+        if !isBanner { onTakeControl?() } else { super.mouseDown(with: event) }
+    }
+
     @objc private func clicked() { onTakeControl?() }
 }
 
