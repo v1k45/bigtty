@@ -23,6 +23,9 @@ struct HostPaneState: Codable, Equatable {
     var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.
     var paneID: String?
+    /// The machine it belongs to; `nil` is this Mac. Browser panes on a
+    /// remote machine reach its `localhost` through the SSH tunnel.
+    var machine: String?
 }
 
 extension Pane {
@@ -61,9 +64,12 @@ final class HostPaneStore {
 
     /// Drops state for host panes herdr no longer has. State that was never
     /// attached to a pane is kept: its split may still be in flight.
-    func prune(keeping liveIDs: Set<String>) {
+    func prune(keeping liveIDs: Set<String>, connectedMachines: Set<String> = ["local"]) {
         let before = states.count
-        states = states.filter { liveIDs.contains($0.key) || $0.value.paneID == nil }
+        // A machine that isn't connected yet can't vouch for its panes: keep them.
+        states = states.filter {
+            liveIDs.contains($0.key) || $0.value.paneID == nil || !connectedMachines.contains($0.value.machine ?? "local")
+        }
         if states.count != before { scheduleSave() }
     }
 
@@ -93,24 +99,31 @@ final class HostPaneStore {
     @discardableResult
     static func open(
         _ state: HostPaneState, beside target: String, direction: SplitDirection,
-        store: SessionStore, onPane: (@MainActor (String) -> Void)? = nil
+        store: SessionStore, remote: Bool = false, onPane: (@MainActor (String) -> Void)? = nil
     ) -> String {
         let id = newID(state.kind)
         shared[id] = state
         let title = hostTitle(state)
         store.perform { client in
             let pane = try await client.split(paneID: target, direction: direction)
-            try await tag(pane: pane.paneID, id: id, kind: state.kind, title: title, client: client)
+            try await tag(pane: pane.paneID, id: id, kind: state.kind, title: title, client: client, remote: remote)
             await MainActor.run { onPane?(pane.paneID) }
         }
         return id
     }
 
-    static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient) async throws {
+    static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient, remote: Bool = false) async throws {
         try await client.reportMetadata(
             paneID: pane, title: title, tokens: ["ghr_kind": kind.rawValue, "ghr_id": id]
         )
-        let command = [ghrPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")
+        let command: String
+        if remote {
+            // No ghr on the other machine: a plain sh placeholder does the same job.
+            let banner = "\\033[2J\\033[H\\n  GhostHerdr \(kind.rawValue) pane\\n  \(title.replacingOccurrences(of: "'", with: ""))\\n\\n  Open this workspace in GhostHerdr to see it.\\n"
+            command = "sh -c " + shellQuote("printf '\(banner)'; stty -echo -icanon 2>/dev/null; exec cat >/dev/null")
+        } else {
+            command = [ghrPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")
+        }
         try await client.sendText(paneID: pane, text: "exec \(command)\r")
     }
 

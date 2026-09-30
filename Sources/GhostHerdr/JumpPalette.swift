@@ -1,16 +1,18 @@
 import AppKit
 import HerdrKit
 
-/// ⌘K: type to jump to a space, an agent or terminal, or run an action.
-/// Machines join the list when remote support lands.
+/// ⌘K: type to jump to a machine, a space, an agent or terminal, or run an
+/// action, across every machine.
 @MainActor
 final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     static let shared = JumpPalette()
 
     enum Target {
-        case space(String)
-        case pane(Pane)
+        case machine(String)
+        case space(SpaceRef)
+        case pane(String, Pane)
         case newSpace
+        case connectMachine
     }
 
     private struct Item {
@@ -35,9 +37,9 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private var rows: [Row] = []
     private var onPick: ((Target) -> Void)?
 
-    func show(store: SessionStore, spaceInfo: SpaceInfoCenter, attention: AttentionCenter, onPick: @escaping (Target) -> Void) {
+    func show(manager: MachineManager, onPick: @escaping (Target) -> Void) {
         self.onPick = onPick
-        items = Self.collect(store: store, spaceInfo: spaceInfo, attention: attention)
+        items = Self.collect(manager: manager)
         let panel = self.panel ?? makePanel()
         self.panel = panel
         field.stringValue = ""
@@ -50,19 +52,43 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         panel.makeFirstResponder(field)
     }
 
-    private static func collect(store: SessionStore, spaceInfo: SpaceInfoCenter, attention: AttentionCenter) -> [Item] {
+    private static func collect(manager: MachineManager) -> [Item] {
         var items: [Item] = []
-        for (index, workspace) in store.snapshot.workspaces.enumerated() {
-            let info = spaceInfo.info[workspace.workspaceID]
-            let detail = [info?.line, info?.branch].compactMap { $0 }.first ?? ""
+        for machine in manager.remotes {
+            let detail = [machine.target, machine.statusText].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
             items.append(Item(
-                section: "Spaces", title: workspace.label, detail: detail + (index < 9 ? "   ⌘\(index + 1)" : ""),
-                symbol: "square.stack", alert: info?.lineIsAlert == true, target: .space(workspace.workspaceID),
-                haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "")".lowercased()
+                section: "Machines", title: machine.name, detail: detail, symbol: "server.rack",
+                alert: machine.statusIsProblem, target: .machine(machine.id),
+                haystack: "\(machine.name) \(machine.target ?? "")".lowercased()
             ))
         }
+        var number = 0
+        for machine in manager.all {
+            guard let store = machine.store, let spaceInfo = machine.spaceInfo, let attention = machine.attention,
+                  case .connected = store.state else { continue }
+            let suffix = machine.isLocal ? "" : " · \(machine.name)"
+            for workspace in store.snapshot.workspaces {
+                number += 1
+                let info = spaceInfo.info[workspace.workspaceID]
+                let detail = ([info?.line, info?.branch].compactMap { $0 }.first ?? "") + suffix
+                items.append(Item(
+                    section: "Spaces", title: workspace.label, detail: detail + (number <= 9 ? "   ⌘\(number)" : ""),
+                    symbol: "square.stack", alert: info?.lineIsAlert == true,
+                    target: .space(SpaceRef(machine: machine.id, workspace: workspace.workspaceID)),
+                    haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name)".lowercased()
+                ))
+            }
+            items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
+        }
+        items.append(Item(section: "Actions", title: "New Space…", detail: "⌘N", symbol: "plus", alert: false, target: .newSpace, haystack: "new space workspace"))
+        items.append(Item(section: "Actions", title: "Connect a Machine…", detail: "user@host", symbol: "server.rack", alert: false, target: .connectMachine, haystack: "connect machine ssh remote server add"))
+        return items
+    }
+
+    private static func collectPanes(machine: Machine, store: SessionStore, attention: AttentionCenter, suffix: String) -> [Item] {
+        var items: [Item] = []
         for pane in store.snapshot.panes {
-            let space = store.workspace(pane.workspaceID)?.label ?? ""
+            let space = (store.workspace(pane.workspaceID)?.label ?? "") + suffix
             let agent = pane.displayAgent ?? pane.agent
             let kind = pane.hostKind
             let title: String
@@ -84,11 +110,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             items.append(Item(
                 section: agent != nil ? "Agents" : "Panes", title: title,
                 detail: [space, status].filter { !$0.isEmpty }.joined(separator: " · "),
-                symbol: symbol, alert: reason == .blocked, target: .pane(pane),
+                symbol: symbol, alert: reason == .blocked, target: .pane(machine.id, pane),
                 haystack: "\(title) \(space) \(pane.foregroundCwd ?? pane.cwd ?? "")".lowercased()
             ))
         }
-        items.append(Item(section: "Actions", title: "New Space…", detail: "⌘N", symbol: "plus", alert: false, target: .newSpace, haystack: "new space workspace"))
         return items
     }
 
@@ -109,7 +134,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let matched = items.map { ($0, score($0)) }.filter { $0.1 > 0 }
             .sorted { $0.1 > $1.1 }.map(\.0)
         // Waiting agents first within their section.
-        let order = ["Spaces", "Agents", "Panes", "Actions"]
+        let order = ["Machines", "Spaces", "Agents", "Panes", "Actions"]
         rows = []
         for section in order {
             let group = matched.filter { $0.section == section }.sorted { $0.alert && !$1.alert }
@@ -168,7 +193,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 18)
-        field.placeholderString = "Jump to a space, agent or pane"
+        field.placeholderString = "Jump to a machine, space, agent or pane"
         field.delegate = self
         let line = NSBox()
         line.boxType = .separator

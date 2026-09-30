@@ -5,7 +5,7 @@ import UserNotifications
 /// Tracks which panes need the user, posts notifications for new ones, and
 /// keeps the Dock badge current.
 @MainActor
-final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
+final class AttentionCenter: NSObject {
     private let store: SessionStore
     private(set) var attention = Attention()
     private var observers: [UUID: @MainActor () -> Void] = [:]
@@ -16,8 +16,12 @@ final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
     /// Bring a pane on screen (notification click, jump-to-unread).
     var reveal: (Pane) -> Void = { _ in }
 
-    init(store: SessionStore) {
+    /// Shown in notifications for remote machines ("api-server · workbox").
+    private let machineName: String?
+
+    init(store: SessionStore, machineName: String? = nil) {
         self.store = store
+        self.machineName = machineName
         super.init()
         store.observe { [weak self] in self?.snapshotChanged() }
         let nc = NotificationCenter.default
@@ -58,8 +62,6 @@ final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func publish() {
-        let count = attention.needingAttention.count
-        NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
         for handler in observers.values { handler() }
     }
 
@@ -84,7 +86,8 @@ final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
         // binaries have none and would crash on access.
         guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
-        center.delegate = self
+        Self.all.append(WeakAttention(self))
+        center.delegate = NotificationRouter.shared
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error { NSLog("ghostherdr: notifications unavailable: \(error)") }
             Task { @MainActor [weak self] in self?.notificationsAvailable = granted }
@@ -108,27 +111,46 @@ final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
         case .done:
             content.title = "\(agent) finished"
         }
-        content.subtitle = workspace
+        content.subtitle = machineName.map { "\(workspace) · \($0)" } ?? workspace
         content.body = pane.title ?? pane.terminalTitle ?? pane.displayName
-        content.userInfo = ["pane_id": pane.paneID]
+        content.userInfo = ["pane_id": pane.paneID, "machine": machineName ?? "local"]
         content.threadIdentifier = pane.workspaceID
         let request = UNNotificationRequest(identifier: "\(pane.paneID)-\(transition.reason)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 
-    nonisolated func userNotificationCenter(
-        _: UNUserNotificationCenter, didReceive response: UNNotificationResponse
-    ) async {
-        guard let paneID = response.notification.request.content.userInfo["pane_id"] as? String else { return }
+    /// Every attention center, so notification clicks reach the right machine.
+    static var all: [WeakAttention] = []
+
+    /// A notification for one of this center's panes was clicked.
+    func handleClick(userInfo: [String: String]) -> Bool {
+        guard (userInfo["machine"] ?? "local") == (machineName ?? "local"),
+              let paneID = userInfo["pane_id"], let pane = store.pane(paneID) else { return false }
+        NSApp.activate(ignoringOtherApps: true)
+        reveal(pane)
+        return true
+    }
+}
+
+final class WeakAttention {
+    weak var value: AttentionCenter?
+    init(_ value: AttentionCenter) { self.value = value }
+}
+
+/// The one UNUserNotificationCenter delegate, routing clicks to the machine
+/// whose pane it was.
+final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let shared = NotificationRouter()
+
+    func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let raw = response.notification.request.content.userInfo
+        let info: [String: String] = ["pane_id": raw["pane_id"] as? String ?? "", "machine": raw["machine"] as? String ?? "local"]
         await MainActor.run {
-            NSApp.activate(ignoringOtherApps: true)
-            if let pane = store.pane(paneID) { reveal(pane) }
+            for center in AttentionCenter.all.compactMap(\.value) where center.handleClick(userInfo: info) { break }
         }
     }
 
-    nonisolated func userNotificationCenter(
-        _: UNUserNotificationCenter, willPresent _: UNNotification
-    ) async -> UNNotificationPresentationOptions {
+    func userNotificationCenter(_: UNUserNotificationCenter, willPresent _: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound, .list]
     }
 }

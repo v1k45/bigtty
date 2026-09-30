@@ -7,10 +7,17 @@ import HerdrKit
 /// Each window keeps its own space/tab selection.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActions {
-    private let store: SessionStore
-    private let attention: AttentionCenter
-    private let spaceInfo: SpaceInfoCenter
+    private let manager: MachineManager
+    /// The machine whose space this window shows.
+    private(set) var machine: Machine
     private let terminalController: TerminalController
+    /// A store stand-in while a remote machine is still connecting.
+    private static let offline = SessionStore(endpoint: HerdrEndpoint(forwardedSocket: "/nonexistent/herdr.sock"))
+    private var store: SessionStore { machine.store ?? Self.offline }
+    private var attention: AttentionCenter { machine.attention ?? Self.offlineAttention }
+    private var spaceInfo: SpaceInfoCenter { machine.spaceInfo ?? Self.offlineInfo }
+    private static let offlineAttention = AttentionCenter(store: offline)
+    private static let offlineInfo = SpaceInfoCenter(store: offline, attention: offlineAttention)
     private let sidebar = SidebarView()
     private let splitTree = SplitTreeView()
     private let topBar = CollapsedTopBar()
@@ -31,20 +38,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private var root: RootView!
 
     var onClose: (() -> Void)?
-    /// In window-per-space mode the window shows exactly this workspace, and
+    /// In window-per-space mode the window shows exactly this space, and
     /// picking another one in the sidebar opens that space's window instead.
-    var pinnedWorkspaceID: String? {
+    var pinnedSpace: SpaceRef? {
         didSet {
-            guard pinnedWorkspaceID != oldValue else { return }
-            if let id = pinnedWorkspaceID {
-                workspaceID = id
+            guard pinnedSpace != oldValue else { return }
+            if let space = pinnedSpace {
+                if space.machine != machine.id, let target = manager.machine(space.machine) { switchMachine(to: target) }
+                workspaceID = space.workspace
                 tabID = nil
                 lastFocusedPane = nil
             }
             render()
         }
     }
-    var onShowSpace: ((String) -> Void)?
+    var pinnedWorkspaceID: String? { pinnedSpace?.workspace }
+    var onShowSpace: ((SpaceRef) -> Void)?
+    var onConnectMachine: (() -> Void)?
+    var onMachineProblem: ((Machine) -> Void)?
     /// The pinned workspace no longer exists in herdr.
     var onSpaceClosed: (() -> Void)?
     var onStartHerdr: (() -> Void)?
@@ -58,10 +69,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
-    init(store: SessionStore, attention: AttentionCenter, spaceInfo: SpaceInfoCenter, terminalController: TerminalController) {
-        self.store = store
-        self.attention = attention
-        self.spaceInfo = spaceInfo
+    init(manager: MachineManager, terminalController: TerminalController) {
+        self.manager = manager
+        machine = manager.local
         self.terminalController = terminalController
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
@@ -80,10 +90,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window.delegate = self
         buildLayout()
         wireActions()
-        let a = store.observe { [weak self] in self?.render() }
-        let b = attention.observe { [weak self] in self?.render() }
-        let c = spaceInfo.observe { [weak self] in self?.render() }
-        observers = [(a, { store.removeObserver($0) }), (b, { attention.removeObserver($0) }), (c, { spaceInfo.removeObserver($0) })]
+        // Every machine's store, attention and sidebar info report through the manager.
+        let a = manager.observe { [weak self] in self?.render() }
+        observers = [(a, { manager.removeObserver($0) })]
         settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.render() }
         }
@@ -133,29 +142,43 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     private func wireActions() {
-        sidebar.onSelectSpace = { [weak self] id in
-            guard let self else { return }
-            if self.pinnedWorkspaceID != nil, id != self.pinnedWorkspaceID {
-                self.onShowSpace?(id)
+        sidebar.onSelectSpace = { [weak self] key in
+            guard let self, let ref = SpaceRef(key: key) else { return }
+            if let pinned = self.pinnedSpace, pinned != ref {
+                self.onShowSpace?(ref)
             } else {
-                self.selectWorkspace(id)
+                self.select(ref)
             }
         }
-        sidebar.onSelectTab = { [weak self] space, tab in
-            guard let self else { return }
-            if self.pinnedWorkspaceID != nil, space != self.pinnedWorkspaceID {
-                self.onShowSpace?(space)
+        sidebar.onSelectTab = { [weak self] key, tab in
+            guard let self, let ref = SpaceRef(key: key) else { return }
+            if let pinned = self.pinnedSpace, pinned != ref {
+                self.onShowSpace?(ref)
                 return
             }
-            if self.workspaceID != space { self.selectWorkspace(space) }
+            self.select(ref)
             self.selectTab(tab)
         }
-        sidebar.onSpaceMenu = { [weak self] id in self?.spaceMenu(id) }
+        sidebar.onSpaceMenu = { [weak self] key in
+            guard let self, let ref = SpaceRef(key: key), ref.machine == self.machine.id else { return nil }
+            return self.spaceMenu(ref.workspace)
+        }
+        sidebar.onMachineClick = { [weak self] id in
+            guard let self, let machine = self.manager.machine(id) else { return }
+            self.onMachineProblem?(machine)
+        }
         sidebar.onNewSpace = { [weak self] in self?.newWorkspace(nil) }
-        sidebar.onConnectMachine = { [weak self] in self?.onJump?() }
+        sidebar.onConnectMachine = { [weak self] in self?.onConnectMachine?() }
         topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
         placeholder.onStart = { [weak self] in self?.onStartHerdr?() }
-        placeholder.onConnect = { [weak self] in self?.onJump?() }
+        placeholder.onConnect = { [weak self] in self?.onConnectMachine?() }
+        placeholder.onAction = { [weak self] in
+            guard let self else { return }
+            switch self.machine.status {
+            case .notRunning: self.machine.startServer()
+            default: self.machine.connect()
+            }
+        }
     }
 
     // MARK: - Rendering
@@ -164,7 +187,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let snapshot = store.snapshot
         if let pinned = pinnedWorkspaceID {
             if store.workspace(pinned) == nil {
-                if case .connected = store.state { onSpaceClosed?() }
+                if case .connected = store.state, machine.status == .connected { onSpaceClosed?() }
                 return
             }
             workspaceID = pinned
@@ -219,11 +242,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             view.isZoomed = id == zoomed
         }
 
-        placeholder.state = switch store.state {
-        case .connecting: .connecting
-        case .disconnected: .notRunning(socket: store.client.endpoint.socketPath, binary: store.client.endpoint.herdrBinary)
-        case .connected: layout == nil ? .empty : .hidden
-        }
+        placeholder.state = placeholderState(hasLayout: layout != nil)
         topBar.update(space: store.workspace(workspaceID)?.label, tab: store.tab(tabID).map(tabLabel), alert: firstAlertElsewhere())
 
         if let target = pendingFocus ?? (lastFocusedPane == nil ? focused : nil), let view = paneViews[target] {
@@ -243,58 +262,124 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
     }
 
+    /// What to show instead of panes, for this window's machine.
+    private func placeholderState(hasLayout: Bool) -> PlaceholderView.State {
+        if machine.isLocal {
+            switch store.state {
+            case .connecting: return .connecting("Connecting to herdr…")
+            case .disconnected: return .notRunning(socket: store.client.endpoint.socketPath, binary: store.client.endpoint.herdrBinary)
+            case .connected: return hasLayout ? .hidden : .empty
+            }
+        }
+        let name = machine.name
+        switch machine.status {
+        case .connecting: return .connecting("Connecting to \(name)…")
+        case let .reconnecting(seconds): return .connecting("Lost \(name) · reconnecting\(seconds > 0 ? " in \(seconds)s" : "")…")
+        case .connected:
+            if case .connected = store.state { return hasLayout ? .hidden : .empty }
+            return .connecting("Connecting to \(name)…")
+        case .notRunning: return .remote(title: "herdr isn’t running on \(name)", detail: "Start it there to see its spaces.", action: "Start herdr on \(name)")
+        case .herdrMissing: return .remote(title: "herdr isn’t installed on \(name)", detail: "Install herdr on the machine (herdr.dev), or set it up from a terminal with herdr machine add.", action: nil)
+        case let .signIn(message): return .remote(title: "Sign in to \(name)", detail: message, action: "Try Again")
+        case let .failed(message): return .remote(title: "Can’t reach \(name)", detail: message, action: "Try Again")
+        case .disabled: return .remote(title: "\(name) is off", detail: "", action: "Connect")
+        }
+    }
+
+    /// Shows a space, switching this window to its machine if needed.
+    func select(_ ref: SpaceRef) {
+        if ref.machine != machine.id, let target = manager.machine(ref.machine) { switchMachine(to: target) }
+        selectWorkspace(ref.workspace)
+    }
+
+    /// Points this window at another machine: its panes go, its spaces come.
+    func switchMachine(to target: Machine) {
+        guard target !== machine else { return }
+        for view in paneViews.values {
+            view.terminal?.detach()
+            view.removeFromSuperview()
+        }
+        paneViews.removeAll()
+        machine = target
+        workspaceID = nil
+        tabID = nil
+        lastFocusedPane = nil
+        lastHerdrFocus = nil
+        pendingFocus = nil
+        splitTree.show(nil, zoomedPane: nil)
+        render()
+    }
+
     private func tabLabel(_ tab: Tab) -> String {
         tab.label == String(tab.number) ? "tab \(tab.number)" : tab.label
     }
 
-    /// The sidebar: This Mac with its spaces; the selected one lists its tabs.
+    /// The sidebar: every machine with its spaces; the selected one lists its tabs.
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
-        switch store.state {
-        case .connecting:
-            model.machines = [.init(name: "This Mac", status: "connecting…", statusIsProblem: false, spaces: [])]
-            return model
-        case .disconnected:
-            model.machines = [.init(name: "This Mac", status: "not running", statusIsProblem: false, spaces: [])]
-            model.message = "No spaces yet."
-            return model
-        case .connected:
-            break
-        }
-        let spaces = store.snapshot.workspaces.enumerated().map { index, workspace -> SidebarModel.Space in
-            let info = spaceInfo.info[workspace.workspaceID] ?? .init()
-            let dir = info.directory.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
-            let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
-            let selected = workspace.workspaceID == workspaceID
-            let tabs = selected ? store.tabs(in: workspace.workspaceID).map { tab -> SidebarModel.Tab in
-                let panes = store.panes(in: tab.tabID).count
-                let alert = attention.count(inTab: tab.tabID) > 0
-                return .init(
-                    id: tab.tabID, label: tabLabel(tab),
-                    detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
-                    selected: tab.tabID == tabID, alert: alert
-                )
-            } : []
-            let finished = store.snapshot.panes.contains {
-                $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
+        var number = 0
+        for machine in manager.all {
+            guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
+                  case .connected = store.state
+            else {
+                let status = machine.isLocal
+                    ? (machine.store?.state == .connecting ? "connecting…" : "not running")
+                    : machine.statusText
+                model.machines.append(.init(id: machine.id, name: machine.name, status: status, statusIsProblem: machine.statusIsProblem, spaces: []))
+                if machine.isLocal, case .disconnected = machine.store?.state { model.message = "No spaces yet." }
+                continue
             }
-            return .init(
-                id: workspace.workspaceID, name: workspace.label,
-                shortcut: index < 9 ? "⌘\(index + 1)" : "",
-                meta: meta, ports: info.ports, line: info.line,
-                alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
-                finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : []
-            )
+            let spaces = store.snapshot.workspaces.map { workspace -> SidebarModel.Space in
+                number += 1
+                let ref = SpaceRef(machine: machine.id, workspace: workspace.workspaceID)
+                let info = spaceInfo.info[workspace.workspaceID] ?? .init()
+                let dir = info.directory.map { machine.isLocal ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ""
+                let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
+                let selected = machine === self.machine && workspace.workspaceID == workspaceID
+                let tabs = selected ? store.tabs(in: workspace.workspaceID).map { tab -> SidebarModel.Tab in
+                    let panes = store.panes(in: tab.tabID).count
+                    let alert = attention.count(inTab: tab.tabID) > 0
+                    return .init(
+                        id: tab.tabID, label: tabLabel(tab),
+                        detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
+                        selected: tab.tabID == tabID, alert: alert
+                    )
+                } : []
+                let finished = store.snapshot.panes.contains {
+                    $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
+                }
+                return .init(
+                    id: ref.key, name: workspace.label,
+                    shortcut: number <= 9 ? "⌘\(number)" : "",
+                    meta: meta, ports: info.ports, line: info.line,
+                    alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
+                    finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : []
+                )
+            }
+            model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem, spaces: spaces))
         }
-        model.machines = [.init(name: "This Mac", status: "", statusIsProblem: false, spaces: spaces)]
         return model
+    }
+
+    /// Spaces in sidebar order, for ⌘1…⌘9.
+    private var orderedSpaces: [SpaceRef] {
+        manager.all.flatMap { machine -> [SpaceRef] in
+            guard let store = machine.store, case .connected = store.state else { return [] }
+            return store.snapshot.workspaces.map { SpaceRef(machine: machine.id, workspace: $0.workspaceID) }
+        }
     }
 
     /// A space other than this one with an agent waiting, for the top bar.
     private func firstAlertElsewhere() -> String? {
-        store.snapshot.workspaces.first {
-            $0.workspaceID != workspaceID && spaceInfo.info[$0.workspaceID]?.lineIsAlert == true
-        }.map { "\($0.label) needs you" }
+        for machine in manager.all {
+            guard let store = machine.store, let info = machine.spaceInfo else { continue }
+            if let space = store.snapshot.workspaces.first(where: {
+                !(machine === self.machine && $0.workspaceID == workspaceID) && info.info[$0.workspaceID]?.lineIsAlert == true
+            }) {
+                return "\(space.label) needs you"
+            }
+        }
+        return nil
     }
 
     private func spaceMenu(_ id: String) -> NSMenu {
@@ -354,7 +439,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         HostPaneStore.shared[hostID] = state
         // The registry owns the web view so agents can drive it while no
         // window shows it; this window borrows it.
-        let browser = BrowserRegistry.shared.view(for: hostID)
+        if state.machine == nil, !machine.isLocal {
+            state.machine = machine.id
+            HostPaneStore.shared[hostID] = state
+        }
+        let browser = BrowserRegistry.shared.view(for: hostID, machine: machine)
         let id = pane.paneID
         browser.onFocus = { [weak self] in
             BrowserRegistry.shared.noteFocus(hostID)
@@ -395,6 +484,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func openFilesPane(mode: FilesPaneView.Mode) {
         guard let target = focusedPaneID else { return }
+        guard machine.isLocal else {
+            let alert = NSAlert()
+            alert.messageText = "Files panes work on this Mac for now"
+            alert.informativeText = "Browsing \(machine.name)’s files is coming. Terminals, agents and browser panes work there already."
+            if let window { alert.beginSheetModal(for: window) }
+            return
+        }
         let pane = store.pane(target)
         let cwd = pane?.foregroundCwd ?? pane?.cwd ?? NSHomeDirectory()
         let root = mode == .changes ? (GitClient.repository(containing: cwd)?.root ?? cwd) : cwd
@@ -435,7 +531,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             browser.load(url)
             return
         }
-        HostPaneStore.open(HostPaneState(kind: .browser, url: url), beside: paneID, direction: .right, store: store)
+        HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.isLocal ? nil : machine.id), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
     }
 
     /// Debug hook: scrolls the focused terminal by N lines (negative: down).
@@ -452,7 +548,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func newBrowserPane(_: Any?) {
         guard let target = focusedPaneID else { return }
         pendingAddressFocus = true
-        HostPaneStore.open(HostPaneState(kind: .browser), beside: target, direction: .right, store: store)
+        HostPaneStore.open(HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id), beside: target, direction: .right, store: store, remote: !machine.isLocal)
     }
 
     /// ⌘L: the focused browser pane's address bar, or a new browser pane.
@@ -606,9 +702,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// ⌘1…⌘9: spaces, in sidebar order.
     @objc func selectTabByNumber(_ sender: Any?) {
         guard let n = (sender as? NSMenuItem)?.tag else { return }
-        let spaces = store.snapshot.workspaces
+        let spaces = orderedSpaces
         guard n - 1 < spaces.count else { return }
-        sidebar.onSelectSpace?(spaces[n - 1].workspaceID)
+        sidebar.onSelectSpace?(spaces[n - 1].key)
     }
 
     /// The folder new spaces start in: the focused pane's working directory.
@@ -667,7 +763,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     override var debugDescription: String {
-        var out = "window=\(window?.frame ?? .zero) tree=\(splitTree.frame)\n"
+        var out = "machine=\(machine.id) (\(machine.statusText)) window=\(window?.frame ?? .zero) tree=\(splitTree.frame)\n"
         out += "workspace=\(workspaceID ?? "-") tab=\(tabID ?? "-") focused=\(focusedPaneID ?? "-")\n"
         for (id, view) in paneViews.sorted(by: { $0.key < $1.key }) {
             let browser = view.browser.map {
@@ -882,12 +978,17 @@ private final class CollapsedTopBar: NSView {
 @MainActor
 final class PlaceholderView: NSView {
     enum State: Equatable {
-        case hidden, connecting, empty
+        case hidden, empty
+        case connecting(String)
         case notRunning(socket: String, binary: String)
+        /// A remote machine's problem, with an optional fix button.
+        case remote(title: String, detail: String, action: String?)
     }
 
     var onStart: (() -> Void)?
     var onConnect: (() -> Void)?
+    var onAction: (() -> Void)?
+    private let action = NSButton(title: "", target: nil, action: nil)
     var background: NSColor = .textBackgroundColor { didSet { layer?.backgroundColor = background.cgColor } }
     var state: State = .hidden { didSet { if state != oldValue { apply() } } }
 
@@ -923,7 +1024,11 @@ final class PlaceholderView: NSView {
         footnote.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         footnote.textColor = .tertiaryLabelColor
         footnote.alignment = .center
-        for view in [spinner, icon, title, detail, start, connect, footnote] { addSubview(view) }
+        action.bezelStyle = .rounded
+        action.keyEquivalent = "\r"
+        action.target = self
+        action.action = #selector(actionClicked)
+        for view in [spinner, icon, title, detail, start, connect, footnote, action] { addSubview(view) }
         apply()
     }
 
@@ -933,12 +1038,21 @@ final class PlaceholderView: NSView {
     private func apply() {
         isHidden = state == .hidden
         let notRunning: Bool
+        var remote = false
         switch state {
-        case .connecting:
+        case let .connecting(text):
             notRunning = false
             title.stringValue = ""
-            detail.stringValue = "Connecting to herdr…"
+            detail.stringValue = text
             spinner.startAnimation(nil)
+        case let .remote(titleText, detailText, actionTitle):
+            notRunning = false
+            remote = true
+            title.stringValue = titleText
+            detail.stringValue = detailText
+            action.title = actionTitle ?? ""
+            action.isHidden = actionTitle == nil
+            spinner.stopAnimation(nil)
         case let .notRunning(socket, binary):
             notRunning = true
             title.stringValue = "herdr isn’t running"
@@ -954,8 +1068,12 @@ final class PlaceholderView: NSView {
             notRunning = false
             spinner.stopAnimation(nil)
         }
-        spinner.isHidden = state != .connecting
-        for view in [icon, title, start, connect, footnote] { view.isHidden = !notRunning }
+        if case .connecting = state { spinner.isHidden = false } else { spinner.isHidden = true }
+        for view in [start, connect, footnote] { view.isHidden = !notRunning }
+        icon.isHidden = !(notRunning || remote)
+        icon.image = NSImage(systemSymbolName: remote ? "server.rack" : "terminal", accessibilityDescription: nil)
+        title.isHidden = !(notRunning || remote)
+        if !remote { action.isHidden = true }
         needsLayout = true
     }
 
@@ -968,10 +1086,9 @@ final class PlaceholderView: NSView {
         title.frame = NSRect(x: 0, y: y, width: bounds.width, height: 26)
         detail.preferredMaxLayoutWidth = 420
         let dh = detail.fittingSize.height
-        if case .notRunning = state {
-            y -= dh + 8
-        } else {
-            y = bounds.midY - dh / 2
+        switch state {
+        case .notRunning, .remote: y -= dh + 8
+        default: y = bounds.midY - dh / 2
         }
         detail.frame = NSRect(x: midX - 210, y: y, width: 420, height: dh)
         spinner.frame = NSRect(x: midX - 110, y: y + (dh - 16) / 2, width: 16, height: 16)
@@ -981,6 +1098,8 @@ final class PlaceholderView: NSView {
         } else {
             detail.alignment = .center
         }
+        action.sizeToFit()
+        action.frame.origin = NSPoint(x: midX - action.frame.width / 2, y: y - 44)
         start.sizeToFit()
         connect.sizeToFit()
         let total = start.frame.width + connect.frame.width + 10
@@ -991,5 +1110,6 @@ final class PlaceholderView: NSView {
     }
 
     @objc private func startClicked() { onStart?() }
+    @objc private func actionClicked() { onAction?() }
     @objc private func connectClicked() { onConnect?() }
 }

@@ -1,5 +1,36 @@
 import AppKit
 import HerdrKit
+import Network
+import WebKit
+
+/// Browser storage per machine. This Mac's panes share the default store; a
+/// remote machine's panes get their own, proxied through its SSH tunnel's
+/// SOCKS port, so `localhost` means that machine.
+@MainActor
+enum BrowserProxy {
+    private static var stores: [String: WKWebsiteDataStore] = [:]
+    private static var ports: [String: Int] = [:]
+
+    static func store(for machine: Machine) -> WKWebsiteDataStore? {
+        guard !machine.isLocal else { return nil }
+        let store = stores[machine.id] ?? {
+            // A stable identifier per machine keeps its cookies across launches.
+            let uuid = UUID(uuidString: String(machine.id.prefix(36))) ?? UUID()
+            let made = WKWebsiteDataStore(forIdentifier: uuid)
+            stores[machine.id] = made
+            return made
+        }()
+        if let port = machine.socksPort, ports[machine.id] != port {
+            ports[machine.id] = port
+            let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(integerLiteral: UInt16(port)))
+            var proxy = ProxyConfiguration(socksv5Proxy: endpoint)
+            // Everything, localhost included, goes to the machine.
+            proxy.excludedDomains = []
+            store.proxyConfigurations = [proxy]
+        }
+        return store
+    }
+}
 
 /// Owns every browser pane's web view, independent of windows, so agents
 /// can drive a browser whose space isn't on screen. Windows borrow the view
@@ -12,10 +43,14 @@ final class BrowserRegistry {
     /// Most recently focused browser, the default target for commands.
     private(set) var lastFocused: String?
 
-    func view(for hostID: String) -> BrowserPaneView {
+    func view(for hostID: String, machine: Machine? = nil) -> BrowserPaneView {
         if let view = views[hostID] { return view }
         let state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
-        let view = BrowserPaneView(hostID: hostID, state: state)
+        let view = BrowserPaneView(
+            hostID: hostID, state: state,
+            dataStore: machine.flatMap { BrowserProxy.store(for: $0) },
+            localhostMapper: machine?.localhostMapper
+        )
         // Until a window shows it, lay the page out at a desktop size.
         view.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
         view.layoutSubtreeIfNeeded()

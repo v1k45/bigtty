@@ -44,10 +44,14 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private var loadWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var lastNavigationError: String?
 
-    init(hostID: String, state: HostPaneState) {
+    /// Set for a remote machine's panes: its `localhost` goes through SSH.
+    let localhostMapper: LocalhostMapper?
+
+    init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil) {
         self.hostID = hostID
+        self.localhostMapper = localhostMapper
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = Self.dataStore
+        config.websiteDataStore = dataStore ?? Self.dataStore
         let content = config.userContentController
         content.addUserScript(WKUserScript(
             source: AutomationScript.source, injectionTime: .atDocumentStart,
@@ -119,8 +123,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         ]
 
         if let url = state.url.flatMap(Self.normalize) {
-            address.stringValue = url.absoluteString
-            webView.load(URLRequest(url: url))
+            navigate(to: url)
         }
         updateButtons()
     }
@@ -218,8 +221,42 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     func load(_ input: String) {
         guard let url = Self.normalize(input) else { return }
+        navigate(to: url)
+    }
+
+    /// Loads a URL; on a remote machine, localhost first gets an SSH forward.
+    func navigate(to url: URL) {
         address.stringValue = url.absoluteString
-        webView.load(URLRequest(url: url))
+        guard let mapper = localhostMapper, LocalhostMapper.isLocalhost(url) else {
+            webView.load(URLRequest(url: url))
+            return
+        }
+        errorPage.isHidden = true
+        progress.isHidden = false
+        Task.detached {
+            let target = mapper.rewrite(url)
+            await MainActor.run {
+                if let target {
+                    self.webView.load(URLRequest(url: target))
+                } else {
+                    self.errorPage.show(error: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost), url: url)
+                    self.progress.isHidden = true
+                    self.needsLayout = true
+                }
+            }
+        }
+    }
+
+    /// Links to the machine's localhost inside a page get the same forwarding.
+    func webView(_: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        if let mapper = localhostMapper, let url = action.request.url, action.targetFrame?.isMainFrame != false,
+           LocalhostMapper.isLocalhost(url), !mapper.isForwarded(url)
+        {
+            decisionHandler(.cancel)
+            navigate(to: url)
+            return
+        }
+        decisionHandler(.allow)
     }
 
     func focusAddressBar() {
@@ -237,8 +274,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     @objc private func reloadPage() {
         if webView.isLoading {
             webView.stopLoading()
-        } else if webView.url == nil, let url = Self.normalize(address.stringValue) {
-            webView.load(URLRequest(url: url))
+        } else if webView.url == nil || !errorPage.isHidden, let url = Self.normalize(address.stringValue) {
+            navigate(to: url)
         } else {
             webView.reload()
         }
@@ -254,11 +291,13 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     }
 
     private func pageChanged() {
-        if let url = webView.url, errorPage.isHidden, window?.firstResponder !== address.currentEditor() {
-            address.stringValue = url.absoluteString
+        // Forwarded remote pages show (and save) their localhost address.
+        let shown = webView.url.map { localhostMapper?.display($0) ?? $0 }
+        if let shown, errorPage.isHidden, window?.firstResponder !== address.currentEditor() {
+            address.stringValue = shown.absoluteString
         }
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
-        state.url = webView.url?.absoluteString ?? state.url
+        state.url = shown?.absoluteString ?? state.url
         state.title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
         HostPaneStore.shared[hostID] = state
         onStateChange?(state)

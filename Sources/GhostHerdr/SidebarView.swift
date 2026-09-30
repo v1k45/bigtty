@@ -25,6 +25,7 @@ struct SidebarModel: Equatable {
     }
 
     struct Machine: Equatable {
+        let id: String
         let name: String
         let status: String
         let statusIsProblem: Bool
@@ -43,11 +44,12 @@ final class SidebarView: NSView {
     var onSelectTab: ((String, String) -> Void)?
     var onSpaceMenu: ((String) -> NSMenu?)?
     var onNewSpace: (() -> Void)?
+    var onMachineClick: ((String) -> Void)?
     var onConnectMachine: (() -> Void)?
 
     private let scroll = NSScrollView()
     private let list = FlippedView()
-    private let connectButton = FooterButton(title: "Connect Machine…", symbol: "server.rack", shortcut: "⌘K")
+    private let connectButton = FooterButton(title: "Connect Machine…", symbol: "server.rack", shortcut: "⌥⌘K")
     private let newButton = FooterButton(title: "New Space", symbol: "plus", shortcut: "⌘N")
     private let footerLine = NSView()
     private var model = SidebarModel()
@@ -102,7 +104,9 @@ final class SidebarView: NSView {
     private func rebuild() {
         list.subviews.forEach { $0.removeFromSuperview() }
         for machine in model.machines {
-            list.addSubview(MachineHeader(machine: machine))
+            let header = MachineHeader(machine: machine)
+            header.onClick = { [weak self] in self?.onMachineClick?(machine.id) }
+            list.addSubview(header)
             if let message = model.message, machine == model.machines.first {
                 list.addSubview(MessageRow(text: message))
             }
@@ -169,12 +173,16 @@ private final class MessageRow: NSView, SidebarRow {
 }
 
 private final class MachineHeader: NSView, SidebarRow {
+    var onClick: (() -> Void)?
+    private let isProblem: Bool
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
 
     init(machine: SidebarModel.Machine) {
+        isProblem = machine.statusIsProblem || machine.status.contains("not running")
         super.init(frame: .zero)
+        toolTip = isProblem ? "Click for details" : nil
         icon.image = NSImage(systemSymbolName: machine.name == "This Mac" ? "laptopcomputer" : "server.rack", accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 11, weight: .regular)
         icon.contentTintColor = .secondaryLabelColor
@@ -193,13 +201,18 @@ private final class MachineHeader: NSView, SidebarRow {
 
     func height(forWidth _: CGFloat) -> CGFloat { 30 }
 
+    override func mouseDown(with _: NSEvent) { onClick?() }
+
     override var isFlipped: Bool { true }
 
     override func layout() {
         super.layout()
         icon.frame = NSRect(x: 10, y: 10, width: 14, height: 14)
-        name.frame = NSRect(x: 29, y: 10, width: 120, height: 15)
-        status.frame = NSRect(x: bounds.width - 110, y: 10, width: 100, height: 15)
+        let nameWidth = min(ceil(name.intrinsicContentSize.width) + 2, bounds.width * 0.5)
+        name.frame = NSRect(x: 29, y: 10, width: nameWidth, height: 15)
+        let statusX = 29 + nameWidth + 8
+        status.frame = NSRect(x: statusX, y: 10, width: bounds.width - statusX - 10, height: 15)
+        status.lineBreakMode = .byTruncatingHead
     }
 }
 

@@ -71,6 +71,22 @@ typed in controls it and the other mirrors it read-only.
   (non-PTY) backend. Keystrokes go back as `terminal.input`, wheel scrolling as
   `terminal.scroll` (herdr owns scrollback).
 
+## Remote machines
+
+**File ▸ Connect Machine…** (⌥⌘K, or ⌘K ▸ Connect a Machine) takes an SSH
+target (`user@host`, `host:port` or an `~/.ssh/config` alias), checks it, and
+adds the machine to the sidebar with its spaces; machines saved with
+`herdr machine add` appear too. GhostHerdr probes the machine for herdr (and
+can start it), then keeps one `ssh -N` running that forwards the machine's two
+herdr sockets into `~/Library/Caches/dev.ghostherdr/m/<id>/`, so the herdr CLI
+and API work exactly as locally. It uses your SSH keys and agent; for a
+password or a new host key, click the machine and choose Open in Terminal.
+Terminals, agents, attention and ⌘K work across machines. Browser panes in a
+remote space reach that machine's `localhost` through a per-port SSH forward
+(the address bar still says `localhost:3000`). Files panes are this Mac only
+for now. Machines reconnect with backoff and show their round-trip time, or a
+warning when their herdr version differs from this Mac's.
+
 ## Browser panes
 
 A browser pane is a real herdr pane: GhostHerdr splits a pane, tags it with

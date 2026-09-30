@@ -26,9 +26,13 @@ final class SpaceInfoCenter {
     private var timer: Timer?
     private var refreshing = false
 
-    init(store: SessionStore, attention: AttentionCenter) {
+    /// Where git and port probes run: this Mac, or the machine over SSH.
+    private let runner: @MainActor () -> CommandRunner
+
+    init(store: SessionStore, attention: AttentionCenter, runner: @escaping @MainActor () -> CommandRunner = { .local }) {
         self.store = store
         self.attention = attention
+        self.runner = runner
         store.observe { [weak self] in self?.recompute() }
         attention.observe { [weak self] in self?.recompute() }
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -91,7 +95,7 @@ final class SpaceInfoCenter {
         let client = store.client
         let id = pane.paneID
         Task {
-            guard let result = try? await client.call("pane.read", ["pane_id": .string(id), "source": "visible", "lines": 30]),
+            guard let result = try? await client.call("pane.read", ["pane_id": .string(id), "source": "recent_unwrapped", "lines": 40]),
                   let text = result["read"]?["text"]?.stringValue else { return }
             let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let question = lines.last { $0.hasSuffix("?") } ?? lines.last ?? ""
@@ -109,10 +113,11 @@ final class SpaceInfoCenter {
         let workspaces = store.snapshot.workspaces
         let panesByWorkspace = Dictionary(grouping: store.snapshot.panes, by: \.workspaceID).mapValues { $0.map(\.paneID) }
         let client = store.client
+        let runner = runner()
         Task.detached {
             var branches: [String: String] = [:]
             for dir in dirs {
-                if let out = GitClient.run(["rev-parse", "--abbrev-ref", "HEAD"], in: dir)?
+                if let out = runner.run("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"])?
                     .trimmingCharacters(in: .whitespacesAndNewlines), !out.isEmpty
                 {
                     branches[dir] = out == "HEAD" ? "detached" : out
@@ -129,8 +134,8 @@ final class SpaceInfoCenter {
                     }
                 }
             }
-            let listening = ProcessPorts.listeningPorts()
-            let parents = ProcessPorts.parentMap()
+            let listening = ProcessPorts.listeningPorts(runner)
+            let parents = ProcessPorts.parentMap(runner)
             var ports: [String: [Int]] = [:]
             for (workspace, roots) in shells {
                 let rootSet = Set(roots)
@@ -150,10 +155,27 @@ final class SpaceInfoCenter {
     }
 }
 
-/// Listening TCP ports per process, via `lsof`, and the process tree via `ps`.
+/// Listening TCP ports per process (`lsof` on macOS, `ss` on Linux) and
+/// the process tree via `ps`.
 enum ProcessPorts {
-    static func listeningPorts() -> [Int32: Set<Int>] {
-        guard let out = run("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]) else { return [:] }
+    static func listeningPorts(_ runner: CommandRunner) -> [Int32: Set<Int>] {
+        if runner.ssh != nil, let out = runner.run("ss", ["-ltnpH"]) {
+            // LISTEN 0 511 0.0.0.0:3000 0.0.0.0:* users:(("node",pid=1234,fd=20))
+            var result: [Int32: Set<Int>] = [:]
+            for line in out.split(separator: "\n") {
+                let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+                guard fields.count >= 4, let colon = fields[3].lastIndex(of: ":"),
+                      let port = Int(fields[3][fields[3].index(after: colon)...]) else { continue }
+                var rest = Substring(line)
+                while let range = rest.range(of: "pid=") {
+                    let digits = rest[range.upperBound...].prefix { $0.isNumber }
+                    if let pid = Int32(digits) { result[pid, default: []].insert(port) }
+                    rest = rest[range.upperBound...]
+                }
+            }
+            return result
+        }
+        guard let out = runner.run("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]) else { return [:] }
         var result: [Int32: Set<Int>] = [:]
         var pid: Int32?
         for line in out.split(separator: "\n") {
@@ -168,8 +190,8 @@ enum ProcessPorts {
         return result
     }
 
-    static func parentMap() -> [Int32: Int32] {
-        guard let out = run("/bin/ps", ["-axo", "pid=,ppid="]) else { return [:] }
+    static func parentMap(_ runner: CommandRunner) -> [Int32: Int32] {
+        guard let out = runner.run("ps", runner.ssh != nil ? ["-eo", "pid=,ppid="] : ["-axo", "pid=,ppid="]) else { return [:] }
         var map: [Int32: Int32] = [:]
         for line in out.split(separator: "\n") {
             let parts = line.split(separator: " ", omittingEmptySubsequences: true)
@@ -188,16 +210,4 @@ enum ProcessPorts {
         return false
     }
 
-    private static func run(_ path: String, _ args: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(decoding: data, as: UTF8.self)
-    }
 }

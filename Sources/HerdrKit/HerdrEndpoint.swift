@@ -6,11 +6,37 @@ public struct HerdrEndpoint: Sendable, Equatable {
     public let session: String?
     public let socketPath: String
     public let herdrBinary: String
+    /// Set for a forwarded (remote) server: the herdr CLI finds both sockets
+    /// through `HERDR_SOCKET_PATH`, deriving `herdr-client.sock` beside it.
+    public let forwarded: Bool
 
     public init(session: String? = nil, socketPath: String? = nil, herdrBinary: String? = nil) {
         self.session = session
         self.socketPath = socketPath ?? Self.defaultSocketPath(session: session)
         self.herdrBinary = herdrBinary ?? Self.locateHerdr() ?? "herdr"
+        forwarded = false
+    }
+
+    /// A server reached through local copies of its sockets (SSH forwarding).
+    public init(forwardedSocket path: String, herdrBinary: String? = nil) {
+        session = nil
+        socketPath = path
+        self.herdrBinary = herdrBinary ?? Self.locateHerdr() ?? "herdr"
+        forwarded = true
+    }
+
+    /// Environment for herdr CLI processes talking to this endpoint.
+    public var cliEnvironment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "HERDR_SESSION")
+        env.removeValue(forKey: "HERDR_CLIENT_SOCKET_PATH")
+        // Named local sessions go by `--session`; everything else by path.
+        if session == nil {
+            env["HERDR_SOCKET_PATH"] = socketPath
+        } else {
+            env.removeValue(forKey: "HERDR_SOCKET_PATH")
+        }
+        return env
     }
 
     /// Mirrors herdr's own resolution: `HERDR_SOCKET_PATH`, then the named
@@ -40,6 +66,6 @@ public struct HerdrEndpoint: Sendable, Equatable {
 
     /// Arguments that select this endpoint's session on the herdr CLI.
     public var sessionArguments: [String] {
-        session.map { ["--session", $0] } ?? []
+        forwarded ? [] : (session.map { ["--session", $0] } ?? [])
     }
 }

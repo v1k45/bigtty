@@ -45,6 +45,7 @@ public final class TerminalChannel: @unchecked Sendable {
         }
         args += ["--cols", String(max(columns, 2)), "--rows", String(max(rows, 1))]
         process.arguments = args
+        process.environment = endpoint.cliEnvironment
 
         let input = Pipe()
         let output = Pipe()
