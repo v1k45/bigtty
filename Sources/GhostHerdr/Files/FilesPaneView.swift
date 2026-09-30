@@ -353,11 +353,18 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             let isDirectory = isDirectoryHint ?? source.isDirectory(selection)
             let modified = source.modified(selection)
             let data = isDirectory ? nil : source.read(selection, limit: (isPreview ? Self.maxPreviewBytes : Self.maxFileBytes) + 1)
+            // An image that won't decode: say why rather than show "Zero KB".
+            let problem = !isDirectory && isPreview && !ImagePreview.canDecode(selection, data: data ?? Data())
+                ? "\((selection as NSString).lastPathComponent): got \(data.map { "\($0.count) bytes" } ?? "nothing") that \(data?.isEmpty == false ? "isn't an image" : "could be shown").\n" + source.diagnose(selection)
+                : nil
             await MainActor.run {
                 guard token == self.loadToken else { return }
                 self.shownModified = modified
                 if isDirectory {
                     self.code.showMessage((selection as NSString).lastPathComponent + "/")
+                } else if let problem {
+                    NSLog("ghostherdr: preview failed: \(problem)")
+                    self.code.showMessage(problem)
                 } else if let data {
                     if ImagePreview.canShow(selection) {
                         self.preview.show(selection, data: data)

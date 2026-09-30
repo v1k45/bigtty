@@ -59,6 +59,10 @@ final class CodeView: NSView {
 
         message.textColor = .secondaryLabelColor
         message.alignment = .center
+        // Multi-line diagnostics, selectable so they can be copied.
+        message.maximumNumberOfLines = 0
+        message.lineBreakMode = .byWordWrapping
+        message.isSelectable = true
         message.isHidden = true
         addSubview(message)
         applyColors()
@@ -72,7 +76,9 @@ final class CodeView: NSView {
         gutter.frame = NSRect(x: 0, y: 0, width: LineGutter.width, height: bounds.height)
         scrollView.frame = NSRect(x: LineGutter.width, y: 0, width: max(0, bounds.width - LineGutter.width), height: bounds.height)
         gutter.needsDisplay = true
-        message.frame = NSRect(x: 12, y: bounds.midY - 20, width: bounds.width - 24, height: 40)
+        message.preferredMaxLayoutWidth = max(0, bounds.width - 24)
+        let height = min(bounds.height - 24, max(40, message.fittingSize.height))
+        message.frame = NSRect(x: 12, y: bounds.midY - height / 2, width: bounds.width - 24, height: height)
     }
 
     private func applyColors() {
@@ -88,6 +94,7 @@ final class CodeView: NSView {
         textView.string = ""
         message.stringValue = text
         message.isHidden = false
+        needsLayout = true
         gutter.needsDisplay = true
     }
 

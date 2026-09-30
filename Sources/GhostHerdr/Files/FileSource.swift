@@ -70,6 +70,23 @@ final class FileSource: @unchecked Sendable {
         return runner.run("test", ["-e", path]) != nil
     }
 
+    /// Why a file came back empty or unusable, in words for the pane:
+    /// its size where it lives, and for SSH the error and login user.
+    func diagnose(_ path: String) -> String {
+        guard let ssh = runner.ssh else {
+            let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
+            return size.map { "It is \(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)) on this Mac." }
+                ?? "This Mac can't open it."
+        }
+        let script = "printf 'user %s\\n' \"$(id -un)\"; ls -ln -- \"$1\" 2>&1; head -c 16 -- \"$1\" | od -An -tx1 | head -1"
+        let command = ["sh", "-c", script, "sh", path].map(SSHTunnel.shellQuote).joined(separator: " ")
+        guard let result = SSHTunnel.runSSH(ssh, remoteCommand: command) else { return "ssh didn't run." }
+        let error = result.error.trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ["Over SSH (\(ssh.target), exit \(result.status)):", output, error.isEmpty ? nil : "ssh: " + error]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
     func home() -> String {
         guard isRemote else { return NSHomeDirectory() }
         return runner.run("sh", ["-c", "printf %s \"$HOME\""]) ?? "/"

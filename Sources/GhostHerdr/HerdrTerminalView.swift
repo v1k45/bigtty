@@ -456,6 +456,26 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         return (min(max(column, 0), columns - 1), min(max(row, 0), rows - 1))
     }
 
+    /// Debug hook: ⌘-clicks the middle of `word`'s first appearance on
+    /// screen with real mouse events, as the user would.
+    func debugCommandClick(_ word: String) {
+        guard let window, let text = session.readViewportText(), let grid, grid.columns > 0 else { return }
+        let lines = text.components(separatedBy: "\n")
+        guard let row = lines.firstIndex(where: { $0.contains(word) }),
+              let range = lines[row].range(of: word) else { return NSLog("ghostherdr: debugCommandClick: \(word) not on screen") }
+        let column = lines[row].distance(from: lines[row].startIndex, to: range.lowerBound) + word.count / 2
+        let scale = window.backingScaleFactor
+        let cellWidth = CGFloat(grid.cellWidthPixels) / scale, cellHeight = CGFloat(grid.cellHeightPixels) / scale
+        let local = NSPoint(x: 2 + (CGFloat(column) + 0.5) * cellWidth, y: bounds.height - 2 - (CGFloat(row) + 0.5) * cellHeight)
+        let point = convert(local, to: nil)
+        NSLog("ghostherdr: debugCommandClick \(word) at column \(column) row \(row)")
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+            window.sendEvent(event)
+        }
+    }
+
     /// Debug hook: a synthetic wheel event, `lines` positive for up.
     func debugScroll(lines: Int32) {
         guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0),

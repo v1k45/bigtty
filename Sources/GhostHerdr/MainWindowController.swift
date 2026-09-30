@@ -1052,6 +1052,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
+    /// Debug hook: `[pane-id] word` ⌘-clicks the word in that terminal.
+    @objc func debugCommandClick(_ sender: Any?) {
+        guard let arg = sender as? String else { return }
+        let parts = arg.split(separator: " ", maxSplits: 1).map(String.init)
+        let (id, word) = parts.count == 2 && paneViews[parts[0]] != nil ? (parts[0], parts[1]) : (focusedPaneID, arg)
+        if let id { paneViews[id]?.terminal?.debugCommandClick(word) }
+    }
+
     @objc func debugOpenURL(_ sender: Any?) {
         if let url = sender as? String, let pane = focusedPaneID { openURL(url, from: pane) }
     }

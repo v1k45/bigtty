@@ -12,6 +12,13 @@ final class ImagePreview: NSView {
         return imageExtensions.contains(ext) || ext == "pdf"
     }
 
+    /// Whether `data` is something `show` can display.
+    nonisolated static func canDecode(_ path: String, data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        if (path as NSString).pathExtension.lowercased() == "pdf" { return PDFDocument(data: data) != nil }
+        return NSImage(data: data) != nil
+    }
+
     private let scroll = NSScrollView()
     private let imageView = NSImageView()
     private let pdfView = PDFView()
