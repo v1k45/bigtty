@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Debug hook: connect a machine like the Connect sheet does (`target`).
     @objc func debugAddMachine(_ sender: Any?) {
         guard let target = sender as? String else { return }
-        let machine = manager.add(target: target, name: nil, session: nil)
+        guard let machine = manager.add(target: target, name: nil, session: nil) else { return }
         wireMachines()
         machine.observe { [weak machine] in
             if machine?.status == .notRunning { machine?.startServer() }

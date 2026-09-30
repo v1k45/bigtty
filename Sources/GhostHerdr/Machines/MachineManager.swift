@@ -42,7 +42,7 @@ final class MachineManager {
     init(localEndpoint: HerdrEndpoint) {
         local = Machine(local: localEndpoint)
         local.observe { [weak self] in self?.changed() }
-        for saved in Self.load() { attach(saved) }
+        for saved in Self.load() where SSHTunnel.Config.isValid(target: saved.target) { attach(saved) }
         importHerdrMachines()
     }
 
@@ -66,8 +66,10 @@ final class MachineManager {
 
     // MARK: - Adding and removing
 
+    /// Nil for a target ssh would read as an option (`-o…`) or that has spaces.
     @discardableResult
-    func add(target: String, name: String?, session: String?) -> Machine {
+    func add(target: String, name: String?, session: String?) -> Machine? {
+        guard SSHTunnel.Config.isValid(target: target) else { return nil }
         if let existing = remotes.first(where: { $0.target == target }) {
             existing.connect()
             return existing

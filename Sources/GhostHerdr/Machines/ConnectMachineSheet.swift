@@ -121,6 +121,10 @@ final class ConnectMachineSheet: NSObject, NSTextFieldDelegate {
             show(nil, "")
             return
         }
+        guard SSHTunnel.Config.isValid(target: value) else {
+            show(false, "That isn’t an SSH target: it can’t start with “-” or contain spaces.")
+            return
+        }
         let sessionName = session.stringValue.trimmingCharacters(in: .whitespaces)
         show(nil, "Checking \(value)…", spinning: true)
         checkTask = Task { [weak self] in
@@ -164,7 +168,7 @@ final class ConnectMachineSheet: NSObject, NSTextFieldDelegate {
     @objc private func connectClicked() {
         let value = target.stringValue.trimmingCharacters(in: .whitespaces)
         let sessionName = session.stringValue.trimmingCharacters(in: .whitespaces)
-        let machine = manager.add(target: value, name: name.stringValue, session: sessionName.isEmpty ? nil : sessionName)
+        guard let machine = manager.add(target: value, name: name.stringValue, session: sessionName.isEmpty ? nil : sessionName) else { return }
         close()
         // A probe that found herdr installed but stopped: start it once connected fails.
         let token = machine.observe { [weak machine] in

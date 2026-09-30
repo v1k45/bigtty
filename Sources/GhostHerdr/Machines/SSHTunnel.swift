@@ -42,6 +42,13 @@ final class SSHTunnel: @unchecked Sendable {
         let directory: String
 
         var controlPath: String { directory + "/cm" }
+
+        /// A target ssh can't mistake for an option (`-oProxyCommand=…`) or
+        /// a second argument.
+        static func isValid(target: String) -> Bool {
+            !target.isEmpty && !target.hasPrefix("-")
+                && !target.contains(where: { $0.isWhitespace || $0.isNewline || $0 == "\0" })
+        }
         var localAPISocket: String { directory + "/herdr.sock" }
         var localClientSocket: String { directory + "/herdr-client.sock" }
     }
@@ -134,6 +141,7 @@ final class SSHTunnel: @unchecked Sendable {
     /// the local sockets exist.
     func open(remoteAPISocket: String) throws {
         close()
+        guard Config.isValid(target: config.target) else { throw Failure.ssh("invalid SSH target") }
         let remoteClient = (remoteAPISocket as NSString).deletingLastPathComponent + "/herdr-client.sock"
         for path in [config.localAPISocket, config.localClientSocket] { unlink(path) }
         socksPort = Self.freePort()
@@ -154,7 +162,7 @@ final class SSHTunnel: @unchecked Sendable {
             "-L", "\(config.localAPISocket):\(remoteAPISocket)",
             "-L", "\(config.localClientSocket):\(remoteClient)",
             "-D", "127.0.0.1:\(socksPort)",
-            config.target,
+            "--", config.target,
         ]
         let errors = Pipe()
         process.standardError = errors
@@ -195,6 +203,7 @@ final class SSHTunnel: @unchecked Sendable {
     /// through its own `ssh -N -L`. WebKit won't send localhost through a
     /// proxy, so browser panes use these instead.
     func localPort(forRemote remotePort: Int) -> Int? {
+        guard Config.isValid(target: config.target) else { return nil }
         forwardLock.lock()
         defer { forwardLock.unlock() }
         if let existing = portForwards[remotePort], existing.process.isRunning { return existing.local }
@@ -205,7 +214,7 @@ final class SSHTunnel: @unchecked Sendable {
             "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=no", "-o", "ControlPath=none",
             "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
-            "-N", "-L", "127.0.0.1:\(local):localhost:\(remotePort)", config.target,
+            "-N", "-L", "127.0.0.1:\(local):localhost:\(remotePort)", "--", config.target,
         ]
         process.standardError = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
@@ -275,7 +284,8 @@ final class SSHTunnel: @unchecked Sendable {
     static func runSSH(_ config: Config, remoteCommand: String, stdin: String? = nil, okStatuses: Set<Int32>? = nil) -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = baseOptions(config) + [config.target, remoteCommand]
+        guard Config.isValid(target: config.target) else { return nil }
+        process.arguments = baseOptions(config) + ["--", config.target, remoteCommand]
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
