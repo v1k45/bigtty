@@ -53,13 +53,27 @@ typed in controls it and the other mirrors it read-only.
 | ⌃⌘ arrows | resize pane |
 | ⌘⇧↩ | zoom pane |
 | ⌘W / ⌘⌥W | close pane / tab |
-| ⌘T, ⌘⇧[ ] | new tab, cycle tabs |
-| ⌘1…9, ⌘K | switch space, jump to a space, agent or pane |
+| ⌘T, ⌃Tab / ⌃⇧Tab | new tab, next / previous tab (also ⌘⇧[ ]) |
+| ⌃1…8, ⌃9 | tab in this space, last tab |
+| ⌘1…9, ⌃⌘[ ] | switch space, previous / next space |
+| ⌘K | jump to a space, agent or pane |
 | ⌘N / ⌘⇧N | new space in the current folder / from a folder picker |
 | ⌘⇧U | jump to next pane needing attention |
 | ⌃⌘S | toggle sidebar |
 | ⌘⌥B / ⌘L | new browser pane / address bar |
 | ⌘⌥F / ⌘⌥G | files pane / changes (git diff) pane |
+
+## Terminal look
+
+Terminals use your Ghostty config (`~/.config/ghostty/config.ghostty` or
+Ghostty's other usual locations), so fonts, keybinds and any Ghostty option
+carry over. Settings ▸ Terminal layers a theme, font, size and a contrast
+boost on top, and edits to the config apply as you save. `theme = Name`
+and `theme = light:A,dark:B` work with all of Ghostty's themes, bundled
+from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+(MIT; see `Sources/GhostHerdr/Resources/ghostty-themes/`). To keep a
+separate config for GhostHerdr, launch it with
+`GHOSTHERDR_GHOSTTY_CONFIG=/path/to/config`.
 
 ## How it works
 

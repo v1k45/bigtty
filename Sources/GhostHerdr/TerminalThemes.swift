@@ -73,12 +73,23 @@ struct TerminalThemeChoice: Sendable {
         .init(id: ghosttyConfig, name: "From my Ghostty config", dark: nil, light: nil),
     ]
 
+    /// A theme from Ghostty's collection, applied for both appearances.
+    static let ghosttyPrefix = "ghostty:"
+
     static func find(_ id: String) -> TerminalThemeChoice {
-        all.first { $0.id == id } ?? all[0]
+        if id.hasPrefix(ghosttyPrefix) {
+            let name = String(id.dropFirst(ghosttyPrefix.count))
+            return .init(id: id, name: name, dark: nil, light: nil)
+        }
+        return all.first { $0.id == id } ?? all[0]
     }
 
     var theme: TerminalTheme {
-        TerminalTheme(light: Self.configuration(light), dark: Self.configuration(dark))
+        if id.hasPrefix(Self.ghosttyPrefix) {
+            let config = GhosttyThemes.configuration(named: name)
+            return TerminalTheme(light: config, dark: config)
+        }
+        return TerminalTheme(light: Self.configuration(light), dark: Self.configuration(dark))
     }
 
     private static func configuration(_ colors: [String]?) -> TerminalConfiguration {
@@ -117,7 +128,11 @@ enum ContrastBoost: String, CaseIterable {
 
 extension Settings {
     static var terminalTheme: String {
-        get { UserDefaults.standard.string(forKey: "terminalTheme") ?? TerminalThemeChoice.defaultID }
+        get {
+            if let chosen = UserDefaults.standard.string(forKey: "terminalTheme") { return chosen }
+            // Never picked: a Ghostty config that sets its own colors wins.
+            return TerminalAppearance.configSetsColors() ? TerminalThemeChoice.ghosttyConfig : TerminalThemeChoice.defaultID
+        }
         set { UserDefaults.standard.set(newValue, forKey: "terminalTheme") }
     }
 
@@ -144,7 +159,9 @@ extension Settings {
 @MainActor
 enum TerminalAppearance {
     static func configPath() -> String? {
-        candidates.first { FileManager.default.fileExists(atPath: $0) }
+        // A separate config (testing, or keeping GhostHerdr apart from Ghostty).
+        if let path = ProcessInfo.processInfo.environment["GHOSTHERDR_GHOSTTY_CONFIG"] { return path }
+        return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
     private static var candidates: [String] {
@@ -158,17 +175,91 @@ enum TerminalAppearance {
     }
 
     static func makeController() -> TerminalController {
-        let controller = TerminalController(configFilePath: configPath(), theme: TerminalThemeChoice.find(Settings.terminalTheme).theme)
+        let controller = TerminalController(configSource: configSource(), theme: TerminalThemeChoice.find(Settings.terminalTheme).theme)
+        lastIssue = controller.lastConfigurationIssue
         controller.setTerminalConfiguration(overrides())
         return controller
     }
 
+    /// Whether the config picks a theme or background itself.
+    nonisolated static func configSetsColors() -> Bool {
+        let env = ProcessInfo.processInfo.environment["GHOSTHERDR_GHOSTTY_CONFIG"]
+        let home = NSHomeDirectory()
+        let paths = [env, home + "/.config/ghostty/config.ghostty", home + "/.config/ghostty/config",
+                     home + "/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+                     home + "/Library/Application Support/com.mitchellh.ghostty/config"].compactMap { $0 }
+        guard let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }),
+              let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        return text.components(separatedBy: .newlines).contains { line in
+            let key = line.split(separator: "=", maxSplits: 1).first?.trimmingCharacters(in: .whitespaces)
+            return key == "theme" || key == "background"
+        }
+    }
+
+    /// Why the Ghostty config didn't load, for Settings; nil when it did.
+    private(set) static var lastIssue: String? {
+        get { issue }
+        set { issue = newValue.map(tidy) }
+    }
+
+    private static var issue: String?
+
+    /// "ghostty config diagnostics: /long/path:2:font-size: invalid …" as
+    /// "line 2: font-size: invalid …", one per line, deduplicated.
+    private static func tidy(_ raw: String) -> String {
+        var seen: [String] = []
+        let body = raw.replacingOccurrences(of: "ghostty config diagnostics: ", with: "")
+        for part in body.components(separatedBy: " | ") {
+            var line = part.trimmingCharacters(in: .whitespaces)
+            if let range = line.range(of: #"^/[^:]+:(\d+):"#, options: .regularExpression) {
+                let number = line[range].split(separator: ":").dropFirst().first ?? ""
+                line = "line \(number): " + line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            }
+            if let tried = line.range(of: ", tried path") { line = String(line[..<tried.lowerBound]) }
+            if !seen.contains(line) { seen.append(line) }
+        }
+        return seen.joined(separator: "\n")
+    }
+
     /// Re-reads the config file and re-applies the settings.
     static func apply(to controller: TerminalController) {
-        if let path = configPath() { controller.updateConfigSource(.file(path)) }
+        lastIssue = controller.updateConfigSource(configSource()) ? nil : controller.lastConfigurationIssue
         controller.setTheme(TerminalThemeChoice.find(Settings.terminalTheme).theme)
         controller.setTerminalConfiguration(overrides())
         Settings.changed()
+    }
+
+    /// The config file, or its text with `theme = <name>` pointed at the
+    /// bundled theme collection: embedded libghostty ships without Ghostty's
+    /// themes, and Ghostty accepts a theme's absolute path.
+    /// The appearance `theme = light:…,dark:…` was last resolved for.
+    private static var resolvedDark: Bool?
+
+    /// Follows the system appearance: a light/dark config theme is
+    /// re-resolved when it flips.
+    static func follow(dark: Bool, controller: TerminalController) {
+        guard dark != resolvedDark else { return }
+        let first = resolvedDark == nil
+        resolvedDark = dark
+        if !first || configNamesLightDark() { apply(to: controller) }
+    }
+
+    private static func configNamesLightDark() -> Bool {
+        guard let path = configPath(), let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        return text.contains("light:") || text.contains("dark:")
+    }
+
+    static func configSource() -> TerminalController.ConfigSource {
+        guard let path = configPath() else { return .none }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return .file(path) }
+        var changed = false
+        let lines = text.components(separatedBy: "\n").map { line -> String in
+            let dark = resolvedDark ?? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+            guard let rewritten = GhosttyThemes.rewriteThemeLine(line, dark: dark) else { return line }
+            changed = true
+            return rewritten
+        }
+        return changed ? .generated(lines.joined(separator: "\n")) : .file(path)
     }
 
     private static func overrides() -> TerminalConfiguration {
@@ -204,5 +295,66 @@ enum TerminalAppearance {
         if let editor {
             NSWorkspace.shared.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
         }
+    }
+}
+
+/// Ghostty's theme collection, bundled with the app.
+enum GhosttyThemes {
+    static let directory: URL? = Bundle.module.url(forResource: "ghostty-themes", withExtension: nil)
+
+    static let names: [String] = {
+        guard let directory, let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return [] }
+        return files.filter { !$0.hasPrefix(".") && !$0.hasPrefix("LICENSE") && $0 != "SOURCE" }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }()
+
+    /// A theme file's settings (`background = …`, `palette = 0=#…`) as
+    /// configuration commands.
+    static func configuration(named name: String) -> TerminalConfiguration {
+        guard let url = directory?.appendingPathComponent(name),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return .init() }
+        return TerminalConfiguration { builder in
+            for line in text.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.hasPrefix("#"), let eq = trimmed.firstIndex(of: "=") else { continue }
+                let key = trimmed[..<eq].trimmingCharacters(in: .whitespaces)
+                let value = trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty, !value.isEmpty { builder.withCustom(key, value) }
+            }
+        }
+    }
+
+    /// `theme = Dracula` or `theme = light:A,dark:B`, resolved to one
+    /// theme file: the side matching `dark`, from ~/.config/ghostty/themes
+    /// or the bundled collection. The embedded runtime doesn't switch
+    /// Ghostty's light/dark themes itself, so GhostHerdr picks the side.
+    /// Nil when the line needs no change.
+    static func rewriteThemeLine(_ line: String, dark: Bool) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("theme"), let eq = trimmed.firstIndex(of: "="),
+              trimmed[..<eq].trimmingCharacters(in: .whitespaces) == "theme" else { return nil }
+        var value = trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+        if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
+        var plain: String?
+        var sides: [String: String] = [:]
+        for part in value.split(separator: ",") {
+            let piece = part.trimmingCharacters(in: .whitespaces)
+            if piece.hasPrefix("light:") { sides["light"] = String(piece.dropFirst(6)) }
+            else if piece.hasPrefix("dark:") { sides["dark"] = String(piece.dropFirst(5)) }
+            else { plain = piece }
+        }
+        guard let name = sides[dark ? "dark" : "light"] ?? plain ?? sides.values.first else { return nil }
+        guard let path = themePath(name) else { return nil }
+        return path == value ? nil : "theme = " + path
+    }
+
+    /// A theme's file: absolute as given, the user's own, then bundled.
+    static func themePath(_ name: String) -> String? {
+        if name.hasPrefix("/") { return name }
+        let user = NSHomeDirectory() + "/.config/ghostty/themes/" + name
+        if FileManager.default.fileExists(atPath: user) { return user }
+        guard let bundled = directory?.appendingPathComponent(name).path,
+              FileManager.default.fileExists(atPath: bundled) else { return nil }
+        return bundled
     }
 }

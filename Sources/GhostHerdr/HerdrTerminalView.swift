@@ -59,7 +59,10 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         self.viewport = viewport
         // Ghostty creates surfaces focused; only the first responder should
         // draw a focused (blinking) cursor.
-        if first { syncSurfaceFocus() }
+        if first {
+            syncSurfaceFocus()
+            syncColorScheme()
+        }
         if let channel, channel.isRunning, mode == .control {
             channel.resize(
                 columns: Int(viewport.columns), rows: Int(viewport.rows),
@@ -149,6 +152,13 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     /// Tells Ghostty whether this surface has focus. Unfocused surfaces draw
     /// a hollow, steady cursor instead of blinking with the focused one.
+    /// Tells the surface whether it's light or dark, so a Ghostty
+    /// `theme = light:…,dark:…` picks the right side. Surfaces created after
+    /// the view joined its window otherwise never hear it.
+    func syncColorScheme() {
+        viewDidChangeEffectiveAppearance()
+    }
+
     func syncSurfaceFocus() {
         guard window?.firstResponder !== self else { return }
         // The package's focus hook lives in resignFirstResponder; calling it

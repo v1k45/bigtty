@@ -127,12 +127,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let window else { return }
         let dark = window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         terminalController.setColorScheme(dark ? .dark : .light)
+        TerminalAppearance.follow(dark: dark, controller: terminalController)
         theme = Theme(controller: terminalController)
         Theme.current = theme
         window.backgroundColor = theme.window
         root.background = theme.window
         placeholder.background = theme.pane
-        for view in paneViews.values { view.apply(theme) }
+        for view in paneViews.values {
+            view.apply(theme)
+            view.terminal?.syncColorScheme()
+        }
         sidebar.refreshTheme()
         func redraw(_ view: NSView) {
             view.needsDisplay = true

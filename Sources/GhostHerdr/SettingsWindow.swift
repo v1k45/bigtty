@@ -78,6 +78,7 @@ final class SettingsWindowController: NSWindowController {
     private let size = NSPopUpButton()
     private let contrast = NSSegmentedControl(labels: ContrastBoost.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
     private let configPath = NSTextField(labelWithString: "")
+    private let configIssue = NSTextField(wrappingLabelWithString: "")
 
     private init() {
         let window = NSWindow(
@@ -92,6 +93,13 @@ final class SettingsWindowController: NSWindowController {
         tabs.addTabViewItem(page("Terminal", symbol: "terminal", view: buildTerminal()))
         window.contentViewController = tabs
         window.toolbarStyle = .preference
+        // Reflect reloads that happen while open (config edited elsewhere).
+        NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isVisible == true else { return }
+                self.refresh()
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -149,7 +157,7 @@ final class SettingsWindowController: NSWindowController {
             content.widthAnchor.constraint(equalToConstant: 620),
             grid.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
-            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
         ])
         return content
     }
@@ -186,6 +194,14 @@ final class SettingsWindowController: NSWindowController {
             theme.addItem(withTitle: choice.name)
             theme.lastItem?.representedObject = choice.id
         }
+        // Ghostty's own collection, the names `theme =` takes. Type to jump.
+        theme.menu?.addItem(.separator())
+        theme.menu?.addItem(NSMenuItem.sectionHeader(title: "Ghostty Themes"))
+        for name in GhosttyThemes.names {
+            let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+            item.representedObject = TerminalThemeChoice.ghosttyPrefix + name
+            theme.menu?.addItem(item)
+        }
         theme.target = self
         theme.action = #selector(terminalChanged)
 
@@ -212,13 +228,17 @@ final class SettingsWindowController: NSWindowController {
         let reload = NSButton(title: "Reload", target: self, action: #selector(reloadConfig))
         let buttons = NSStackView(views: [edit, reload])
         buttons.spacing = 8
-        let config = NSStackView(views: [configPath, buttons, note("Everything else (cursor, padding, keybinds, any Ghostty option) lives in your Ghostty config, shared with Ghostty. Saved edits apply right away.")])
+        configIssue.font = .systemFont(ofSize: 11)
+        configIssue.textColor = .systemRed
+        configIssue.preferredMaxLayoutWidth = 360
+        configIssue.isHidden = true
+        let config = NSStackView(views: [configPath, configIssue, buttons, note("Everything else (cursor, padding, keybinds, any Ghostty option) lives in your Ghostty config, shared with Ghostty. Saved edits apply right away.")])
         config.orientation = .vertical
         config.alignment = .leading
         config.spacing = 6
 
         return form([
-            [label("Theme:"), stack(theme, "Light and dark follow the system appearance.")],
+            [label("Theme:"), stack(theme, "The paired themes follow the system’s light and dark appearance.")],
             [label("Font:"), font],
             [label("Size:"), size],
             [label("Contrast boost:"), stack(contrast, "Lifts text too close to its background, like dim gray on dark.")],
@@ -260,6 +280,25 @@ final class SettingsWindowController: NSWindowController {
         contrast.selectedSegment = ContrastBoost.allCases.firstIndex(of: Settings.contrast) ?? 1
         configPath.stringValue = TerminalAppearance.configPath().map { ($0 as NSString).abbreviatingWithTildeInPath }
             ?? "None yet: Edit Config creates ~/.config/ghostty/config.ghostty"
+        configIssue.stringValue = TerminalAppearance.lastIssue.map { "Couldn’t load it, keeping the last good config:\n" + $0 } ?? ""
+        let hadIssue = !configIssue.isHidden
+        configIssue.isHidden = TerminalAppearance.lastIssue == nil
+        if hadIssue == configIssue.isHidden { fitTerminalPage() }
+    }
+
+    /// The error line comes and goes; the Terminal page resizes with it.
+    private func fitTerminalPage() {
+        guard let tabs = window?.contentViewController as? NSTabViewController,
+              let page = tabs.tabViewItems.last?.viewController else { return }
+        page.view.layoutSubtreeIfNeeded()
+        page.preferredContentSize = page.view.fittingSize
+        if tabs.selectedTabViewItemIndex == tabs.tabViewItems.count - 1, let window {
+            var frame = window.frame
+            let size = window.frameRect(forContentRect: NSRect(origin: .zero, size: page.view.fittingSize)).size
+            frame.origin.y += frame.height - size.height
+            frame.size = size
+            window.setFrame(frame, display: true, animate: true)
+        }
     }
 
     @objc private func terminalChanged() {
@@ -268,6 +307,7 @@ final class SettingsWindowController: NSWindowController {
         Settings.fontSize = size.indexOfSelectedItem <= 0 ? 0 : Double(size.selectedItem?.tag ?? 0)
         Settings.contrast = ContrastBoost.allCases[max(0, contrast.selectedSegment)]
         onTerminalChange?()
+        refresh()
     }
 
     @objc private func editConfig() {
@@ -275,7 +315,10 @@ final class SettingsWindowController: NSWindowController {
         refresh()
     }
 
-    @objc private func reloadConfig() { onTerminalChange?() }
+    @objc private func reloadConfig() {
+        onTerminalChange?()
+        refresh()
+    }
 
     @objc private func windowsChanged() {
         let perSpace = windows.indexOfSelectedItem == 1
