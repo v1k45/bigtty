@@ -6,7 +6,21 @@ splits, windows and tabs, with a scriptable browser and file viewer on the way.
 herdr owns every session, workspace, tab, pane and agent; GhostHerdr is a view
 onto it, so closing the app leaves everything running.
 
-MIT licensed.
+MIT licensed. Install from [Releases](https://github.com/v1k45/ghostherdr/releases)
+(a universal DMG), or build with `scripts/release.sh <version>`.
+
+![Terminals, a browser pane and the files pane in one space](docs/screenshots/workspace.png)
+
+## Screenshots
+
+| | |
+|---|---|
+| ![An agent waiting on a question elsewhere shows on its space](docs/screenshots/attention.png) | ![Git changes beside an agent's question](docs/screenshots/changes-and-agents.png) |
+| Spaces in the sidebar with branch, folder, ports and what each agent is doing; one needing you stands out with its question. | A Changes pane with the diff next to the terminal and an agent waiting on an answer. |
+| ![⌘K jump palette](docs/screenshots/jump-palette.png) | ![Hold ⌘ for shortcut badges](docs/screenshots/shortcut-hints.png) |
+| ⌘K jumps to any space, agent, pane or action. | Hold ⌘: shortcuts appear on spaces, tabs and panes. |
+| ![⌘/ keyboard shortcuts](docs/screenshots/shortcuts-sheet.png) | ![Terminal settings](docs/screenshots/settings-terminal.png) |
+| ⌘/ lists every shortcut. | Terminal engine, themes (Ghostty's collection included), font, translucency. |
 
 ## Status
 
