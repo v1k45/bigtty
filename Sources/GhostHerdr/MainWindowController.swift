@@ -56,6 +56,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
     var pinnedWorkspaceID: String? { pinnedSpace?.workspace }
     var onShowSpace: ((SpaceRef) -> Void)?
+    private var fullScreenObservers: [NSObjectProtocol] = []
     /// Switch this Mac's session (the app delegate handles space windows).
     var onShowSession: ((Machine) -> Void)?
     var onConnectMachine: (() -> Void)?
@@ -104,6 +105,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
         buildLayout()
         wireActions()
+        for (name, value) in [(NSWindow.willEnterFullScreenNotification, true), (NSWindow.willExitFullScreenNotification, false)] {
+            fullScreenObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setFullScreen(value) }
+            })
+        }
         // Every machine's store, attention and sidebar info report through the manager.
         let a = manager.observe { [weak self] in
             guard let self else { return }
@@ -618,6 +624,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// The sidebar: every machine with its spaces; the selected one lists its tabs.
+    /// Debug hook: the full-screen look without entering full screen.
+    @objc func debugFullScreenLook(_ sender: Any?) {
+        setFullScreen((sender as? String) != "off")
+    }
+
+    /// Full screen: our own backdrop instead of the (empty) material, and
+    /// the chrome without room for traffic lights.
+    private func setFullScreen(_ value: Bool) {
+        root.fullScreen = value
+        sidebar.fullScreen = value
+        topBar.fullScreen = value
+    }
+
     /// The session on this Mac the sidebar lists: this window's, else the
     /// one last switched to.
     private var localSession: Machine { machine.isLocal ? machine : manager.activeLocal }
@@ -1905,7 +1924,31 @@ private final class RootView: NSView {
         didSet { needsLayout = true; needsDisplay = true }
     }
 
+    /// Full screen has no desktop behind the window for the material to
+    /// show, so it paints its own backdrop: the theme's window color, the
+    /// sidebar a shade apart, a soft glow from the top.
+    var fullScreen = false {
+        didSet { needsLayout = true; needsDisplay = true }
+    }
+
     override func draw(_: NSRect) {
+        if fullScreen {
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            background.setFill()
+            bounds.fill()
+            let glow = NSGradient(colors: [
+                NSColor.controlAccentColor.withAlphaComponent(dark ? 0.07 : 0.05),
+                background.withAlphaComponent(0),
+            ])
+            glow?.draw(in: NSRect(x: 0, y: bounds.height * 0.55, width: bounds.width, height: bounds.height * 0.45), angle: -90)
+            if sidebarVisible {
+                (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.035).setFill()
+                NSRect(x: 0, y: 0, width: sidebarWidth, height: bounds.height).fill()
+                NSColor.separatorColor.withAlphaComponent(0.5).setFill()
+                NSRect(x: sidebarWidth - 0.5, y: 0, width: 0.5, height: bounds.height).fill()
+            }
+            return
+        }
         guard !translucentContent else { return }
         background.setFill()
         NSRect(x: sidebarVisible ? sidebarWidth : 0, y: 0, width: bounds.width, height: bounds.height).fill()
@@ -1918,7 +1961,7 @@ private final class RootView: NSView {
         let w = sidebarVisible ? sidebarWidth : 0
         sidebar.frame = NSRect(x: 0, y: 0, width: w, height: b.height)
         material.frame = translucentContent ? b : sidebar.frame
-        material.isHidden = !sidebarVisible && !translucentContent
+        material.isHidden = fullScreen || (!sidebarVisible && !translucentContent)
         main.frame = NSRect(x: w, y: 0, width: b.width - w, height: b.height)
         main.leadingPadding = sidebarVisible ? 0 : 8
     }
@@ -2001,6 +2044,7 @@ private final class MainArea: NSView {
 /// Shown instead of the sidebar's top when it is hidden.
 @MainActor
 private final class CollapsedTopBar: NSView {
+    var fullScreen = false { didSet { needsLayout = true } }
     var onShowSidebar: (() -> Void)?
     private let button = NSButton()
     private let space = NSTextField(labelWithString: "")
@@ -2041,10 +2085,12 @@ private final class CollapsedTopBar: NSView {
     override func layout() {
         super.layout()
         let y = (bounds.height - 18) / 2
-        button.frame = NSRect(x: 84, y: y - 3, width: 26, height: 24)
+        // Right of the traffic lights; full screen has none.
+        let x: CGFloat = fullScreen ? 10 : 84
+        button.frame = NSRect(x: x, y: y - 3, width: 26, height: 24)
         let sw = ceil(space.intrinsicContentSize.width) + 4
-        space.frame = NSRect(x: 116, y: y, width: sw, height: 18)
-        tab.frame = NSRect(x: 116 + sw + 8, y: y + 1, width: 200, height: 16)
+        space.frame = NSRect(x: x + 32, y: y, width: sw, height: 18)
+        tab.frame = NSRect(x: x + 32 + sw + 8, y: y + 1, width: 200, height: 16)
         let aw = alert.intrinsicContentSize.width
         alert.frame = NSRect(x: bounds.width - aw - 16, y: y + 1, width: aw, height: 16)
         alertDot.frame = NSRect(x: bounds.width - aw - 28, y: y + 5, width: 7, height: 7)

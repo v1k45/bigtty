@@ -75,6 +75,9 @@ final class SidebarView: NSView {
 
     static let titlebarHeight: CGFloat = 40
 
+    /// No traffic lights in full screen: the brand takes their corner.
+    var fullScreen = false { didSet { needsLayout = true } }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         scroll.documentView = list
@@ -108,9 +111,10 @@ final class SidebarView: NSView {
         newButton.frame = NSRect(x: 8, y: 4, width: b.width - 16, height: 30)
         // Right of the traffic lights, in the title strip.
         let mark = brand.fittingSize
-        brand.frame = NSRect(x: b.width - mark.width - 14, y: b.height - Self.titlebarHeight + (Self.titlebarHeight - mark.height) / 2 + 2,
+        brand.frame = NSRect(x: fullScreen ? 18 : b.width - mark.width - 14,
+                             y: b.height - Self.titlebarHeight + (Self.titlebarHeight - mark.height) / 2 + 2,
                              width: mark.width, height: mark.height)
-        brand.isHidden = b.width < 170
+        brand.isHidden = b.width < 170 && !fullScreen
         layoutList()
     }
 
