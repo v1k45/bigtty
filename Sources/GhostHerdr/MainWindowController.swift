@@ -73,7 +73,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         self.manager = manager
         machine = manager.local
         self.terminalController = terminalController
-        let window = NSWindow(
+        let window = MainWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -882,6 +882,56 @@ final class ClosureMenuItem: NSMenuItem {
 
 /// Sidebar on the left with a draggable edge; the main area on the right.
 @MainActor
+/// The title bar is hidden and our views fill its strip, so they'd swallow
+/// the double-click that zooms or minimizes a window. Catch it here and do
+/// what System Settings ▸ Desktop & Dock says.
+final class MainWindow: NSWindow {
+    /// Height of the strip that acts as the title bar.
+    static let titleStrip: CGFloat = 40
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, event.clickCount == 2, isTitleStrip(event) {
+            titleBarDoubleClicked()
+            return
+        }
+        super.sendEvent(event)
+    }
+
+    private func isTitleStrip(_ event: NSEvent) -> Bool {
+        guard let content = contentView, event.locationInWindow.y >= content.bounds.height - Self.titleStrip else { return false }
+        // The traffic lights handle their own clicks.
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            if let button = standardWindowButton(kind), button.bounds.contains(button.convert(event.locationInWindow, from: nil)) {
+                return false
+            }
+        }
+        // Panes, buttons and fields keep their own double-clicks; plain
+        // labels (the space name) act like title text.
+        var view = content.hitTest(content.convert(event.locationInWindow, from: nil))
+        while let current = view {
+            if current is PaneContainerView || current is NSTextView { return false }
+            if let field = current as? NSTextField, !field.isEditable, !field.isSelectable {
+                view = current.superview
+                continue
+            }
+            if current is NSControl { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    private func titleBarDoubleClicked() {
+        let defaults = UserDefaults.standard
+        let action = defaults.string(forKey: "AppleActionOnDoubleClick")
+            ?? (defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? "Minimize" : "Maximize")
+        switch action {
+        case "Minimize": performMiniaturize(nil)
+        case "None": break
+        default: performZoom(nil) // Maximize (zoom), and Fill on newer macOS
+        }
+    }
+}
+
 private final class RootView: NSView {
     private let sidebar: NSView
     private let main: MainArea

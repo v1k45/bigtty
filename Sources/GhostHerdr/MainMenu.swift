@@ -112,7 +112,10 @@ enum MainMenu {
         item(window, "Jump to Next Unread", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
         window.addItem(.separator())
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
+        item(window, "Zoom", #selector(NSWindow.performZoom(_:)), "")
         item(window, "Toggle Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
+        window.addItem(.separator())
+        item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), "")
         NSApp.windowsMenu = window
 
         return main
