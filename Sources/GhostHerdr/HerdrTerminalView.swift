@@ -392,14 +392,26 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         released(event)
     }
 
+    /// Lines per mouse-wheel notch, as herdr's own client scrolls
+    /// (`ui.mouse_scroll_lines`, default 3).
+    private static let linesPerNotch: CGFloat = 3
+
     override func scrollWheel(with event: NSEvent) {
-        let lineHeight: CGFloat = event.hasPreciseScrollingDeltas ? 16 : 1
-        scrollAccumulator += event.scrollingDeltaY / lineHeight
+        if event.hasPreciseScrollingDeltas {
+            // Trackpads: follow the fingers, one row per row height.
+            let rowHeight = grid.map { CGFloat($0.cellHeightPixels) / (window?.backingScaleFactor ?? 2) } ?? 16
+            scrollAccumulator += event.scrollingDeltaY / max(rowHeight, 1)
+        } else {
+            scrollAccumulator += event.scrollingDeltaY * Self.linesPerNotch
+        }
         let lines = Int(scrollAccumulator.rounded(.towardZero))
         guard lines != 0 else { return }
         scrollAccumulator -= CGFloat(lines)
         let cell = cellPosition(of: event)
-        for _ in 0..<min(abs(lines), 40) {
+        // One message per line: for apps with their own scrolling (less,
+        // Claude Code) herdr sends one wheel event per message whatever
+        // `lines` says; only its scrollback honours the count.
+        for _ in 0..<min(abs(lines), 60) {
             channel?.scroll(up: lines > 0, lines: 1, column: cell?.column, row: cell?.row)
         }
     }
