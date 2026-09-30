@@ -15,6 +15,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Its channel ended for good (herdr stopped, the terminal went away).
     private(set) var hasDetached = false
     private var session: InMemoryTerminalSession!
+    /// Frames pass through here, held while the app redraws for a new size.
+    private var gate: FrameGate!
     private var channel: TerminalChannel?
     private(set) var mode: Mode = .control
     private var viewport: InMemoryTerminalViewport?
@@ -45,6 +47,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
             suppressesPixelOnlyResizes: true
         )
         box.value = self
+        let surfaceSession = session!
+        gate = FrameGate { surfaceSession.receive($0) }
         self.controller = controller
         configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         delegate = self
@@ -67,6 +71,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
             syncColorScheme()
         }
         if let channel, channel.isRunning, mode == .control {
+            // A new size makes the app redraw; show the result, not the
+            // frames in between (except while dragging the window edge).
+            if window?.inLiveResize != true { gate.hold() }
             channel.resize(
                 columns: Int(viewport.columns), rows: Int(viewport.rows),
                 cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels)
@@ -86,6 +93,23 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Takes control from other windows and from other herdr clients.
     func takeControl() {
         ControlArbiter.shared.claim(self)
+    }
+
+    /// The pane's size as herdr reports it. While this view controls the
+    /// pane it should match; if something else resized it (herdr's own
+    /// interface, another client showing it), size it back.
+    private var lastSizeFix = Date.distantPast
+
+    private func frameSize(columns: Int, rows: Int, from source: TerminalChannel) {
+        guard source === channel, mode == .control, !displaced, window != nil,
+              let viewport, viewport.columns > 0, viewport.rows > 0,
+              columns != Int(viewport.columns) || rows != Int(viewport.rows),
+              window?.inLiveResize != true,
+              Date().timeIntervalSince(lastSizeFix) > 0.5 else { return }
+        lastSizeFix = Date()
+        gate.hold()
+        source.resize(columns: Int(viewport.columns), rows: Int(viewport.rows),
+                      cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels))
     }
 
     /// Called by the arbiter.
@@ -108,6 +132,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return }
         channel?.close()
         let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: displaced ? .observe : mode)
+        // Attaching resizes the pane to this view: wait for the redraw.
+        gate.hold()
         wire(channel)
         do {
             try channel.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
@@ -124,9 +150,13 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         // Frames never carry the app's paste mode; herdr (0.9.2+, which the
         // app requires) re-brackets a bracketed paste for the app's own mode.
         session.receive(Data("\u{1b}[?2004h".utf8))
-        channel.onFrame = { session.receive($0) }
+        let gate = gate!
+        channel.onFrame = { gate.feed($0) }
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
+        channel.onFrameSize = { columns, rows in
+            DispatchQueue.main.async { box.value?.frameSize(columns: columns, rows: rows, from: channel) }
+        }
         let id = ObjectIdentifier(channel)
         channel.onClosed = { reason in
             DispatchQueue.main.async {
@@ -169,8 +199,12 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let session = session!
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
+        let gate = gate!
+        let first = OnceFlag()
         probe.onFrame = { data in
-            session.receive(data)
+            // Taking the pane back resizes it: hold for the redraw.
+            if first.take() { gate.hold() }
+            gate.feed(data)
             DispatchQueue.main.async { box.value?.adopt(probe) }
         }
         probe.onClosed = { _ in

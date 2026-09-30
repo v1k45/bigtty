@@ -23,6 +23,9 @@ public final class TerminalChannel: @unchecked Sendable {
 
     /// Raw ANSI bytes for the terminal surface. Called on a background queue.
     public var onFrame: (@Sendable (Data) -> Void)?
+    /// The pane's size as each frame reports it (columns, rows), before
+    /// `onFrame`. Called on the same background queue.
+    public var onFrameSize: (@Sendable (Int, Int) -> Void)?
     /// The stream ended; the reason comes from herdr's `terminal.closed`.
     public var onClosed: (@Sendable (String) -> Void)?
 
@@ -95,6 +98,8 @@ public final class TerminalChannel: @unchecked Sendable {
         let type: String
         let bytes: String?
         let reason: String?
+        let width: Int?
+        let height: Int?
     }
 
     private func consume(_ data: Data) {
@@ -105,6 +110,7 @@ public final class TerminalChannel: @unchecked Sendable {
             guard let record = try? JSONDecoder().decode(Record.self, from: line) else { continue }
             switch record.type {
             case "terminal.frame":
+                if let width = record.width, let height = record.height { onFrameSize?(width, height) }
                 if let b64 = record.bytes, let bytes = Data(base64Encoded: b64) {
                     onFrame?(bytes)
                 }
