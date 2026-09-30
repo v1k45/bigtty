@@ -291,11 +291,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
               window?.firstResponder is HerdrTerminalView || pasteboard != .general,
               let image = ImagePaste.clipboardImage(pasteboard) else { return false }
         let runner = machine.runner
-        Task.detached {
-            let path = ImagePaste.stage(image, runner: runner)
-            await MainActor.run {
-                if let path { _ = terminal.paste(text: SSHTunnel.shellQuote(path)) } else { NSSound.beep() }
-            }
+        Task { @MainActor [weak terminal] in
+            // Saving (or uploading) happens off the main thread.
+            let path = await Task.detached { ImagePaste.stage(image, runner: runner) }.value
+            if let path { _ = terminal?.paste(text: SSHTunnel.shellQuote(path)) } else { NSSound.beep() }
         }
         return true
     }
