@@ -91,8 +91,9 @@ enum MainMenu {
         paneNumbersItem.submenu = paneNumbers
         pane.addItem(paneNumbersItem)
         for n in 1...9 {
-            item(paneNumbers, "Pane \(n)", #selector(PaneActions.selectPaneByNumber(_:)), "\(n)", [.command, .option]).tag = n
+            item(paneNumbers, "Pane \(n)", #selector(PaneActions.selectPaneByNumber(_:)), "\(n)", Settings.paneKeys.modifiers).tag = n
         }
+        paneNumbersMenu = paneNumbers
         pane.addItem(.separator())
         item(pane, "Resize Left", #selector(PaneActions.resizeLeft(_:)), arrow(.leftArrow), [.command, .control])
         item(pane, "Resize Right", #selector(PaneActions.resizeRight(_:)), arrow(.rightArrow), [.command, .control])
@@ -148,6 +149,13 @@ enum MainMenu {
     private static func alternate(_ item: NSMenuItem) {
         item.isHidden = true
         item.allowsKeyEquivalentWhenHidden = true
+    }
+
+    /// "Go to Pane" (its shortcuts follow Settings ▸ Go to pane).
+    private static weak var paneNumbersMenu: NSMenu?
+
+    static func applyPaneKeys() {
+        for item in paneNumbersMenu?.items ?? [] { item.keyEquivalentModifierMask = Settings.paneKeys.modifiers }
     }
 
     private static func submenu(_ main: NSMenu, _ title: String) -> NSMenu {

@@ -55,6 +55,37 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "terminalOpacity") }
     }
 
+    /// The modifier for "go to pane N".
+    enum PaneKeys: String, CaseIterable {
+        case option, optionCommand
+
+        var title: String {
+            switch self {
+            case .option: "⌥1 – ⌥9"
+            case .optionCommand: "⌥⌘1 – ⌥⌘9"
+            }
+        }
+
+        var modifiers: NSEvent.ModifierFlags {
+            switch self {
+            case .option: [.option]
+            case .optionCommand: [.option, .command]
+            }
+        }
+
+        var symbols: String {
+            switch self {
+            case .option: "⌥"
+            case .optionCommand: "⌥⌘"
+            }
+        }
+    }
+
+    static var paneKeys: PaneKeys {
+        get { UserDefaults.standard.string(forKey: "paneKeys").flatMap(PaneKeys.init) ?? .option }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "paneKeys") }
+    }
+
     enum BrowserFullscreen: String, CaseIterable {
         case pane, screen
 
@@ -105,6 +136,7 @@ final class SettingsWindowController: NSWindowController {
     private let notify = NSPopUpButton()
     private let links = NSPopUpButton()
     private let fullscreen = NSPopUpButton()
+    private let paneKeys = NSPopUpButton()
     private let herdr = NSTextField(labelWithString: "")
 
     private let engine = NSPopUpButton()
@@ -207,6 +239,9 @@ final class SettingsWindowController: NSWindowController {
         for item in Settings.Links.allCases { links.addItem(withTitle: item.title) }
         links.target = self
         links.action = #selector(linksChanged)
+        for item in Settings.PaneKeys.allCases { paneKeys.addItem(withTitle: item.title) }
+        paneKeys.target = self
+        paneKeys.action = #selector(paneKeysChanged)
         for item in Settings.BrowserFullscreen.allCases { fullscreen.addItem(withTitle: item.title) }
         fullscreen.target = self
         fullscreen.action = #selector(fullscreenChanged)
@@ -225,6 +260,7 @@ final class SettingsWindowController: NSWindowController {
             [label("Translucent window:"), stack(translucent, "The sidebar’s material also shows between panes.")],
             [label("Notify when an agent:"), stack(notify, "Only for panes you aren’t looking at.")],
             [label("Open terminal links:"), links],
+            [label("Go to pane:"), stack(paneKeys, "⌥ alone is quicker, but then ⌥1–9 no longer type ¡ ™ £ … or reach terminal apps.")],
             [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
             [label("herdr:"), herdr],
         ])
@@ -326,6 +362,7 @@ final class SettingsWindowController: NSWindowController {
         notify.selectItem(at: Settings.Notify.allCases.firstIndex(of: Settings.notify) ?? 0)
         links.selectItem(at: Settings.Links.allCases.firstIndex(of: Settings.links) ?? 0)
         fullscreen.selectItem(at: Settings.BrowserFullscreen.allCases.firstIndex(of: Settings.browserFullscreen) ?? 0)
+        paneKeys.selectItem(at: Settings.PaneKeys.allCases.firstIndex(of: Settings.paneKeys) ?? 0)
         herdr.stringValue = herdrDescription()
 
         engine.selectItem(at: TerminalMode.allCases.firstIndex(of: Settings.terminalMode) ?? 0)
@@ -409,6 +446,12 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func notifyChanged() {
         Settings.notify = Settings.Notify.allCases[notify.indexOfSelectedItem]
+    }
+
+    @objc private func paneKeysChanged() {
+        Settings.paneKeys = Settings.PaneKeys.allCases[max(0, paneKeys.indexOfSelectedItem)]
+        MainMenu.applyPaneKeys()
+        Settings.changed()
     }
 
     @objc private func fullscreenChanged() {

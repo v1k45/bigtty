@@ -94,6 +94,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             MainActor.assumeIsolated {
                 guard let self else { return false }
                 if self.sheetConsumes(event) { return true }
+                if self.paneKeyConsumes(event) { return true }
                 self.hintTrigger.observe(event)
                 return false
             }
@@ -231,7 +232,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let order = tabID.flatMap { store.layouts[$0]?.root.paneIDs } ?? []
         for (id, view) in paneViews {
             let index = order.firstIndex(of: id)
-            view.hintBadge = showing ? index.flatMap { $0 < 9 ? "⌥⌘\($0 + 1)" : nil } : nil
+            view.hintBadge = showing ? index.flatMap { $0 < 9 ? "\(Settings.paneKeys.symbols)\($0 + 1)" : nil } : nil
         }
         sidebar.update(sidebarModel())
     }
@@ -261,7 +262,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return false
     }
 
-    /// ⌥⌘1…⌥⌘9: panes of this tab in layout order.
+    /// The pane shortcut, caught before the focused view: ⌥-only keys
+    /// never reach the menu from a terminal, they'd be typed.
+    private func paneKeyConsumes(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]) == Settings.paneKeys.modifiers,
+              let key = event.charactersIgnoringModifiers, let n = Int(key), (1...9).contains(n) else { return false }
+        selectPaneByNumber(String(n))
+        return true
+    }
+
+    /// Debug hook: "chars mods" (mods from o/c/m/s) as a key press through
+    /// the window's normal event path, e.g. "2 o" for ⌥2.
+    @objc func debugKey(_ sender: Any?) {
+        let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
+        guard let chars = parts.first, let window else { return }
+        var flags: NSEvent.ModifierFlags = []
+        for ch in parts.count > 1 ? parts[1] : "" {
+            switch ch { case "o": flags.insert(.option); case "c": flags.insert(.control); case "m": flags.insert(.command); case "s": flags.insert(.shift); default: break }
+        }
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, characters: chars,
+                                           charactersIgnoringModifiers: chars, isARepeat: false, keyCode: 0) else { return }
+        window.sendEvent(event)
+    }
+
+    /// ⌥1…⌥9 (or ⌥⌘1…⌥⌘9): panes of this tab in layout order.
     @objc func selectPaneByNumber(_ sender: Any?) {
         guard let n = Self.number(sender), let tabID, let panes = store.layouts[tabID]?.root.paneIDs, n - 1 < panes.count else { return }
         let target = panes[n - 1]
