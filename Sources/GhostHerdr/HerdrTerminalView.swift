@@ -117,6 +117,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Frames go to the surface; a close only matters for the current channel.
     private func wire(_ channel: TerminalChannel) {
         let session = session!
+        // Frames never carry the app's paste mode. Newer herdr re-brackets
+        // a bracketed paste for the app, so pastes go out bracketed there;
+        // older herdr passes them through, so only where the app wants them.
+        let bracketed = clickRoute() != .none
+        session.receive(Data((bracketed ? "\u{1b}[?2004h" : "\u{1b}[?2004l").utf8))
         channel.onFrame = { session.receive($0) }
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
@@ -343,6 +348,25 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         super.mouseUp(with: event)
         // ⌘-click opens links; that's Ghostty's, not the app's.
         if !event.modifierFlags.contains(.command) { released(event) }
+    }
+
+    /// Pointer motion, once per cell, for apps that track it (hover
+    /// highlights in Claude Code). herdr ≥ 0.9.2 drops it for apps that don't.
+    private var lastMotionCell: (column: Int, row: Int)?
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard mode == .control, !displaced, let cell = cellPosition(of: event) else { return }
+        if let last = lastMotionCell, last.column == cell.column, last.row == cell.row { return }
+        lastMotionCell = cell
+        // Only through herdr, which knows whether the app tracks motion:
+        // guessed motion reports would land as text in a shell.
+        if clickRoute() == .herdr { channel?.mouse("move", column: cell.column, row: cell.row) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        lastMotionCell = nil
     }
 
     override func rightMouseDown(with event: NSEvent) {
