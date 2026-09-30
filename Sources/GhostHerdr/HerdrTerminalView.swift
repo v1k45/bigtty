@@ -6,7 +6,7 @@ import HerdrKit
 /// its own: herdr's frames are written into it, and its input goes back to
 /// herdr through a `TerminalChannel`.
 @MainActor
-final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, TerminalSurfaceTitleDelegate {
+final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, TerminalSurfaceTitleDelegate, TerminalSurfaceGridResizeDelegate {
     typealias Mode = TerminalChannel.Mode
 
     let paneID: String
@@ -405,18 +405,39 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     }
 
     /// Zero-based grid cell under the event, from the surface's cell size.
+    /// The surface's exact grid (cell size in pixels), from Ghostty.
+    private var grid: TerminalGridMetrics?
+
+    func terminalDidResize(_ size: TerminalGridMetrics) { grid = size }
+
+    /// The cell under the pointer. Uses Ghostty's own cell size and its
+    /// top-left padding; an estimate from the view size drifts by a row
+    /// toward the bottom of a tall pane, where Claude Code's expanders are.
     private func cellPosition(of event: NSEvent) -> (column: Int, row: Int)? {
-        guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return nil }
         let point = convert(event.locationInWindow, from: nil)
         let scale = window?.backingScaleFactor ?? 2
-        // Cell size from the surface when it reports one, else the grid
-        // spread over the view.
-        let cellWidth = viewport.cellWidthPixels > 0 ? CGFloat(viewport.cellWidthPixels) / scale : bounds.width / CGFloat(viewport.columns)
-        let cellHeight = viewport.cellHeightPixels > 0 ? CGFloat(viewport.cellHeightPixels) / scale : bounds.height / CGFloat(viewport.rows)
+        let columns: Int, rows: Int, cellWidth: CGFloat, cellHeight: CGFloat
+        if let grid, grid.columns > 0, grid.rows > 0, grid.cellWidthPixels > 0, grid.cellHeightPixels > 0 {
+            columns = Int(grid.columns)
+            rows = Int(grid.rows)
+            cellWidth = CGFloat(grid.cellWidthPixels) / scale
+            cellHeight = CGFloat(grid.cellHeightPixels) / scale
+        } else if let viewport, viewport.columns > 0, viewport.rows > 0 {
+            columns = Int(viewport.columns)
+            rows = Int(viewport.rows)
+            cellWidth = viewport.cellWidthPixels > 0 ? CGFloat(viewport.cellWidthPixels) / scale : bounds.width / CGFloat(columns)
+            cellHeight = viewport.cellHeightPixels > 0 ? CGFloat(viewport.cellHeightPixels) / scale : bounds.height / CGFloat(rows)
+        } else {
+            return nil
+        }
         guard cellWidth > 0, cellHeight > 0 else { return nil }
-        let column = Int(point.x / cellWidth)
-        let row = Int((bounds.height - point.y) / cellHeight)
-        return (min(max(column, 0), Int(viewport.columns) - 1), min(max(row, 0), Int(viewport.rows) - 1))
+        // Ghostty's window padding (2pt by default) sits top-left; any
+        // partial-cell leftover goes right and bottom.
+        let padX = min(2, max(0, bounds.width - CGFloat(columns) * cellWidth))
+        let padY = min(2, max(0, bounds.height - CGFloat(rows) * cellHeight))
+        let column = Int((point.x - padX) / cellWidth)
+        let row = Int((bounds.height - point.y - padY) / cellHeight)
+        return (min(max(column, 0), columns - 1), min(max(row, 0), rows - 1))
     }
 
     /// Debug hook: a synthetic wheel event, `lines` positive for up.
