@@ -495,6 +495,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reconcileSpaceWindows()
     }
 
+    /// Edit ▸ Paste: an image into a terminal becomes a file path (see
+    /// `MainWindowController.pasteImage`); anything else is a normal paste.
+    @objc func pasteSmart(_ sender: Any?) {
+        if let controller = windows.first(where: { $0.window === NSApp.keyWindow }), controller.pasteImage() { return }
+        NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: sender)
+    }
+
     @objc func toggleTranslucency(_: Any?) {
         Settings.translucentWindow.toggle()
         Settings.changed()

@@ -291,6 +291,11 @@ final class SSHTunnel: @unchecked Sendable {
 
     /// One command over the shared SSH connection.
     static func runSSH(_ config: Config, remoteCommand: String, stdin: String? = nil, okStatuses: Set<Int32>? = nil) -> Result? {
+        runSSH(config, remoteCommand: remoteCommand, input: stdin.map { Data($0.utf8) }, okStatuses: okStatuses)
+    }
+
+    /// One command over the shared connection, fed `input` (a file upload).
+    static func runSSH(_ config: Config, remoteCommand: String, input stdin: Data?, okStatuses: Set<Int32>? = nil) -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         guard Config.isValid(target: config.target) else { return nil }
@@ -303,8 +308,13 @@ final class SSHTunnel: @unchecked Sendable {
         process.standardInput = stdin == nil ? FileHandle.nullDevice : input
         do { try process.run() } catch { return nil }
         if let stdin {
-            try? input.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
-            try? input.fileHandleForWriting.close()
+            // Write from another thread: a large upload fills the pipe
+            // before ssh's output is read.
+            let writer = input.fileHandleForWriting
+            Thread.detachNewThread {
+                try? writer.write(contentsOf: stdin)
+                try? writer.close()
+            }
         }
         let output = out.fileHandleForReading.readDataToEndOfFile()
         let error = err.fileHandleForReading.readDataToEndOfFile()

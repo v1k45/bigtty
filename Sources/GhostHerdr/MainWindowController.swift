@@ -266,6 +266,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// Esc (or ⌘/ again) closes the sheet without reaching the terminal.
+    /// Paste with an image on the clipboard (a screenshot, an image copied
+    /// in Finder) into a terminal: the image is saved and its path pasted,
+    /// which Claude Code and friends attach as an image. A pane on another
+    /// machine gets the file uploaded there first, so the path works where
+    /// the agent runs. False when it isn't an image paste into a terminal.
+    func pasteImage(from pasteboard: NSPasteboard = .general) -> Bool {
+        guard let terminal = (window?.firstResponder as? HerdrTerminalView) ?? focusedPaneID.flatMap({ paneViews[$0]?.terminal }),
+              window?.firstResponder is HerdrTerminalView || pasteboard != .general,
+              let image = ImagePaste.clipboardImage(pasteboard) else { return false }
+        let runner = machine.runner
+        Task.detached {
+            let path = ImagePaste.stage(image, runner: runner)
+            await MainActor.run {
+                if let path { _ = terminal.paste(text: SSHTunnel.shellQuote(path)) } else { NSSound.beep() }
+            }
+        }
+        return true
+    }
+
     private func sheetConsumes(_ event: NSEvent) -> Bool {
         guard !sheet.isHidden, event.type == .keyDown else { return false }
         if event.keyCode == 53 { setSheet(false); return true }
@@ -1210,6 +1229,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
+    /// Debug hook: pastes the image file at a path as if it were on the
+    /// clipboard, through a private pasteboard.
+    @objc func debugPasteImage(_ sender: Any?) {
+        guard let path = sender as? String, let image = NSImage(contentsOfFile: path) else { return }
+        let board = NSPasteboard(name: .init("dev.ghostherdr.debug-paste"))
+        board.clearContents()
+        board.writeObjects([image])
+        NSLog("ghostherdr: debugPasteImage handled=\(pasteImage(from: board))")
+    }
+
     /// Debug hook: `[pane-id] word` ⌘-clicks the word in that terminal.
     @objc func debugCommandClick(_ sender: Any?) {
         guard let arg = sender as? String else { return }

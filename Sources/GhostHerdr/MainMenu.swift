@@ -92,7 +92,7 @@ enum MainMenu {
         edit.addItem(.separator())
         item(edit, "Cut", #selector(NSText.cut(_:)), "x")
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
-        item(edit, "Paste", #selector(NSText.paste(_:)), "v")
+        item(edit, "Paste", #selector(AppDelegate.pasteSmart(_:)), "v")
         item(edit, "Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v", [.command, .option, .shift])
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
         edit.addItem(.separator())
