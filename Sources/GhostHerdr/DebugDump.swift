@@ -38,6 +38,7 @@ enum DebugDump {
                     let selector = Selector(parts[0])
                     let controller = window?.windowController
                     let target: AnyObject? = controller?.responds(to: selector) == true ? controller : NSApp.delegate
+                    guard target?.responds(to: selector) == true else { return NSLog("ghostherdr: no debug action \(parts[0])") }
                     NSApp.sendAction(selector, to: target, from: argument)
                     return
                 }

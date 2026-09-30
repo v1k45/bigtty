@@ -105,7 +105,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         buildLayout()
         wireActions()
         // Every machine's store, attention and sidebar info report through the manager.
-        let a = manager.observe { [weak self] in self?.render() }
+        let a = manager.observe { [weak self] in
+            guard let self else { return }
+            // This window's machine was removed (a session deleted elsewhere,
+            // a machine removed): fall back rather than show a dead one.
+            if !self.manager.all.contains(where: { $0 === self.machine }) {
+                self.switchMachine(to: self.manager.activeLocal)
+                return
+            }
+            self.render()
+        }
         observers = [(a, { manager.removeObserver($0) })]
         audioObserver = NotificationCenter.default.addObserver(forName: .ghostherdrAudioChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.render() }
@@ -416,7 +425,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let focused = lastFocusedPane ?? herdrFocus
         // A pane tagged as a browser (or untagged) since its view was built
         // keeps the same layout, so the tree must be rebuilt explicitly.
-        let retagged = paneViews.filter { id, view in store.pane(id).map { $0.hostKind != view.hostKind } ?? false }
+        // So must a terminal whose pane got a new terminal (herdr restarted
+        // and restored the layout) or whose connection ended while herdr is up.
+        var connected = false
+        if case .connected = store.state { connected = true }
+        let retagged = paneViews.filter { id, view in
+            guard let pane = store.pane(id) else { return false }
+            if pane.hostKind != view.hostKind { return true }
+            guard let terminal = view.terminal else { return false }
+            return terminal.terminalID != pane.terminalID || (terminal.hasDetached && connected)
+        }
         for (id, view) in retagged {
             view.terminal?.detach()
             view.removeFromSuperview()
@@ -862,8 +880,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func paneView(for id: String) -> NSView? {
         guard let pane = store.pane(id) else { return paneViews[id] }
         if let view = paneViews[id] {
-            if view.hostKind == pane.hostKind { return view }
-            // The pane was tagged (or untagged) as a host pane since: rebuild.
+            // A terminal view is only reused for the same, live terminal: a
+            // herdr restart (or another client) can put a new terminal
+            // behind the same pane id.
+            var connected = false
+            if case .connected = store.state { connected = true }
+            let staleTerminal = view.terminal.map { $0.terminalID != pane.terminalID || ($0.hasDetached && connected) } ?? false
+            if view.hostKind == pane.hostKind, !staleTerminal { return view }
+            // The pane was tagged (or untagged) as a host pane, or its
+            // terminal changed: rebuild.
             view.terminal?.detach()
             view.removeFromSuperview()
             paneViews.removeValue(forKey: id)

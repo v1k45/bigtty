@@ -126,6 +126,16 @@ final class MachineManager {
         for info in sorted where info.running {
             if let name = info.name { open(session: name) }
         }
+        // Sessions deleted elsewhere (`herdr session delete`, another app)
+        // are forgotten; windows showing one fall back to the default.
+        let names = Set(sorted.compactMap(\.name))
+        let gone = sessions.filter { machine in machine.session.map { !names.contains($0) } ?? false }
+        if !gone.isEmpty {
+            for machine in gone { machine.disconnect() }
+            sessions.removeAll { machine in gone.contains { $0 === machine } }
+            if gone.contains(where: { $0.id == activeLocalID }) { activeLocalID = local.id }
+            changed()
+        }
         guard sorted != knownSessions else { return }
         knownSessions = sorted
         changed()

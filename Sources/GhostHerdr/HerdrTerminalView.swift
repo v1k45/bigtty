@@ -11,7 +11,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     let paneID: String
     private let endpoint: HerdrEndpoint
-    private let terminalID: String
+    let terminalID: String
+    /// Its channel ended for good (herdr stopped, the terminal went away).
+    private(set) var hasDetached = false
     private var session: InMemoryTerminalSession!
     private var channel: TerminalChannel?
     private(set) var mode: Mode = .control
@@ -111,6 +113,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
             try channel.start(columns: Int(viewport.columns), rows: Int(viewport.rows))
             self.channel = channel
         } catch {
+            hasDetached = true
             onDetached?("could not start herdr: \(error)")
         }
     }
@@ -134,6 +137,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
                     self.setDisplaced(true)
                     self.startChannel()
                 } else {
+                    self.hasDetached = true
                     self.onDetached?(reason)
                 }
             }
@@ -248,7 +252,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     override var debugDescription: String {
         let grid = viewport.map { "\($0.columns)x\($0.rows)" } ?? "none"
         let text = session.readViewportText() ?? "<no surface>"
-        let state = (channel?.isRunning == true ? "\(mode)" : "none") + (displaced ? " displaced" : "")
+        let state = (channel?.isRunning == true ? "\(mode)" : "none") + (displaced ? " displaced" : "") + (hasDetached ? " detached" : "") + " term=\(terminalID)"
         return "viewport=\(grid) channel=\(state)\n\(text)"
     }
 
