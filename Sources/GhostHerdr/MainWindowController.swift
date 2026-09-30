@@ -231,6 +231,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 return
             }
             switch self.machine.status {
+            case let .approval(url): NSWorkspace.shared.open(url)
             case .notRunning: self.machine.startServer()
             default: self.machine.connect()
             }
@@ -586,6 +587,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         case .notRunning: return .remote(title: "herdr isn’t running on \(name)", detail: "Start it there to see its spaces.", action: "Start herdr on \(name)")
         case .herdrMissing: return .remote(title: "herdr isn’t installed on \(name)", detail: "Install herdr on the machine (herdr.dev), or set it up from a terminal with herdr machine add.", action: nil)
         case let .signIn(message): return .remote(title: "Sign in to \(name)", detail: message, action: "Try Again")
+        case .approval: return .remote(title: "Approve the login to \(name)",
+                                       detail: "Tailscale SSH asks you to confirm this login in the browser. GhostHerdr connects on its own once you do.",
+                                       action: "Open Approval Page")
         case let .failed(message): return .remote(title: "Can’t reach \(name)", detail: message, action: "Try Again")
         case .disabled: return .remote(title: "\(name) is off", detail: "", action: "Connect")
         }

@@ -19,6 +19,9 @@ final class Machine {
         case failed(String)
         case reconnecting(seconds: Int)
         case disabled
+        /// The SSH login waits for approval in a browser (Tailscale SSH's
+        /// check mode); it continues by itself once approved.
+        case approval(URL)
     }
 
     let id: String
@@ -93,7 +96,17 @@ final class Machine {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("dev.ghostherdr/m/\(id.prefix(8))").path
         tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir))
+        // A login waiting for approval in the browser: say so, with the link.
+        approvalObserver = NotificationCenter.default.addObserver(forName: .ghostherdrLoginApproval, object: nil, queue: .main) { [weak self] note in
+            guard let parts = note.object as? [String], parts.count == 2, let url = URL(string: parts[1]) else { return }
+            MainActor.assumeIsolated {
+                guard let self, parts[0] == target, self.status != .connected else { return }
+                self.status = .approval(url)
+            }
+        }
     }
+
+    private var approvalObserver: NSObjectProtocol?
 
     @discardableResult
     func observe(_ handler: @escaping @MainActor () -> Void) -> UUID {
@@ -269,6 +282,7 @@ final class Machine {
         case .notRunning: return "not running"
         case .herdrMissing: return "herdr not installed"
         case .signIn: return "! sign in"
+        case .approval: return "! approve login"
         case .failed: return "! error"
         case let .reconnecting(seconds): return seconds > 0 ? "reconnecting in \(seconds)s" : "reconnecting…"
         case .disabled: return "off"
@@ -277,7 +291,7 @@ final class Machine {
 
     var statusIsProblem: Bool {
         switch status {
-        case .signIn, .failed, .herdrMissing: true
+        case .signIn, .failed, .herdrMissing, .approval: true
         default: false
         }
     }

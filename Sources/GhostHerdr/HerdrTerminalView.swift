@@ -79,8 +79,24 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
                 cellWidth: Int(viewport.cellWidthPixels), cellHeight: Int(viewport.cellHeightPixels)
             )
         } else if window != nil {
-            // An observer's size is fixed at start, so restart it to follow.
-            startChannel()
+            // Not attached yet, or an observer (whose size is fixed at
+            // start): (re)start at the size the view settles on. The first
+            // viewport is often a provisional one from before layout.
+            scheduleStart()
+        }
+    }
+
+    private var startScheduled = false
+
+    /// Coalesces starts within a layout pass, so the pane is attached (and
+    /// herdr sized) once, at the final size.
+    private func scheduleStart() {
+        guard !startScheduled else { return }
+        startScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            guard let self else { return }
+            self.startScheduled = false
+            if self.window != nil { self.startChannel() }
         }
     }
 

@@ -372,6 +372,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             alert.messageText = "herdr isn’t installed on \(machine.name)"
             alert.informativeText = "Install herdr there (herdr.dev), or run herdr machine add \(machine.target ?? "") in a terminal, which offers to install it."
             actions = [("Open in Terminal", { [weak self] in self?.openSSHInTerminal(machine) })]
+        case let .approval(url):
+            alert.messageText = "Approve the login to \(machine.name)"
+            alert.informativeText = "\(machine.target ?? machine.name) uses Tailscale SSH, which asks you to confirm this login in the browser. GhostHerdr connects on its own once you do."
+            actions = [("Open Approval Page", { NSWorkspace.shared.open(url) })]
         case .disabled:
             alert.messageText = "\(machine.name) is off"
             actions = [("Connect", { machine.connect() })]

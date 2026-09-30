@@ -177,18 +177,23 @@ final class SSHTunnel: @unchecked Sendable {
         process.standardOutput = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let box = ErrorBox()
+        let target = config.target
         errors.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil } else { box.append(data) }
+            if data.isEmpty { handle.readabilityHandler = nil; return }
+            box.append(data)
+            LoginApproval.scan(box.text, target: target)
         }
         process.terminationHandler = { [weak self] _ in
             self?.onExit?(box.text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         try process.run()
         self.process = process
-        // Wait for the forwarded sockets to appear.
-        let deadline = Date().addingTimeInterval(15)
+        // Wait for the forwarded sockets to appear; longer while a login
+        // waits for approval in the browser.
+        var deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
+            if LoginApproval.isPending(box.text) { deadline = max(deadline, Date().addingTimeInterval(5)) }
             if FileManager.default.fileExists(atPath: config.localAPISocket),
                FileManager.default.fileExists(atPath: config.localClientSocket) { return }
             if !process.isRunning {
@@ -316,10 +321,20 @@ final class SSHTunnel: @unchecked Sendable {
                 try? writer.close()
             }
         }
+        // stderr as it comes: a login that waits for approval in the browser
+        // (Tailscale SSH's check mode) says so there before it continues.
+        let errors = ErrorBox()
+        let target = config.target
+        err.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil; return }
+            errors.append(data)
+            LoginApproval.scan(errors.text, target: target)
+        }
         let output = out.fileHandleForReading.readDataToEndOfFile()
-        let error = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let result = Result(status: process.terminationStatus, data: output, error: String(decoding: error, as: UTF8.self))
+        err.fileHandleForReading.readabilityHandler = nil
+        let result = Result(status: process.terminationStatus, data: output, error: errors.text)
         if let okStatuses, !okStatuses.contains(result.status) { return nil }
         return result
     }
@@ -347,4 +362,35 @@ private final class ErrorBox: @unchecked Sendable {
     private var data = Data()
     func append(_ d: Data) { lock.withLock { data.append(d) } }
     var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
+}
+
+/// Logins that wait for a person: Tailscale SSH in check mode prints
+///   # Tailscale SSH requires an additional check.
+///   # To authenticate, visit: https://login.tailscale.com/a/…
+/// and holds the connection until it's approved in a browser. The link
+/// is posted (`.ghostherdrLoginApproval`, object: [target, URL]) so the
+/// machine can show it; the connection carries on by itself afterwards.
+enum LoginApproval {
+    nonisolated(unsafe) private static var seen: Set<String> = []
+    private static let lock = NSLock()
+
+    static func url(in text: String) -> URL? {
+        guard let range = text.range(of: #"https://login\.tailscale\.com/a/[A-Za-z0-9]+"#, options: .regularExpression) else { return nil }
+        return URL(string: String(text[range]))
+    }
+
+    static func isPending(_ text: String) -> Bool { url(in: text) != nil }
+
+    static func scan(_ text: String, target: String) {
+        guard let url = url(in: text) else { return }
+        let fresh = lock.withLock { seen.insert(url.absoluteString).inserted }
+        guard fresh else { return }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .ghostherdrLoginApproval, object: [target, url.absoluteString])
+        }
+    }
+}
+
+extension Notification.Name {
+    static let ghostherdrLoginApproval = Notification.Name("GhostHerdrLoginApproval")
 }
