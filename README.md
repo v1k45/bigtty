@@ -39,7 +39,7 @@ GhostHerdr is the window onto it.
   built in, and a frosted, translucent look that matches the Mac around it.
 - **A browser beside the agent.** Browser panes live in the same split layout
   as your terminals. Open `localhost` next to the dev server, watch the page
-  change, go full screen inside the pane. Agents can drive it too:
+  change, go full screen inside the pane, block ads with uBlock Origin Lite. Agents can drive it too:
   `ghr browser click @e5`.
 - **Code and diffs without leaving.** ⌘-click any path an agent prints (even a
   bare `Cart.tsx` in a table) and it opens right there: syntax highlighted,
@@ -53,7 +53,8 @@ GhostHerdr is the window onto it.
   sit under yours: terminals, agents, attention, browser panes that reach its
   `localhost`, its files. One app, all your boxes.
 - **Keyboard first, mouse friendly.** ⌘K jumps to any space, agent, pane or
-  action. Hold ⌘ to see shortcuts on everything; ⌘/ lists them all. Drag panes
+  action, fuzzy ("blt" finds *backend-load-tests*), and searches what
+  every terminal printed, showing the matching line. Hold ⌘ to see shortcuts on everything; ⌘/ lists them all. Drag panes
   by their top edge to rearrange a layout any way you like.
 - **Native, not a web view in a trench coat.** Swift and AppKit throughout:
   sidebar material, trackpad scrolling, select-to-copy, Mac shortcuts and
@@ -146,7 +147,8 @@ font, size, background translucency, contrast boost and copy on select.
 `GHOSTHERDR_GHOSTTY_CONFIG=/path` keeps a separate config for GhostHerdr.
 
 Clicks, hover, scrolling and pastes reach apps like Claude Code, vim and htop
-the way they do in Ghostty. Prefer herdr's own interface? **Settings ▸
+the way they do in Ghostty. ⌘V with a screenshot on the clipboard pastes it as
+a file (uploaded first for a pane on another machine), so Claude Code attaches it. Prefer herdr's own interface? **Settings ▸
 Terminal ▸ herdr client** runs herdr itself in each window, with the native
 sidebar, palette and browser around it.
 
@@ -164,6 +166,10 @@ splitting, zooming, moving and closing work like any pane, and layouts survive
 restarts. It identifies as Safari, plays media with a speaker on its tab, and
 video full screen fills the pane (or the display, if you prefer). Terminal
 links open in the tab's browser pane or in your default browser (a setting).
+
+**Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
+15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
+unpacked extension goes in `~/Library/Application Support/GhostHerdr/Extensions`.
 
 ### Files and changes
 

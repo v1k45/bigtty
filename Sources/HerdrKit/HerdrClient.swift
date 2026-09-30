@@ -178,6 +178,15 @@ public struct HerdrClient: Sendable {
         try await call("workspace.close", ["workspace_id": .string(workspaceID)])
     }
 
+    /// The pane's recent output as plain text, soft wraps joined (what
+    /// search looks through).
+    public func readPane(_ paneID: String, lines: Int = 3000) async throws -> String {
+        let result = try await call("pane.read", [
+            "pane_id": .string(paneID), "source": "recent_unwrapped", "lines": .number(Double(lines)),
+        ])
+        return result["read"]?["text"]?.stringValue ?? ""
+    }
+
     public func sendText(paneID: String, text: String) async throws {
         try await call("pane.send_text", ["pane_id": .string(paneID), "text": .string(text)])
     }

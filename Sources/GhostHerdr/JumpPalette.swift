@@ -27,6 +27,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let alert: Bool
         let target: Target
         let haystack: String
+        /// Letters to highlight in the title (UTF-16 ranges).
+        var highlights: [NSRange] = []
+        /// Terminal output lines show in a monospaced face.
+        var monospaced = false
     }
 
     private enum Row {
@@ -40,10 +44,19 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private var items: [Item] = []
     private var rows: [Row] = []
     private var onPick: ((Target) -> Void)?
+    private weak var manager: MachineManager?
 
     func show(manager: MachineManager, onPick: @escaping (Target) -> Void) {
         self.onPick = onPick
+        self.manager = manager
         items = Self.collect(manager: manager)
+        // Terminal text for "In Terminals": read in the background, the
+        // results refresh as it arrives.
+        TerminalIndex.shared.onUpdate = { [weak self] in
+            guard let self, self.panel?.isVisible == true, !self.field.stringValue.isEmpty else { return }
+            self.filter()
+        }
+        TerminalIndex.shared.refresh(manager.all)
         let panel = self.panel ?? makePanel()
         self.panel = panel
         field.stringValue = ""
@@ -147,29 +160,54 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     private func filter() {
-        let query = field.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
-        // Substring matches on the name rank first, then anywhere; letters
-        // in order ("ghr" → "ghostherdr") only count within the name.
-        func score(_ item: Item) -> Int {
-            guard !query.isEmpty else { return 1 }
-            let title = item.title.lowercased()
-            if title.hasPrefix(query) { return 4 }
-            if title.contains(query) { return 3 }
-            if item.haystack.contains(query) { return 2 }
-            var remaining = Substring(query)
-            for char in title where remaining.first == char { remaining = remaining.dropFirst() }
-            return remaining.isEmpty ? 1 : 0
+        let query = field.stringValue.trimmingCharacters(in: .whitespaces)
+        // Fuzzy on the name (highlighted); the rest of what describes an
+        // item (folder, branch, machine) counts less.
+        var matched: [(Item, Int)] = []
+        for item in items {
+            guard !query.isEmpty else { matched.append((item, 0)); continue }
+            if let result = FuzzyMatch.matchWords(query, in: item.title) {
+                var hit = item
+                hit.highlights = Self.ranges(result.positions)
+                matched.append((hit, result.score * 2 + 100))
+            } else if let result = FuzzyMatch.matchWords(query, in: item.haystack) {
+                matched.append((item, result.score))
+            }
         }
-        let matched = items.map { ($0, score($0)) }.filter { $0.1 > 0 }
-            .sorted { $0.1 > $1.1 }.map(\.0)
+        matched.sort { $0.1 > $1.1 }
+        // What the terminals show: newest lines first.
+        var terminal: [Item] = []
+        if query.count >= 2, let manager {
+            terminal = TerminalIndex.shared.search(query, in: manager.all).map { hit in
+                let machine = manager.machine(hit.machineID)
+                let store = machine?.store
+                let space = store?.workspace(hit.pane.workspaceID)?.label ?? ""
+                let where_ = [space, hit.pane.displayAgent ?? hit.pane.agent ?? hit.pane.displayName, machine.map { $0.isLocal ? ($0.id == "local" ? nil : $0.sessionName) : $0.name } ?? nil]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                return Item(section: "In Terminals", title: hit.snippet, detail: where_, symbol: "text.magnifyingglass",
+                            alert: false, target: .pane(hit.machineID, hit.pane), haystack: "",
+                            highlights: [hit.match], monospaced: true)
+            }
+        }
         // Waiting agents first within their section.
-        let order = ["Sessions", "Machines", "Spaces", "Agents", "Panes", "Actions"]
+        let order = ["Sessions", "Machines", "Spaces", "Agents", "Panes", "In Terminals", "Actions"]
+        let all = matched.map(\.0) + terminal
         rows = []
         for section in order {
-            let group = matched.filter { $0.section == section }.sorted { $0.alert && !$1.alert }
+            var group = all.filter { $0.section == section }
+            if query.isEmpty { group.sort { $0.alert && !$1.alert } }
             guard !group.isEmpty else { continue }
             rows.append(.header(section))
-            rows += group.prefix(section == "Panes" ? 6 : 12).map { .item($0) }
+            rows += group.prefix(section == "Panes" ? 6 : section == "In Terminals" ? 8 : 12).map { .item($0) }
+        }
+        // With a query, the best match leads regardless of section.
+        if !query.isEmpty, let best = matched.first?.0, let at = rows.firstIndex(where: { row in
+            if case let .item(item) = row { return item.title == best.title && item.section == best.section }
+            return false
+        }), let header = rows[..<at].lastIndex(where: isHeader), header != 0 {
+            let block = rows[header..<(rows[(at + 1)...].firstIndex(where: isHeader) ?? rows.count)]
+            rows.removeSubrange(block.indices)
+            rows.insert(contentsOf: block, at: 0)
         }
         table.reloadData()
         if let first = rows.firstIndex(where: { if case .item = $0 { true } else { false } }) {
@@ -177,6 +215,19 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             table.scrollRowToVisible(first)
         }
         resizePanel()
+    }
+
+    /// Positions to ranges, runs merged.
+    private static func ranges(_ positions: [Int]) -> [NSRange] {
+        var ranges: [NSRange] = []
+        for position in positions {
+            if let last = ranges.last, last.location + last.length == position {
+                ranges[ranges.count - 1].length += 1
+            } else {
+                ranges.append(NSRange(location: position, length: 1))
+            }
+        }
+        return ranges
     }
 
     private func resizePanel() {
@@ -222,7 +273,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 18)
-        field.placeholderString = "Jump to a machine, space, agent or pane"
+        field.placeholderString = "Jump to a space, agent or pane, or search terminal output"
         field.delegate = self
         let line = NSBox()
         line.boxType = .separator
@@ -283,7 +334,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             container.addSubview(label)
             return container
         case let .item(item):
-            return PaletteCell(item.title, item.detail, item.symbol, item.alert)
+            return PaletteCell(item.title, item.detail, item.symbol, item.alert, highlights: item.highlights, monospaced: item.monospaced)
         }
     }
 
@@ -344,14 +395,27 @@ private final class KeyPanel: NSPanel {
 }
 
 private final class PaletteCell: NSTableCellView {
-    init(_ title: String, _ detail: String, _ symbol: String, _ alert: Bool) {
+    init(_ title: String, _ detail: String, _ symbol: String, _ alert: Bool, highlights: [NSRange] = [], monospaced: Bool = false) {
         super.init(frame: .zero)
         let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 13, weight: .regular)
         icon.contentTintColor = alert ? .controlAccentColor : .secondaryLabelColor
         let name = NSTextField(labelWithString: title)
-        name.font = .systemFont(ofSize: 13.5)
-        name.lineBreakMode = .byTruncatingMiddle
+        let font: NSFont = monospaced ? .monospacedSystemFont(ofSize: 12, weight: .regular) : .systemFont(ofSize: 13.5)
+        name.font = font
+        name.lineBreakMode = monospaced ? .byTruncatingTail : .byTruncatingMiddle
+        if !highlights.isEmpty {
+            // Matched letters: bold and accent-tinted, the rest as usual.
+            let text = NSMutableAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+            let bold = monospaced ? NSFont.monospacedSystemFont(ofSize: 12, weight: .bold) : NSFont.systemFont(ofSize: 13.5, weight: .semibold)
+            for range in highlights where range.location >= 0 && range.location + range.length <= text.length {
+                text.addAttributes([.font: bold, .foregroundColor: NSColor.controlAccentColor], range: range)
+            }
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = name.lineBreakMode
+            text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
+            name.attributedStringValue = text
+        }
         let sub = NSTextField(labelWithString: detail)
         sub.font = .systemFont(ofSize: 12)
         sub.textColor = alert ? .controlAccentColor : .secondaryLabelColor
