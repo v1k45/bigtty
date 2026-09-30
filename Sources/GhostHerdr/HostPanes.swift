@@ -117,6 +117,38 @@ final class HostPaneStore {
         return id
     }
 
+    /// Turns an existing pane (idle at its shell) into a host pane.
+    @discardableResult
+    static func convert(_ paneID: String, to state: HostPaneState, store: SessionStore, remote: Bool = false) -> String {
+        let id = newID(state.kind)
+        var recorded = state
+        recorded.paneID = paneID
+        shared[id] = recorded
+        let title = hostTitle(state)
+        let kind = state.kind
+        store.perform { client in
+            try await tag(pane: paneID, id: id, kind: kind, title: title, client: client, remote: remote)
+        }
+        return id
+    }
+
+    /// A new tab in `workspaceID` whose pane is a host pane.
+    @discardableResult
+    static func openTab(_ state: HostPaneState, in workspaceID: String, store: SessionStore, remote: Bool = false) -> String {
+        let id = newID(state.kind)
+        shared[id] = state
+        let title = hostTitle(state)
+        store.perform { client in
+            let pane = try await client.createTab(in: workspaceID)
+            await MainActor.run { shared[id]?.paneID = pane.paneID }
+            try await tag(pane: pane.paneID, id: id, kind: state.kind, title: title, client: client, remote: remote)
+        }
+        return id
+    }
+
+    /// Shells that are safe to replace with a host pane's placeholder.
+    static let shells: Set<String> = ["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "-zsh", "-bash", "-fish", "-sh"]
+
     static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient, remote: Bool = false) async throws {
         try await client.reportMetadata(
             paneID: pane, title: title, tokens: ["ghr_kind": kind.rawValue, "ghr_id": id]

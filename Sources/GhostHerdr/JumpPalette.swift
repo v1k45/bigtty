@@ -13,6 +13,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case pane(String, Pane)
         case newSpace
         case connectMachine
+        /// A menu action by selector, sent to the key window.
+        case action(Selector)
     }
 
     private struct Item {
@@ -81,6 +83,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
         }
         items.append(Item(section: "Actions", title: "New Space…", detail: "⌘N", symbol: "plus", alert: false, target: .newSpace, haystack: "new space workspace"))
+        items.append(Item(section: "Actions", title: "New Browser Tab", detail: "⌥⌘T", symbol: "globe", alert: false, target: .action(#selector(PaneActions.newBrowserTab(_:))), haystack: "new browser tab web"))
+        items.append(Item(section: "Actions", title: "Open Browser Here", detail: "⇧⌥⌘B", symbol: "globe", alert: false, target: .action(#selector(PaneActions.openBrowserHere(_:))), haystack: "open browser here this pane web replace"))
+        items.append(Item(section: "Actions", title: "Split with Browser", detail: "⌥⌘B", symbol: "rectangle.split.2x1", alert: false, target: .action(#selector(PaneActions.newBrowserPane(_:))), haystack: "split browser pane web"))
+        items.append(Item(section: "Actions", title: "Open Files Here", detail: "⇧⌥⌘F", symbol: "doc.text", alert: false, target: .action(#selector(PaneActions.openFilesHere(_:))), haystack: "open files here this pane viewer"))
         items.append(Item(section: "Actions", title: "Connect a Machine…", detail: "user@host", symbol: "server.rack", alert: false, target: .connectMachine, haystack: "connect machine ssh remote server add"))
         return items
     }

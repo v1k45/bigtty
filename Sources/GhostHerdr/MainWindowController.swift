@@ -516,6 +516,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         add("Rename Space…") { [weak self] in self?.promptRename(workspaceID: id) }
         add("New Tab") { [weak self] in self?.store.perform { try await $0.createTab(workspaceID: id) } }
+        add("New Browser Tab") { [weak self] in
+            guard let self else { return }
+            if self.workspaceID != id { self.selectWorkspace(id) }
+            self.newBrowserTab(nil)
+        }
         menu.addItem(.separator())
         add("Show Changes") { [weak self] in
             guard let self else { return }
@@ -869,6 +874,57 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func debugFilesSelect(_ sender: Any?) {
         guard let arg = sender as? String, let id = focusedPaneID, let files = paneViews[id]?.files else { return }
         if let mode = FilesPaneView.Mode(rawValue: arg) { files.setMode(mode) } else { files.select(path: arg) }
+    }
+
+    /// A new tab in this space that opens as a browser.
+    @objc func newBrowserTab(_: Any?) {
+        guard let workspaceID else { return }
+        pendingAddressFocus = true
+        tabID = nil // follow herdr to the new (focused) tab, as ⌘T does
+        HostPaneStore.openTab(HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id),
+                              in: workspaceID, store: store, remote: !machine.isLocal)
+    }
+
+    /// Turns the focused pane (e.g. one just split off) into a browser.
+    @objc func openBrowserHere(_: Any?) {
+        convertFocusedPane(to: HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id), focusAddress: true)
+    }
+
+    /// Turns the focused pane into a files pane for its folder.
+    @objc func openFilesHere(_: Any?) {
+        guard let pane = focusedPaneID.flatMap({ store.pane($0) }) else { return }
+        let cwd = pane.foregroundCwd ?? pane.cwd ?? machine.homeDirectory ?? "/"
+        convertFocusedPane(to: HostPaneState(kind: .files, path: cwd, mode: FilesPaneView.Mode.files.rawValue,
+                                             machine: machine.isLocal ? nil : machine.id), focusAddress: false)
+    }
+
+    /// Only a pane idle at its shell prompt is replaced; a running program
+    /// or agent is never killed for it.
+    private func convertFocusedPane(to state: HostPaneState, focusAddress: Bool) {
+        guard let paneID = focusedPaneID, let pane = store.pane(paneID) else { return }
+        guard pane.hostKind == nil else { NSSound.beep(); return }
+        let client = store.client
+        let remote = !machine.isLocal
+        Task { [weak self] in
+            let processes = (try? await client.foregroundProcesses(of: paneID)) ?? []
+            guard let self else { return }
+            let idle = pane.agent == nil && !processes.isEmpty && processes.allSatisfy { HostPaneStore.shells.contains($0) }
+            guard idle else {
+                let alert = NSAlert()
+                alert.messageText = "This pane is busy"
+                alert.informativeText = "\(processes.first ?? "A program") is running in it. Open the \(state.kind == .browser ? "browser" : "files") in a split instead?"
+                alert.addButton(withTitle: "Split Right")
+                alert.addButton(withTitle: "Cancel")
+                let open = { HostPaneStore.open(state, beside: paneID, direction: .right, store: self.store, remote: remote) }
+                if let window = self.window {
+                    alert.beginSheetModal(for: window) { response in if response == .alertFirstButtonReturn { _ = open() } }
+                } else if alert.runModal() == .alertFirstButtonReturn { _ = open() }
+                return
+            }
+            if focusAddress { self.pendingAddressFocus = true }
+            self.pendingFocus = paneID
+            HostPaneStore.convert(paneID, to: state, store: self.store, remote: remote)
+        }
     }
 
     @objc func newBrowserPane(_: Any?) {

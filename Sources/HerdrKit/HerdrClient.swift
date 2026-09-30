@@ -140,6 +140,19 @@ public struct HerdrClient: Sendable {
         try await call("tab.create", ["workspace_id": .string(workspaceID), "focus": true])
     }
 
+    /// Creates a focused tab and returns its first pane.
+    public func createTab(in workspaceID: String) async throws -> Pane {
+        try await call("tab.create", ["workspace_id": .string(workspaceID), "focus": true], key: "root_pane", as: Pane.self)
+    }
+
+    /// The names of a pane's foreground processes (a shell at its prompt, or
+    /// whatever runs in it).
+    public func foregroundProcesses(of paneID: String) async throws -> [String] {
+        let info = try await call("pane.process_info", ["pane_id": .string(paneID)])
+        guard case let .array(processes)? = info["process_info"]?["foreground_processes"] else { return [] }
+        return processes.compactMap { $0["name"]?.stringValue }
+    }
+
     public func closeTab(_ tabID: String) async throws {
         try await call("tab.close", ["tab_id": .string(tabID)])
     }

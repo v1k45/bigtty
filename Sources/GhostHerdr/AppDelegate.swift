@@ -391,6 +391,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
         case .newSpace:
             keyWindow?.newWorkspace(nil)
+        case let .action(selector):
+            NSApp.sendAction(selector, to: nil, from: nil)
         case .connectMachine:
             connectMachine(nil)
         }
