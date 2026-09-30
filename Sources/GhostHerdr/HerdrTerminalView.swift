@@ -262,6 +262,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Dragging in a terminal selects text; it never moves the window.
     override var mouseDownCanMoveWindow: Bool { false }
 
+    /// A click on a background window reaches the app too, as in Ghostty.
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
     /// The app menu gets first pick at ⌘ shortcuts, so ⌘D splits through
     /// herdr instead of hitting Ghostty's own split keybind.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -293,7 +296,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     // terminal.mouse, and herdr passes it on only if the app (Claude Code,
     // vim, htop…) asked for mouse input. Drags stay local text selection.
     private var pressedCell: (column: Int, row: Int, button: String)?
+    private var pressedPoint: NSPoint?
     private var draggedSincePress = false
+    /// Movement a click may have before it counts as a drag (trackpad
+    /// clicks wobble a point or two).
+    private static let clickSlop: CGFloat = 5
 
     /// How clicks reach the app.
     enum ClickRoute {
@@ -309,13 +316,16 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     private func pressed(_ event: NSEvent, button: String) {
         pressedCell = cellPosition(of: event).map { ($0.column, $0.row, button) }
+        pressedPoint = convert(event.locationInWindow, from: nil)
         draggedSincePress = false
     }
 
     private func released(_ event: NSEvent) {
         defer { pressedCell = nil }
-        guard let press = pressedCell, !draggedSincePress, mode == .control, !displaced,
-              let cell = cellPosition(of: event), cell.column == press.column, cell.row == press.row else { return }
+        // The click lands on the cell that was pressed, even if the pointer
+        // wobbled into a neighbour.
+        guard let press = pressedCell, !draggedSincePress, mode == .control, !displaced else { return }
+        let cell = (column: press.column, row: press.row)
         let modifiers = (event.modifierFlags.contains(.shift) ? 1 : 0)
             | (event.modifierFlags.contains(.control) ? 2 : 0)
             | (event.modifierFlags.contains(.option) ? 4 : 0)
@@ -340,7 +350,10 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     }
 
     override func mouseDragged(with event: NSEvent) {
-        draggedSincePress = true
+        if let start = pressedPoint {
+            let point = convert(event.locationInWindow, from: nil)
+            if hypot(point.x - start.x, point.y - start.y) > Self.clickSlop { draggedSincePress = true }
+        }
         super.mouseDragged(with: event)
     }
 
