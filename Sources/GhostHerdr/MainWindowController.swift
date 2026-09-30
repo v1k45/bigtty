@@ -205,7 +205,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 return
             }
             self.select(ref)
-            self.selectTab(tab)
+            // "+N more" on a card just opens the space.
+            if !tab.isEmpty { self.selectTab(tab) }
         }
         sidebar.onSpaceMenu = { [weak self] key in
             guard let self, let ref = SpaceRef(key: key), ref.machine == self.machine.id else { return nil }
@@ -625,13 +626,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// A tab's name: one it was given, else what its focused pane shows
     /// (Claude Code's conversation title, a shell's directory), else "tab N".
     private func tabLabel(_ tab: Tab) -> String {
-        Self.tabTitle(tab, store: store)
+        Self.tabTitle(tab, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
     }
 
-    static func tabTitle(_ tab: Tab, store: SessionStore) -> String {
+    /// A given label, else a title reported to herdr (agent integrations),
+    /// else the agent conversation's name from its session (AgentTitles),
+    /// else the title the terminal set, else the agent.
+    static func tabTitle(_ tab: Tab, store: SessionStore, agentTitles: [String: String]) -> String {
         if tab.label != String(tab.number), !tab.label.isEmpty { return tab.label }
         let panes = store.panes(in: tab.tabID)
         let lead = panes.first { $0.focused } ?? panes.first
+        if let label = lead?.label, !label.isEmpty { return label }
+        if let title = lead?.title?.trimmingCharacters(in: .whitespaces), !title.isEmpty { return title }
+        if let lead, let title = agentTitles[lead.paneID] { return title }
         if let title = lead?.shownTitle { return title }
         if let agent = lead?.displayAgent ?? lead?.agent { return agent }
         return "tab \(tab.number)"
@@ -680,25 +687,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 let dir = info.directory.map { machine.displayPath($0) } ?? ""
                 let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
                 let selected = machine === self.machine && workspace.workspaceID == workspaceID
-                let tabs = selected ? store.tabs(in: workspace.workspaceID).enumerated().map { index, tab -> SidebarModel.Tab in
+                let titles = spaceInfo.agentTitles
+                let allTabs = store.tabs(in: workspace.workspaceID)
+                // The selected space lists every tab; others their first two
+                // and "+N more", so a glance shows what's in each space.
+                let listed = selected ? Array(allTabs) : Array(allTabs.prefix(2))
+                var tabs = allTabs.count > 1 ? listed.enumerated().map { index, tab -> SidebarModel.Tab in
                     let panes = store.panes(in: tab.tabID).count
                     let alert = attention.count(inTab: tab.tabID) > 0
                     return .init(
-                        id: tab.tabID, label: tabLabel(tab),
+                        id: tab.tabID, label: Self.tabTitle(tab, store: store, agentTitles: titles),
                         detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
-                        selected: tab.tabID == tabID, alert: alert,
+                        selected: selected && tab.tabID == tabID, alert: alert,
                         audible: store.panes(in: tab.tabID).contains(where: Self.isAudible),
-                        hint: showsHints && index < 9 ? "⌃\(index + 1)" : nil
+                        hint: selected && showsHints && index < 9 ? "⌃\(index + 1)" : nil
                     )
                 } : []
-                // Unselected spaces with several tabs: how many, and the
-                // first two by name.
-                let allTabs = store.tabs(in: workspace.workspaceID)
-                var tabSummary: String?
-                if !selected, allTabs.count > 1 {
-                    let names = allTabs.prefix(2).map { Self.tabTitle($0, store: store) }
-                    let more = allTabs.count - names.count
-                    tabSummary = "\(allTabs.count) tabs · " + names.joined(separator: " · ") + (more > 0 ? " +\(more)" : "")
+                if !selected, allTabs.count > 2 {
+                    tabs.append(.init(id: "", label: "+\(allTabs.count - 2) more", detail: "", selected: false, alert: false))
                 }
                 let finished = store.snapshot.panes.contains {
                     $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
@@ -708,10 +714,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     shortcut: number <= 9 ? "⌘\(number)" : "",
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
-                    finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : [],
+                    finished: finished, selected: selected, tabs: tabs,
                     hinting: showsHints,
-                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) },
-                    tabSummary: tabSummary
+                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
                 )
             }
             model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem,

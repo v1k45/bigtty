@@ -146,7 +146,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             case nil:
                 // What the pane is about (Claude's conversation title) over
                 // the program's name; the agent goes in the detail.
-                title = pane.shownTitle ?? agent ?? pane.displayName
+                title = (pane.label?.isEmpty == false ? pane.label : nil) ?? pane.title.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? machine.spaceInfo?.agentTitles[pane.paneID] ?? pane.shownTitle ?? agent ?? pane.displayName
                 symbol = agent == nil ? "terminal" : "sparkle"
             }
             let reason = attention.reason(for: pane.paneID)

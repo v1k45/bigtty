@@ -624,12 +624,14 @@ private final class TabRow: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = tab.selected ? Theme.sidebarRow.cgColor : nil
         }
-        icon.image = NSImage(systemSymbolName: tab.audible ? "speaker.wave.2.fill" : "terminal", accessibilityDescription: tab.audible ? "Playing audio" : nil)
+        // The "+N more" row (no tab id) opens the space.
+        let symbol = tab.id.isEmpty ? "ellipsis" : tab.audible ? "speaker.wave.2.fill" : "terminal"
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tab.audible ? "Playing audio" : nil)
         icon.symbolConfiguration = .init(pointSize: 10, weight: .regular)
         icon.contentTintColor = tab.audible ? .controlAccentColor : tab.selected ? .labelColor : .secondaryLabelColor
         label.stringValue = tab.label
         label.font = .systemFont(ofSize: 12)
-        label.textColor = tab.selected ? .labelColor : .secondaryLabelColor
+        label.textColor = tab.selected ? .labelColor : tab.id.isEmpty ? .tertiaryLabelColor : .secondaryLabelColor
         detail.stringValue = tab.hint ?? tab.detail
         if tab.hint != nil {
             detail.font = .systemFont(ofSize: 11, weight: .bold)

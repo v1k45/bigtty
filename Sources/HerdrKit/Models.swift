@@ -77,12 +77,20 @@ public struct Pane: Sendable, Codable, Equatable, Identifiable {
     public let terminalTitle: String?
     public let tokens: [String: String]?
     public let revision: Int
+    /// The agent's own session (Claude Code's session id), when herdr knows it.
+    public let agentSession: AgentSession?
+
+    public struct AgentSession: Sendable, Codable, Equatable {
+        public let agent: String?
+        public let value: String?
+    }
 
     enum CodingKeys: String, CodingKey {
         case paneID = "pane_id", terminalID = "terminal_id", workspaceID = "workspace_id"
         case tabID = "tab_id", focused, cwd, foregroundCwd = "foreground_cwd"
         case agentStatus = "agent_status", agent, displayAgent = "display_agent"
         case label, title, terminalTitle = "terminal_title_stripped", tokens, revision
+        case agentSession = "agent_session"
     }
 
     /// What the pane says it's about: its label, else the title its program

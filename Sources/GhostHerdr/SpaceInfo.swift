@@ -20,6 +20,8 @@ final class SpaceInfoCenter {
     private(set) var info: [String: Info] = [:]
     private var branches: [String: String] = [:]
     private var ports: [String: [Int]] = [:]
+    /// Agent conversation names by pane (Claude Code's session title).
+    private(set) var agentTitles: [String: String] = [:]
     /// Question text of blocked panes, read once per block.
     private var questions: [String: String] = [:]
     private var observers: [UUID: @MainActor () -> Void] = [:]
@@ -143,6 +145,10 @@ final class SpaceInfoCenter {
         lastSlow = Date()
         let dirs = Set(store.snapshot.workspaces.compactMap { leadPane($0).flatMap { $0.foregroundCwd ?? $0.cwd } })
         let panes = store.snapshot.panes.filter { $0.hostKind == nil }
+        let sessions = panes.compactMap { pane -> (pane: String, agent: String, id: String)? in
+            guard let session = pane.agentSession, let id = session.value, let agent = session.agent ?? pane.agent else { return nil }
+            return (pane.paneID, agent, id)
+        }
         let client = store.client
         let runner = runner()
         let known = shellPIDs
@@ -163,9 +169,16 @@ final class SpaceInfoCenter {
             for pane in panes {
                 if let pid = pids[pane.paneID + "|" + pane.terminalID] { shells[pane.workspaceID, default: []].insert(pid) }
             }
-            let (branches, listening, parents) = runner.ssh == nil
-                ? Self.localProbe(dirs: dirs, roots: shells.values.reduce(into: Set<Int32>()) { $0.formUnion($1) })
-                : Self.remoteProbe(dirs: dirs, runner: runner)
+            var titles: [String: String] = [:]
+            let (branches, listening, parents): ([String: String], [Int32: Set<Int>], [Int32: Int32])
+            if runner.ssh == nil {
+                (branches, listening, parents) = Self.localProbe(dirs: dirs, roots: shells.values.reduce(into: Set<Int32>()) { $0.formUnion($1) })
+                for session in sessions { titles[session.pane] = AgentTitles.local(agent: session.agent, sessionID: session.id) }
+            } else {
+                let remote = Self.remoteProbe(dirs: dirs, sessions: sessions.map { ($0.agent, $0.id) }, runner: runner)
+                (branches, listening, parents) = (remote.branches, remote.listening, remote.parents)
+                for session in sessions { titles[session.pane] = remote.titles[session.id] }
+            }
             var ports: [String: [Int]] = [:]
             for (workspace, roots) in shells {
                 var found = Set<Int>()
@@ -176,6 +189,10 @@ final class SpaceInfoCenter {
             }
             await MainActor.run {
                 self.shellPIDs = pids
+                if self.agentTitles != titles {
+                    self.agentTitles = titles
+                    self.info = [:] // re-announce: tab names changed
+                }
                 self.branches = branches
                 self.ports = ports
                 self.refreshing = false
@@ -197,8 +214,8 @@ final class SpaceInfoCenter {
 
     /// Another machine: one SSH command for branches, sockets and the
     /// process tree.
-    nonisolated private static func remoteProbe(dirs: Set<String>, runner: CommandRunner)
-        -> ([String: String], [Int32: Set<Int>], [Int32: Int32])
+    nonisolated private static func remoteProbe(dirs: Set<String>, sessions: [(agent: String, id: String)], runner: CommandRunner)
+        -> (branches: [String: String], listening: [Int32: Set<Int>], parents: [Int32: Int32], titles: [String: String])
     {
         let script = """
         for d in "$@"; do b=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null) && printf 'B\t%s\t%s\n' "$d" "$b"; done
@@ -206,23 +223,30 @@ final class SpaceInfoCenter {
         ss -ltnpH 2>/dev/null || true
         echo '--parents'
         ps -eo pid=,ppid= 2>/dev/null || ps -axo pid=,ppid=
+        echo '--titles'
+        \(AgentTitles.remoteScript(sessions: sessions))
         """
-        guard let out = runner.run("sh", ["-c", script, "sh"] + dirs.sorted()) else { return ([:], [:], [:]) }
+        guard let out = runner.run("sh", ["-c", script, "sh"] + dirs.sorted()) else { return ([:], [:], [:], [:]) }
+        var titleLines: [String: [Substring]] = [:]
         var branches: [String: String] = [:]
         var section = "branches"
         var portLines: [Substring] = [], parentLines: [Substring] = []
         for line in out.split(separator: "\n") {
             if line == "--ports" { section = "ports"; continue }
             if line == "--parents" { section = "parents"; continue }
+            if line == "--titles" { section = "titles"; continue }
             switch section {
             case "branches":
                 let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
                 if parts.count == 3, parts[0] == "B", !parts[2].isEmpty { branches[parts[1]] = parts[2] == "HEAD" ? "detached" : parts[2] }
             case "ports": portLines.append(line)
+            case "titles":
+                if line.hasPrefix("T\t") { titleLines["", default: []].append(line.dropFirst(2)) }
             default: parentLines.append(line)
             }
         }
-        return (branches, ProcessPorts.parseSS(portLines), ProcessPorts.parseParents(parentLines))
+        let titles = AgentTitles.parseRemote(titleLines[""] ?? [])
+        return (branches, ProcessPorts.parseSS(portLines), ProcessPorts.parseParents(parentLines), titles)
     }
 }
 
