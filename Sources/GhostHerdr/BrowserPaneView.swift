@@ -13,12 +13,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private let reload = NSButton()
     private let external = NSButton()
     private let closeButton = NSButton()
-    /// Toolbar buttons of loaded web extensions (uBlock Origin Lite…).
-    private var extensionButtons: [NSButton] = []
-    private var extensionActions: [() -> Void] = []
     private var extensionObserver: NSObjectProtocol?
-    /// Where an extension's popup points: its toolbar button.
-    var extensionAnchor: NSView? { extensionButtons.first }
+    /// Where an extension's popup points: the address bar. Extensions have
+    /// no toolbar buttons (they'd crowd it); they're in the toolbar's
+    /// right-click menu.
+    var extensionAnchor: NSView? { addressBox }
     /// The pane's × button.
     var onClose: (() -> Void)?
     private let address = NSTextField()
@@ -260,29 +259,49 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         if let extensionObserver { NotificationCenter.default.removeObserver(extensionObserver) }
     }
 
-    /// One toolbar button per extension with an action, left of ↗.
-    func refreshExtensionButtons() {
-        extensionButtons.forEach { $0.removeFromSuperview() }
-        let actions = WebExtensions.actions(for: self)
-        extensionActions = actions.map(\.perform)
-        extensionButtons = actions.enumerated().map { index, action in
-            let button = NSButton()
-            button.image = action.icon ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: action.name)
-            button.imageScaling = .scaleProportionallyDown
-            button.isBordered = false
-            button.toolTip = action.badge.isEmpty ? action.name : "\(action.name) · \(action.badge)"
-            button.tag = index
-            button.target = self
-            button.action = #selector(extensionClicked(_:))
-            addSubview(button)
-            return button
+    /// Extensions changed: the toolbar menu is rebuilt when it opens, so
+    /// there's nothing to lay out.
+    func refreshExtensionButtons() {}
+
+    /// Right-click on the toolbar or the address: the page's actions and
+    /// each extension (uBlock Origin Lite's popup opens under the address).
+    private func toolbarMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Reload Page", keyEquivalent: "") { [weak self] in self?.reloadPage() })
+        menu.addItem(ClosureMenuItem(title: "Open in Default Browser", keyEquivalent: "") { [weak self] in self?.openExternally() })
+        if let url = webView.url {
+            menu.addItem(ClosureMenuItem(title: "Copy Address", keyEquivalent: "") { [weak self] in
+                let shown = self?.localhostMapper?.display(url) ?? url
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(shown.absoluteString, forType: .string)
+            })
         }
-        needsLayout = true
+        let actions = WebExtensions.actions(for: self)
+        if !actions.isEmpty {
+            menu.addItem(.separator())
+            for action in actions {
+                let title = action.badge.isEmpty ? action.name : "\(action.name) (\(action.badge))"
+                let item = ClosureMenuItem(title: title, keyEquivalent: "") { action.perform() }
+                item.image = action.icon.map { icon in
+                    let small = icon.copy() as? NSImage ?? icon
+                    small.size = NSSize(width: 16, height: 16)
+                    return small
+                }
+                menu.addItem(item)
+            }
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Browser Settings…", keyEquivalent: "") {
+            NSApp.sendAction(#selector(AppDelegate.showSettings(_:)), to: nil, from: nil)
+        })
+        return menu
     }
 
-    @objc private func extensionClicked(_ sender: NSButton) {
-        guard extensionActions.indices.contains(sender.tag) else { return }
-        extensionActions[sender.tag]()
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        // The page has its own menu; the toolbar gets ours.
+        guard point.y >= bounds.height - Self.toolbarHeight else { return super.menu(for: event) }
+        return toolbarMenu()
     }
 
     @available(*, unavailable)
@@ -316,12 +335,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let roomy = b.width >= 300, tight = b.width < 200
         forward.isHidden = pageFullscreen || tight
         external.isHidden = pageFullscreen || !roomy
-        let extensionsShown = roomy ? extensionButtons.count : 0
-        for (index, button) in extensionButtons.enumerated() {
-            button.frame = NSRect(x: b.width - 70 - CGFloat(index) * 22, y: y + 1, width: 18, height: 18)
-            button.isHidden = pageFullscreen || index >= extensionsShown
-        }
-        let right = (roomy ? 52 : 30) + CGFloat(extensionsShown) * 22
+        let right: CGFloat = roomy ? 52 : 30
         let fieldX: CGFloat = tight ? 30 : 52
         let fieldWidth = max(40, b.width - fieldX - right - 4)
         addressBox.frame = NSRect(x: fieldX, y: y, width: fieldWidth, height: 20)
