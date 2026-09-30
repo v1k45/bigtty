@@ -168,6 +168,7 @@ final class SettingsWindowController: NSWindowController {
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(page("General", symbol: "gearshape", view: buildGeneral()))
         tabs.addTabViewItem(page("Terminal", symbol: "terminal", view: buildTerminal()))
+        tabs.addTabViewItem(page("Browser", symbol: "globe", view: buildBrowser()))
         window.contentViewController = tabs
         window.toolbarStyle = .preference
         // Reflect reloads that happen while open (config edited elsewhere).
@@ -269,11 +270,17 @@ final class SettingsWindowController: NSWindowController {
             [label("Dim unfocused panes:"), dim],
             [label("Translucent window:"), stack(translucent, "The sidebar’s material also shows between panes.")],
             [label("Notify when an agent:"), stack(notify, "Only for panes you aren’t looking at.")],
-            [label("Open terminal links:"), links],
             [label("Go to pane:"), stack(paneKeys, "⌥ alone is quicker, but then ⌥1–9 no longer type ¡ ™ £ … or reach terminal apps.")],
-            [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
-            [label("Browser extensions:"), extensionsRow()],
             [label("herdr:"), herdr],
+        ])
+    }
+
+    /// Browser panes: where terminal links open, video full screen, extensions.
+    private func buildBrowser() -> NSView {
+        form([
+            [label("Open terminal links:"), stack(links, "⌘-click on a web link in a terminal.")],
+            [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
+            [label("Extensions:"), extensionsRow()],
         ])
     }
 
@@ -460,10 +467,11 @@ final class SettingsWindowController: NSWindowController {
     /// The error line comes and goes; the Terminal page resizes with it.
     private func fitTerminalPage() {
         guard let tabs = window?.contentViewController as? NSTabViewController,
-              let page = tabs.tabViewItems.last?.viewController else { return }
+              let index = tabs.tabViewItems.firstIndex(where: { $0.label == "Terminal" }),
+              let page = tabs.tabViewItems[index].viewController else { return }
         page.view.layoutSubtreeIfNeeded()
         page.preferredContentSize = page.view.fittingSize
-        if tabs.selectedTabViewItemIndex == tabs.tabViewItems.count - 1, let window {
+        if tabs.selectedTabViewItemIndex == index, let window {
             var frame = window.frame
             let size = window.frameRect(forContentRect: NSRect(origin: .zero, size: page.view.fittingSize)).size
             frame.origin.y += frame.height - size.height

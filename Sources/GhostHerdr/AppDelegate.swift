@@ -499,6 +499,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reconcileSpaceWindows()
     }
 
+    /// The About panel: what GhostHerdr is, the herdr it talks to, where to
+    /// go next, and whose work it stands on.
+    @objc func showAbout(_: Any?) {
+        let body = NSFont.systemFont(ofSize: 11)
+        let small = NSFont.systemFont(ofSize: 10)
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        center.paragraphSpacing = 6
+        let text = NSMutableAttributedString()
+        func add(_ string: String, font: NSFont = body, color: NSColor = .labelColor, link: String? = nil) {
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: center]
+            if let link { attributes[.link] = URL(string: link) }
+            text.append(NSAttributedString(string: string, attributes: attributes))
+        }
+        add("A native Mac home for your terminal agents.\n", color: .secondaryLabelColor)
+        let endpoint = localStore.client.endpoint
+        var herdr = "herdr not running"
+        if case let .connected(version) = localStore.state { herdr = "herdr \(version)" }
+        let session = manager.activeLocal.sessionName
+        let others = manager.all.count - 1
+        add("\(herdr) · session \(session)" + (others > 0 ? " · \(others) more connected" : "") + "\n", font: small, color: .tertiaryLabelColor)
+        add((endpoint.herdrBinary as NSString).abbreviatingWithTildeInPath + "\n\n", font: small, color: .tertiaryLabelColor)
+        add("GitHub", link: "https://github.com/v1k45/ghostherdr")
+        add("  ·  ")
+        add("Report an Issue", link: "https://github.com/v1k45/ghostherdr/issues/new")
+        add("  ·  ")
+        add("herdr", link: "https://herdr.dev")
+        add("\n\nBuilt on ", font: small, color: .secondaryLabelColor)
+        add("herdr", font: small, link: "https://herdr.dev")
+        add(", ", font: small, color: .secondaryLabelColor)
+        add("Ghostty", font: small, link: "https://ghostty.org")
+        add(" via ", font: small, color: .secondaryLabelColor)
+        add("libghostty-spm", font: small, link: "https://github.com/Lakr233/libghostty-spm")
+        add(", and themes from ", font: small, color: .secondaryLabelColor)
+        add("iTerm2-Color-Schemes", font: small, link: "https://github.com/mbadolato/iTerm2-Color-Schemes")
+        add(".", font: small, color: .secondaryLabelColor)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "GhostHerdr",
+            .applicationVersion: version,
+            .version: "",
+            .credits: text,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "MIT licensed · © 2026 the GhostHerdr authors",
+        ])
+        NSApp.activate()
+    }
+
     /// Edit ▸ Paste: an image into a terminal becomes a file path (see
     /// `MainWindowController.pasteImage`); anything else is a normal paste.
     @objc func pasteSmart(_ sender: Any?) {
