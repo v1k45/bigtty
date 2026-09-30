@@ -53,6 +53,74 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     })();
     """
 
+    /// "Full screen in the pane": a page's full screen request makes the
+    /// element fill the web view instead of taking over the display. The
+    /// Fullscreen API is answered in-page (fullscreenElement, change events,
+    /// Esc to leave), and a frame asks its parent to fill with the frame.
+    static let paneFullscreen = """
+    (() => {
+      if (window.__ghrPaneFullscreen) return;
+      window.__ghrPaneFullscreen = true;
+      let current = null;
+      const cls = '__ghr_fs';
+      const style = document.createElement('style');
+      style.textContent = `.${cls}{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;transform:none!important;z-index:2147483647!important;background-color:#000!important;object-fit:contain}`;
+      const fire = (el) => {
+        for (const type of ['fullscreenchange', 'webkitfullscreenchange'])
+          (el || document).dispatchEvent(new Event(type, { bubbles: true }));
+      };
+      const tellApp = (on) => {
+        if (window !== window.top) { window.parent.postMessage({ __ghrFullscreen: on }, '*'); return; }
+        try { window.webkit.messageHandlers.ghrFullscreen.postMessage(on); } catch (_) {}
+      };
+      function enter() {
+        const el = this;
+        if (!style.isConnected) (document.head || document.documentElement).appendChild(style);
+        if (current && current !== el) current.classList.remove(cls);
+        current = el;
+        el.classList.add(cls);
+        document.documentElement.style.setProperty('overflow', 'hidden', 'important');
+        fire(el); tellApp(true);
+        return Promise.resolve();
+      }
+      function exit() {
+        const el = current;
+        if (!el) return Promise.resolve();
+        el.classList.remove(cls);
+        current = null;
+        document.documentElement.style.removeProperty('overflow');
+        fire(el); tellApp(false);
+        return Promise.resolve();
+      }
+      for (const name of ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen'])
+        Element.prototype[name] = enter;
+      HTMLVideoElement.prototype.webkitEnterFullscreen = enter;
+      HTMLVideoElement.prototype.webkitEnterFullScreen = enter;
+      for (const name of ['exitFullscreen', 'webkitExitFullscreen', 'webkitCancelFullScreen'])
+        Document.prototype[name] = exit;
+      const get = (value) => ({ get: value, configurable: true });
+      for (const name of ['fullscreenElement', 'webkitFullscreenElement', 'webkitCurrentFullScreenElement'])
+        Object.defineProperty(Document.prototype, name, get(() => current));
+      for (const name of ['fullscreen', 'webkitIsFullScreen'])
+        Object.defineProperty(Document.prototype, name, get(() => !!current));
+      for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled'])
+        Object.defineProperty(Document.prototype, name, get(() => true));
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && current) exit(); }, true);
+      // A frame going full screen: fill with the frame itself.
+      window.addEventListener('message', (e) => {
+        if (!e.data || typeof e.data.__ghrFullscreen !== 'boolean') return;
+        const frame = Array.from(document.querySelectorAll('iframe')).find(f => f.contentWindow === e.source);
+        if (!frame) return;
+        if (e.data.__ghrFullscreen) enter.call(frame); else if (current === frame) exit();
+      });
+    })();
+    """
+
+    /// The page fills the pane (full screen in the pane): no toolbar.
+    private var pageFullscreen = false {
+        didSet { if pageFullscreen != oldValue { needsLayout = true } }
+    }
+
     private var audibleFrames: [String: Bool] = [:]
     /// Some frame is playing sound; shown on the tab.
     private(set) var isAudible = false {
@@ -93,8 +161,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             source: AutomationScript.consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true
         ))
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Video full screen (YouTube's button, the page's requestFullscreen).
+        // Video full screen (YouTube's button, the page's requestFullscreen):
+        // inside the pane by default, or the whole display.
         config.preferences.isElementFullscreenEnabled = true
+        if Settings.browserFullscreen == .pane {
+            content.addUserScript(WKUserScript(source: Self.paneFullscreen, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         // Identify as the installed Safari: WebKit's default string lacks
         // Safari's version, and sites then call the browser outdated.
         config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Safari/605.1.15"
@@ -108,6 +180,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         webView.uiDelegate = self
         webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrConsole")
         webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrMedia")
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrFullscreen")
         webView.allowsBackForwardNavigationGestures = true
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -188,7 +261,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let b = bounds
         let theme = Theme.current
         layer?.backgroundColor = theme?.pane.cgColor
-        let h = Self.toolbarHeight
+        let h = pageFullscreen ? 0 : Self.toolbarHeight
+        for view in [back, forward, closeButton, reload, external, addressBox, toolbarLine] as [NSView] { view.isHidden = pageFullscreen }
         let y = b.height - h + (h - 24) / 2
         back.frame = NSRect(x: 8, y: y, width: 26, height: 24)
         forward.frame = NSRect(x: 34, y: y, width: 26, height: 24)
@@ -359,6 +433,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     // MARK: - Console and load state
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "ghrFullscreen" {
+            pageFullscreen = (message.body as? Bool) == true
+            return
+        }
         if message.name == "ghrMedia" {
             let frame = message.frameInfo.isMainFrame ? "main" : message.frameInfo.request.url?.absoluteString ?? "frame"
             audibleFrames[frame] = (message.body as? Bool) == true ? true : nil
@@ -405,6 +483,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     }
 
     func webView(_: WKWebView, didCommit _: WKNavigation!) {
+        pageFullscreen = false
         // A new page: its old media is gone.
         audibleFrames.removeAll()
         isAudible = false

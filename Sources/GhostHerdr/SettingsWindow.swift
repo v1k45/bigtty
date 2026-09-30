@@ -55,6 +55,23 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "terminalOpacity") }
     }
 
+    enum BrowserFullscreen: String, CaseIterable {
+        case pane, screen
+
+        var title: String {
+            switch self {
+            case .pane: "Fill the pane"
+            case .screen: "Whole screen"
+            }
+        }
+    }
+
+    /// Where a page's full screen (a video's button) goes.
+    static var browserFullscreen: BrowserFullscreen {
+        get { UserDefaults.standard.string(forKey: "browserFullscreen").flatMap(BrowserFullscreen.init) ?? .pane }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "browserFullscreen") }
+    }
+
     static var notify: Notify {
         get { UserDefaults.standard.string(forKey: "notify").flatMap(Notify.init) ?? .needsYouOrFinishes }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "notify") }
@@ -87,6 +104,7 @@ final class SettingsWindowController: NSWindowController {
     private let opacity = NSPopUpButton()
     private let notify = NSPopUpButton()
     private let links = NSPopUpButton()
+    private let fullscreen = NSPopUpButton()
     private let herdr = NSTextField(labelWithString: "")
 
     private let engine = NSPopUpButton()
@@ -189,6 +207,9 @@ final class SettingsWindowController: NSWindowController {
         for item in Settings.Links.allCases { links.addItem(withTitle: item.title) }
         links.target = self
         links.action = #selector(linksChanged)
+        for item in Settings.BrowserFullscreen.allCases { fullscreen.addItem(withTitle: item.title) }
+        fullscreen.target = self
+        fullscreen.action = #selector(fullscreenChanged)
         sidebar.target = self
         sidebar.action = #selector(sidebarChanged)
         dim.target = self
@@ -204,6 +225,7 @@ final class SettingsWindowController: NSWindowController {
             [label("Translucent window:"), stack(translucent, "The sidebar’s material also shows between panes.")],
             [label("Notify when an agent:"), stack(notify, "Only for panes you aren’t looking at.")],
             [label("Open terminal links:"), links],
+            [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
             [label("herdr:"), herdr],
         ])
     }
@@ -303,6 +325,7 @@ final class SettingsWindowController: NSWindowController {
         opacity.selectItem(at: opacityIndex)
         notify.selectItem(at: Settings.Notify.allCases.firstIndex(of: Settings.notify) ?? 0)
         links.selectItem(at: Settings.Links.allCases.firstIndex(of: Settings.links) ?? 0)
+        fullscreen.selectItem(at: Settings.BrowserFullscreen.allCases.firstIndex(of: Settings.browserFullscreen) ?? 0)
         herdr.stringValue = herdrDescription()
 
         engine.selectItem(at: TerminalMode.allCases.firstIndex(of: Settings.terminalMode) ?? 0)
@@ -386,6 +409,10 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func notifyChanged() {
         Settings.notify = Settings.Notify.allCases[notify.indexOfSelectedItem]
+    }
+
+    @objc private func fullscreenChanged() {
+        Settings.browserFullscreen = Settings.BrowserFullscreen.allCases[max(0, fullscreen.indexOfSelectedItem)]
     }
 
     @objc private func linksChanged() {
