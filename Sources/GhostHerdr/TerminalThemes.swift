@@ -291,7 +291,10 @@ enum TerminalAppearance {
             if !family.isEmpty { builder.withFontFamily(family) }
             if Settings.fontSize > 0 { builder.withFontSize(Float(Settings.fontSize)) }
             if let ratio = Settings.contrast.ratio { builder.withMinimumContrast(ratio) }
-            if Settings.terminalOpacity < 1 { builder.withBackgroundOpacity(Settings.terminalOpacity) }
+            // Translucent terminals: Ghostty leaves default-background cells
+            // clear and the pane card paints the color once, at the chosen
+            // opacity (both painting it doubled the opacity toward black).
+            if Settings.terminalOpacity < 1 { builder.withBackgroundOpacity(0) }
         }
     }
 

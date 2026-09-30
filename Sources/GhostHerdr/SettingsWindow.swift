@@ -51,7 +51,7 @@ enum Settings {
     /// Terminal background opacity (1 = opaque); below 1 the window's
     /// material shows through terminals too.
     static var terminalOpacity: Double {
-        get { UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 1 }
+        get { UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 0.7 }
         set { UserDefaults.standard.set(newValue, forKey: "terminalOpacity") }
     }
 
@@ -335,7 +335,7 @@ final class SettingsWindowController: NSWindowController {
         ])
     }
 
-    private static let opacities: [(String, Double)] = [("Opaque", 1), ("Translucent (90%)", 0.9), ("More translucent (80%)", 0.8), ("Glass (70%)", 0.7)]
+    private static let opacities: [(String, Double)] = [("Opaque", 1), ("Translucent (90%)", 0.9), ("Translucent (80%)", 0.8), ("Frosted (70%)", 0.7), ("Glass (50%)", 0.5)]
 
     /// Installed fixed-pitch families, the usual terminal fonts.
     private static func monospacedFamilies() -> [String] {
