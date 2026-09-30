@@ -61,13 +61,27 @@ final class Machine {
     private var pingTimer: Timer?
     private var attempts = 0
 
-    /// This Mac's server.
-    init(local endpoint: HerdrEndpoint) {
-        id = "local"
+    /// This Mac's server for one herdr session: the default one (or the
+    /// one GHOSTHERDR_SESSION names) is "local", other named sessions
+    /// "session:<name>".
+    init(local endpoint: HerdrEndpoint, id: String = "local") {
+        self.id = id
         name = "This Mac"
         kind = .local
+        session = endpoint.session
         makeStore(endpoint: endpoint)
     }
+
+    /// The herdr session this Mac's machine shows; nil is the default one.
+    private(set) var session: String?
+
+    /// How the session switcher names it.
+    var sessionName: String { session ?? "default" }
+
+    /// What host panes created here are tagged with, so their state is
+    /// only pruned while their own server is connected (nil: the default
+    /// local session, as before sessions).
+    var hostTag: String? { id == "local" ? nil : id }
 
     /// A machine over SSH; `connect()` brings it up.
     init(id: String, name: String, target: String, session: String?) {
@@ -98,7 +112,8 @@ final class Machine {
 
     private func makeStore(endpoint: HerdrEndpoint) {
         let store = SessionStore(endpoint: endpoint)
-        let attention = AttentionCenter(store: store, machineName: isLocal ? nil : name)
+        // Notifications say where: a remote machine, or a session here other than the default.
+        let attention = AttentionCenter(store: store, machineName: isLocal ? session.map { "\($0) session" } : name)
         attention.viewedPanes = { [weak self] in self?.viewedPanes() ?? [] }
         attention.reveal = { [weak self] pane in self?.reveal(pane) }
         let spaceInfo = SpaceInfoCenter(store: store, attention: attention, runner: { [weak self] in self?.runner ?? .local })

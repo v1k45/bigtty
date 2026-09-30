@@ -13,6 +13,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case pane(String, Pane)
         case newSpace
         case connectMachine
+        /// A herdr session on this Mac (nil: the default one).
+        case session(String?)
         /// A menu action by selector, sent to the key window.
         case action(Selector)
     }
@@ -64,20 +66,40 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 haystack: "\(machine.name) \(machine.target ?? "")".lowercased()
             ))
         }
+        // Sessions on this Mac, when there is more than the default one.
+        if manager.knownSessions.count > 1 {
+            let active = manager.activeLocal.session
+            for info in manager.knownSessions {
+                let machine = manager.localMachines.first { $0.session == info.name }
+                let waiting = machine?.attention?.attention.needingAttention.count ?? 0
+                let spaces = machine?.store?.snapshot.workspaces.count ?? 0
+                let detail = info.name == active ? "current"
+                    : !info.running ? "stopped · start"
+                    : waiting > 0 ? "\(waiting) need\(waiting == 1 ? "s" : "") you"
+                    : "\(spaces) space\(spaces == 1 ? "" : "s")"
+                items.append(Item(
+                    section: "Sessions", title: info.title, detail: detail, symbol: "rectangle.stack",
+                    alert: waiting > 0 && info.name != active, target: .session(info.name),
+                    haystack: "session \(info.title)".lowercased()
+                ))
+            }
+        }
         var number = 0
-        for machine in manager.all {
+        let visibleLocal = manager.activeLocal
+        for machine in [visibleLocal] + manager.remotes + manager.localMachines.filter({ $0 !== visibleLocal }) {
             guard let store = machine.store, let spaceInfo = machine.spaceInfo, let attention = machine.attention,
                   case .connected = store.state else { continue }
-            let suffix = machine.isLocal ? "" : " · \(machine.name)"
+            let visible = machine === visibleLocal || !machine.isLocal
+            let suffix = !machine.isLocal ? " · \(machine.name)" : visible ? "" : " · \(machine.sessionName) session"
             for workspace in store.snapshot.workspaces {
-                number += 1
+                if visible { number += 1 }
                 let info = spaceInfo.info[workspace.workspaceID]
                 let detail = ([info?.line, info?.branch].compactMap { $0 }.first ?? "") + suffix
                 items.append(Item(
-                    section: "Spaces", title: workspace.label, detail: detail + (number <= 9 ? "   ⌘\(number)" : ""),
+                    section: "Spaces", title: workspace.label, detail: detail + (visible && number <= 9 ? "   ⌘\(number)" : ""),
                     symbol: "square.stack", alert: info?.lineIsAlert == true,
                     target: .space(SpaceRef(machine: machine.id, workspace: workspace.workspaceID)),
-                    haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name)".lowercased()
+                    haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.isLocal ? machine.sessionName : "")".lowercased()
                 ))
             }
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
@@ -87,6 +109,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         items.append(Item(section: "Actions", title: "Open Browser Here", detail: "⇧⌥⌘B", symbol: "globe", alert: false, target: .action(#selector(PaneActions.openBrowserHere(_:))), haystack: "open browser here this pane web replace"))
         items.append(Item(section: "Actions", title: "Split with Browser", detail: "⌥⌘B", symbol: "rectangle.split.2x1", alert: false, target: .action(#selector(PaneActions.newBrowserPane(_:))), haystack: "split browser pane web"))
         items.append(Item(section: "Actions", title: "Open Files Here", detail: "⇧⌥⌘F", symbol: "doc.text", alert: false, target: .action(#selector(PaneActions.openFilesHere(_:))), haystack: "open files here this pane viewer"))
+        items.append(Item(section: "Actions", title: "New Session…", detail: "⌃⌘N", symbol: "rectangle.stack.badge.plus", alert: false, target: .action(#selector(PaneActions.newSession(_:))), haystack: "new session herdr"))
         items.append(Item(section: "Actions", title: "Connect a Machine…", detail: "user@host", symbol: "server.rack", alert: false, target: .connectMachine, haystack: "connect machine ssh remote server add"))
         return items
     }
@@ -140,7 +163,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let matched = items.map { ($0, score($0)) }.filter { $0.1 > 0 }
             .sorted { $0.1 > $1.1 }.map(\.0)
         // Waiting agents first within their section.
-        let order = ["Machines", "Spaces", "Agents", "Panes", "Actions"]
+        let order = ["Sessions", "Machines", "Spaces", "Agents", "Panes", "Actions"]
         rows = []
         for section in order {
             let group = matched.filter { $0.section == section }.sorted { $0.alert && !$1.alert }

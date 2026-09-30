@@ -30,12 +30,21 @@ struct SidebarModel: Equatable {
         var audible = false
     }
 
+    /// This Mac's session switcher.
+    struct SessionChip: Equatable {
+        let name: String
+        /// Panes in this Mac's other sessions that need you.
+        let othersNeedingYou: Int
+    }
+
     struct Machine: Equatable {
         let id: String
         let name: String
         let status: String
         let statusIsProblem: Bool
         var statusTip: String? = nil
+        /// Set for this Mac: its header switches sessions.
+        var session: SessionChip? = nil
         let spaces: [Space]
     }
 
@@ -53,6 +62,7 @@ final class SidebarView: NSView {
     var onNewSpace: (() -> Void)?
     var onMachineClick: ((String) -> Void)?
     var onConnectMachine: (() -> Void)?
+    var onSessionMenu: (() -> NSMenu?)?
 
     private let scroll = NSScrollView()
     private let list = FlippedView()
@@ -141,7 +151,10 @@ final class SidebarView: NSView {
         list.subviews.forEach { $0.removeFromSuperview() }
         for machine in model.machines {
             let header = MachineHeader(machine: machine)
-            header.onClick = { [weak self] in self?.onMachineClick?(machine.id) }
+            header.onClick = { [weak self, weak header] in
+                guard let self else { return }
+                if machine.session != nil, let header { self.popUpSessionMenu(under: header) } else { self.onMachineClick?(machine.id) }
+            }
             list.addSubview(header)
             if let message = model.message, machine == model.machines.first {
                 list.addSubview(MessageRow(text: message))
@@ -166,6 +179,23 @@ final class SidebarView: NSView {
             y += height + 3
         }
         list.frame = NSRect(x: 0, y: 0, width: width, height: max(y + 8, scroll.contentSize.height))
+    }
+
+    /// Opens the session switcher under this Mac's header; false if the
+    /// header isn't there.
+    @discardableResult
+    func popUpSessionMenu() -> Bool {
+        guard let header = list.subviews.compactMap({ $0 as? MachineHeader }).first(where: \.isSessionSwitcher) else { return false }
+        header.scrollToVisible(header.bounds)
+        popUpSessionMenu(under: header)
+        return true
+    }
+
+    private func popUpSessionMenu(under header: MachineHeader) {
+        guard let menu = onSessionMenu?() else { return }
+        header.pressed = true
+        menu.popUp(positioning: nil, at: NSPoint(x: 6, y: header.bounds.maxY + 2), in: header)
+        header.pressed = false
     }
 
     @objc private func connectClicked() { onConnectMachine?() }
@@ -255,9 +285,18 @@ private final class MachineHeader: NSView, SidebarRow {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
+    /// This Mac's session: name, chevron, and a badge for the others.
+    private let chip = NSView()
+    private let chipLabel = NSTextField(labelWithString: "")
+    private let chipChevron = NSImageView()
+    private let chipBadge = NSTextField(labelWithString: "")
+    let isSessionSwitcher: Bool
+    private var hovering = false { didSet { updateChip() } }
+    var pressed = false { didSet { updateChip() } }
 
     init(machine: SidebarModel.Machine) {
         isProblem = machine.statusIsProblem || machine.status.contains("not running")
+        isSessionSwitcher = machine.session != nil
         super.init(frame: .zero)
         toolTip = isProblem ? "Click for details" : nil
         icon.image = NSImage(systemSymbolName: machine.name == "This Mac" ? "laptopcomputer" : "server.rack", accessibilityDescription: nil)
@@ -272,7 +311,48 @@ private final class MachineHeader: NSView, SidebarRow {
         status.textColor = machine.statusIsProblem ? .systemOrange : .secondaryLabelColor
         status.alignment = .right
         for view in [icon, name, status] { addSubview(view) }
+        if let session = machine.session {
+            chip.wantsLayer = true
+            chip.layer?.cornerRadius = 6
+            chipLabel.stringValue = session.name
+            chipLabel.font = .systemFont(ofSize: 11, weight: .medium)
+            chipLabel.textColor = .labelColor
+            chipLabel.lineBreakMode = .byTruncatingTail
+            chipChevron.image = NSImage(systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: "Switch session")
+            chipChevron.symbolConfiguration = .init(pointSize: 8.5, weight: .semibold)
+            chipChevron.contentTintColor = .secondaryLabelColor
+            chipBadge.stringValue = "\(session.othersNeedingYou)"
+            chipBadge.font = .monospacedDigitSystemFont(ofSize: 9.5, weight: .bold)
+            chipBadge.textColor = .white
+            chipBadge.alignment = .center
+            chipBadge.wantsLayer = true
+            chipBadge.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            chipBadge.layer?.cornerRadius = 7
+            chipBadge.isHidden = session.othersNeedingYou == 0
+            for view in [chipLabel, chipChevron, chipBadge] as [NSView] { chip.addSubview(view) }
+            addSubview(chip)
+            toolTip = session.othersNeedingYou > 0
+                ? "Session “\(session.name)” · \(session.othersNeedingYou) waiting in other sessions · ⇧⌘S to switch"
+                : "Session “\(session.name)” · click or ⇧⌘S to switch sessions"
+            updateChip()
+        }
     }
+
+    private func updateChip() {
+        guard isSessionSwitcher else { return }
+        let alpha: CGFloat = pressed ? 0.16 : hovering ? 0.11 : 0.06
+        chip.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(alpha).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        guard isSessionSwitcher else { return }
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with _: NSEvent) { hovering = true }
+    override func mouseExited(with _: NSEvent) { hovering = false }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
@@ -289,7 +369,20 @@ private final class MachineHeader: NSView, SidebarRow {
         let nameWidth = min(ceil(name.intrinsicContentSize.width) + 2, bounds.width * 0.5)
         name.frame = NSRect(x: 29, y: 10, width: nameWidth, height: 15)
         let statusX = 29 + nameWidth + 8
-        status.frame = NSRect(x: statusX, y: 10, width: bounds.width - statusX - 10, height: 15)
+        var right = bounds.width - 4
+        if isSessionSwitcher {
+            let badge = chipBadge.isHidden ? 0 : max(14, ceil(chipBadge.intrinsicContentSize.width) + 8)
+            let text = min(ceil(chipLabel.intrinsicContentSize.width) + 6, max(30, bounds.width * 0.45))
+            let width = 8 + text + 4 + 9 + (badge > 0 ? 5 + badge : 0) + 7
+            chip.frame = NSRect(x: bounds.width - 4 - width, y: 6, width: width, height: 22)
+            chipLabel.frame = NSRect(x: 8, y: 3.5, width: text, height: 15)
+            chipChevron.frame = NSRect(x: 8 + text + 4, y: 6, width: 9, height: 10)
+            chipBadge.frame = NSRect(x: 8 + text + 4 + 9 + 5, y: 4, width: badge, height: 14)
+            right = chip.frame.minX - 6
+        } else {
+            right = bounds.width - 10
+        }
+        status.frame = NSRect(x: statusX, y: 10, width: max(0, right - statusX), height: 15)
         status.lineBreakMode = .byTruncatingHead
     }
 }

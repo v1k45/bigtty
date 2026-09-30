@@ -24,6 +24,8 @@ import AppKit
     func previousTab(_ sender: Any?)
     func newWorkspace(_ sender: Any?)
     func newSpaceHere(_ sender: Any?)
+    func newSession(_ sender: Any?)
+    func showSessionSwitcher(_ sender: Any?)
     func renameSpace(_ sender: Any?)
     func closeSpace(_ sender: Any?)
     func makeTextBigger(_ sender: Any?)
@@ -72,6 +74,7 @@ enum MainMenu {
         item(file, "New Tab", #selector(PaneActions.newTab(_:)), "t")
         item(file, "New Browser Tab", #selector(PaneActions.newBrowserTab(_:)), "t", [.command, .option])
         item(file, "New Window", #selector(AppDelegate.newWindow(_:)), "n", [.command, .shift])
+        item(file, "New Session…", #selector(PaneActions.newSession(_:)), "n", [.command, .control])
         file.addItem(.separator())
         item(file, "Connect Machine…", #selector(AppDelegate.connectMachine(_:)), "k", [.command, .option])
         item(file, "Open Location…", #selector(PaneActions.openLocation(_:)), "l")
@@ -154,6 +157,7 @@ enum MainMenu {
 
         let tabs = submenu(main, "Go")
         item(tabs, "Jump To…", #selector(AppDelegate.showJump(_:)), "k")
+        item(tabs, "Switch Session…", #selector(PaneActions.showSessionSwitcher(_:)), "s", [.command, .shift])
         item(tabs, "Next Pane That Needs You", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
         tabs.addItem(.separator())
         // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and

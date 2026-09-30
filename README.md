@@ -45,6 +45,10 @@ GhostHerdr is the window onto it.
   bare `Cart.tsx` in a table) and it opens right there: syntax highlighted,
   at the line, images and PDFs previewed. The Changes pane shows the git diff
   as it happens.
+- **Sessions for separate worlds.** Keep work, side projects or a client in
+  their own herdr sessions and flip between them from the sidebar (⇧⌘S).
+  Sessions you're not looking at stay connected, so an agent waiting there
+  still badges the switcher and notifies you.
 - **Every machine in one sidebar.** Connect a server over SSH and its spaces
   sit under yours: terminals, agents, attention, browser panes that reach its
   `localhost`, its files. One app, all your boxes.
@@ -102,7 +106,8 @@ upgrades it and keeps your running panes alive.
    the git changes.
 5. Grab a pane's top edge and drop it on another pane's edge to rearrange, or
    on the window's outer edge to make it span the whole width.
-6. **⌥⌘K** connects another machine over SSH.
+6. **⌥⌘K** connects another machine over SSH; **⌃⌘N** starts a separate
+   session, and the switcher on the sidebar's *This Mac* row moves between them.
 7. Hold **⌘** to see what else is a keystroke away.
 
 ## Keyboard shortcuts
@@ -121,6 +126,7 @@ upgrades it and keeps your running panes alive.
 | ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
 | ⌘W · ⌥⌘W | Close pane · close tab |
 | ⇧⌘U | Next pane that needs you |
+| ⇧⌘S · ⌃⌘N | Switch session · new session |
 | ⌥⌘K | Connect a machine |
 | ⌃⌘S · ⌘, | Toggle sidebar · settings |
 
@@ -165,6 +171,16 @@ links open in the tab's browser pane or in your default browser (a setting).
 highlighted, with images and PDFs previewed; the tree is a click away. The
 Changes pane (**⌥⌘G**, `ghr diff`) lists what git sees as changed with each
 diff, refreshed live. Right-click a file to insert its path into the terminal.
+
+### Sessions
+
+herdr sessions are independent servers, each with its own spaces. The
+*This Mac* row in the sidebar shows the current one; click it (or ⇧⌘S) to
+switch, start a stopped session, create one, or stop and delete them. ⌘K
+lists sessions too, and finds spaces in all of them. Every running session
+stays connected in the background: its agents' questions badge the
+switcher, notify you and count in the Dock badge. `ghr` commands from an
+agent act in the agent's own session.
 
 ### Remote machines
 

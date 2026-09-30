@@ -161,6 +161,8 @@ func browser(_ args: [String]) {
     }
     var params: [String: JSONValue] = [:]
     if let pane = ProcessInfo.processInfo.environment["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
+    // Which herdr session the caller runs in, for GhostHerdr to pick its store.
+    if let socket = ProcessInfo.processInfo.environment["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
     if let browser = parsed.flags["browser"] { params["browser"] = .string(browser) }
     if let timeout = parsed.flags["timeout"].flatMap(Double.init) { params["timeout"] = .number(timeout) }
     let method: String
@@ -245,6 +247,7 @@ func browser(_ args: [String]) {
         if command == "screenshot", parsed.switches.contains("open"), let path = result["path"]?.stringValue {
             var open: [String: JSONValue] = ["path": .string(path)]
             if let caller = params["caller_pane"] { open["caller_pane"] = caller }
+            if let socket = params["caller_socket"] { open["caller_socket"] = socket }
             _ = try ControlClient().call("files.open", open)
         }
     } catch HerdrError.connect {
@@ -274,6 +277,8 @@ func files(command: String, _ args: [String]) {
     var params: [String: JSONValue] = ["path": .string(absolute)]
     if let line { params["line"] = .number(Double(line)) }
     if let pane = ProcessInfo.processInfo.environment["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
+    // Which herdr session the caller runs in, for GhostHerdr to pick its store.
+    if let socket = ProcessInfo.processInfo.environment["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
     do {
         let result = try ControlClient().call(command == "diff" ? "files.diff" : "files.open", params)
         if parsed.switches.contains("json") { print(result.jsonString) }

@@ -7,11 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private(set) var manager: MachineManager!
     private(set) var terminalController: TerminalController!
     private var controlServer: ControlServer?
-    private var controlAPI: ControlAPI!
+    /// One per local session, keyed by machine id.
+    private var controlAPIs: [String: ControlAPI] = [:]
     private var windows: [MainWindowController] = []
 
-    /// This Mac's store: the control socket and new-space defaults use it.
-    private var localStore: SessionStore { manager.local.store! }
+    /// The store of the session this Mac shows right now.
+    private var localStore: SessionStore { manager.activeLocal.store! }
 
     /// Each space gets its own window, cmux-style. Off: sidebar windows that
     /// switch between spaces.
@@ -126,20 +127,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     // MARK: - Control socket
 
     private func startControlServer() {
-        controlAPI = ControlAPI(store: localStore)
-        controlAPI.focusedPane = { [weak self] in
-            let key = self?.windows.first { $0.window?.isKeyWindow == true && $0.machine.isLocal }
-                ?? self?.windows.first { $0.machine.isLocal }
-            return key?.focusedPaneForControl
+        let server = ControlServer { [weak self] method, params in
+            guard let api = await self?.controlAPI(for: params) else {
+                throw ControlServer.Failure(code: "unavailable", message: "GhostHerdr is quitting")
+            }
+            return try await api.handle(method, params)
         }
-        let api = controlAPI!
-        let server = ControlServer { method, params in try await api.handle(method, params) }
         do {
             try server.start()
             controlServer = server
         } catch {
             NSLog("ghostherdr: control socket unavailable: \(error)")
         }
+    }
+
+    /// The API for the caller's herdr session (`ghr` sends the socket from
+    /// HERDR_SOCKET_PATH), else the session on screen.
+    private func controlAPI(for params: JSONValue) -> ControlAPI? {
+        let socket = params["caller_socket"]?.stringValue
+        let machine = manager.localMachines.first { socket != nil && $0.store?.client.endpoint.socketPath == socket }
+            ?? keyWindow.flatMap { $0.machine.isLocal ? $0.machine : nil } ?? manager.activeLocal
+        if let api = controlAPIs[machine.id] { return api }
+        guard let store = machine.store else { return nil }
+        let api = ControlAPI(store: store)
+        api.focusedPane = { [weak self, weak machine] in
+            let key = self?.windows.first { $0.window?.isKeyWindow == true && $0.machine === machine }
+                ?? self?.windows.first { $0.machine === machine }
+            return key?.focusedPaneForControl
+        }
+        controlAPIs[machine.id] = api
+        return api
     }
 
     // MARK: - Windows
@@ -151,7 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @discardableResult
     private func openWindow(pinnedTo space: SpaceRef?, activate: Bool = true) -> MainWindowController {
         let controller = MainWindowController(manager: manager, terminalController: terminalController)
-        controller.onStartHerdr = { [weak self] in self?.startHerdr() }
+        controller.onStartHerdr = { [weak self, weak controller] in
+            guard let machine = controller?.machine else { return }
+            self?.manager.startSession(machine.session)
+        }
+        controller.onShowSession = { [weak self] machine in self?.showSession(machine) }
         controller.onJump = { [weak self] in self?.showJump(nil) }
         controller.onConnectMachine = { [weak self] in self?.connectMachine(nil) }
         controller.onMachineProblem = { [weak self] machine in self?.showProblem(machine) }
@@ -186,10 +207,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         windows.first { $0.pinnedSpace == space }
     }
 
+    /// Spaces of the session on screen and of every remote machine.
     private var allSpaces: [SpaceRef] {
-        manager.all.flatMap { machine -> [SpaceRef] in
+        ([manager.activeLocal] + manager.remotes).flatMap { machine -> [SpaceRef] in
             guard let store = machine.store, case .connected = store.state else { return [] }
             return store.snapshot.workspaces.map { SpaceRef(machine: machine.id, workspace: $0.workspaceID) }
+        }
+    }
+
+    /// Switches this Mac's session: to its focused space, or to the
+    /// session itself while it has none (not running, starting).
+    func showSession(_ machine: Machine) {
+        guard machine.isLocal else { return }
+        let previous = manager.activeLocal
+        manager.activeLocal = machine
+        let store = machine.store
+        let space = store.flatMap { store -> SpaceRef? in
+            guard case .connected = store.state else { return nil }
+            let id = store.snapshot.focusedWorkspaceID ?? store.snapshot.workspaces.first?.workspaceID
+            return id.map { SpaceRef(machine: machine.id, workspace: $0) }
+        }
+        if windowPerSpace, previous !== machine {
+            // One window per space of the session on screen: the old
+            // session's windows go (their spaces keep running).
+            for controller in windows where controller.pinnedSpace?.machine == previous.id {
+                controller.onClose = nil
+                controller.close()
+            }
+            windows.removeAll { $0.pinnedSpace?.machine == previous.id }
+            knownSpaces.removeAll()
+            if windows.isEmpty { openWindow(pinnedTo: nil) }
+            reconcileSpaceWindows()
+            if let space { showSpace(space) } else { keyWindow?.switchMachine(to: machine) }
+            return
+        }
+        if let space { showSpace(space) } else {
+            if windows.isEmpty { openWindow(pinnedTo: nil) }
+            keyWindow?.switchMachine(to: machine)
+            keyWindow?.window?.makeKeyAndOrderFront(nil)
+        }
+        if space == nil { giveFirstSpace(machine) }
+    }
+
+    /// A session just started (or left with no spaces) gets one in the home
+    /// folder once herdr answers, so switching never lands on nothing.
+    private func giveFirstSpace(_ machine: Machine) {
+        Task { @MainActor in
+            for _ in 0..<40 {
+                if case .connected = machine.store?.state { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard let store = machine.store, case .connected = store.state, store.snapshot.workspaces.isEmpty,
+                  manager.activeLocal === machine else { return }
+            // Re-read first: the snapshot may lag the server.
+            let fresh = try? await store.client.snapshot()
+            if let first = fresh?.workspaces.first {
+                store.scheduleRefresh()
+                showSpace(SpaceRef(machine: machine.id, workspace: first.workspaceID))
+                return
+            }
+            guard let pane = try? await store.client.createWorkspace(cwd: NSHomeDirectory()) else { return }
+            store.scheduleRefresh()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            showSpace(SpaceRef(machine: machine.id, workspace: pane.workspaceID))
         }
     }
 
@@ -217,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         dismissedSpaces.formIntersection(live)
 
         if firstReconcile, let lobby = windows.first(where: { $0.pinnedSpace == nil }),
-           let focused = localStore.snapshot.focusedWorkspaceID.map({ SpaceRef(machine: "local", workspace: $0) }) ?? spaces.first
+           let focused = localStore.snapshot.focusedWorkspaceID.map({ SpaceRef(machine: manager.activeLocal.id, workspace: $0) }) ?? spaces.first
         {
             pin(lobby, to: focused)
         }
@@ -230,22 +310,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             // Spaces created elsewhere (an agent, the herdr TUI) open behind.
             openWindow(pinnedTo: space, activate: spacesToActivate.remove(space) != nil)
-        }
-    }
-
-    /// Starts this Mac's herdr server in the background, detached from the
-    /// app so it outlives it.
-    private func startHerdr() {
-        let endpoint = localStore.client.endpoint
-        let args = ([endpoint.herdrBinary] + endpoint.sessionArguments + ["server"])
-            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", "nohup \(args) >/dev/null 2>&1 &"]
-        do {
-            try process.run()
-        } catch {
-            NSLog("ghostherdr: could not start herdr: \(error)")
         }
     }
 
@@ -293,7 +357,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .notRunning:
             alert.messageText = machine.isLocal ? "herdr isn’t running" : "herdr isn’t running on \(machine.name)"
             alert.informativeText = "Start it to see its spaces."
-            actions = [("Start herdr", { [weak self] in machine.isLocal ? self?.startHerdr() : machine.startServer() })]
+            actions = [("Start herdr", { [weak self] in
+                if machine.isLocal { self?.manager.startSession(machine.session) } else { machine.startServer() }
+            })]
         case .herdrMissing:
             alert.messageText = "herdr isn’t installed on \(machine.name)"
             alert.informativeText = "Install herdr there (herdr.dev), or run herdr machine add \(machine.target ?? "") in a terminal, which offers to install it."
@@ -333,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             store.scheduleRefresh()
         }
-        if let local = keyWindow, !local.machine.isLocal { local.switchMachine(to: manager.local) }
+        if let local = keyWindow, !local.machine.isLocal { local.switchMachine(to: manager.activeLocal) }
     }
 
     // MARK: - Jump
@@ -367,6 +433,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         TerminalAppearance.apply(to: terminalController)
     }
 
+    /// Debug hook: switch to a session by name as the switcher does
+    /// (starting it if stopped).
+    @objc func debugSwitchSession(_ sender: Any?) {
+        guard let name = sender as? String else { return }
+        jump(to: .session(name == manager.local.session ? manager.local.session : name))
+    }
+
     /// Debug hook: filter the open palette.
     @objc func debugPaletteType(_ sender: Any?) {
         JumpPalette.shared.debugType(sender as? String ?? "")
@@ -397,6 +470,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             NSApp.sendAction(selector, to: nil, from: nil)
         case .connectMachine:
             connectMachine(nil)
+        case let .session(name):
+            let running = manager.knownSessions.first { $0.name == name }?.running ?? (name == manager.local.session)
+            let machine = running ? (name.map { manager.open(session: $0) } ?? manager.local) : manager.startSession(name)
+            showSession(machine)
         }
     }
 
@@ -453,7 +530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         let key = windows.first { $0.window?.isKeyWindow == true }
-        let machine = key?.machine ?? manager.local
+        let machine = key?.machine ?? manager.activeLocal
         let cwd = key?.currentDirectory ?? (machine.isLocal ? NSHomeDirectory() : nil)
         guard let store = machine.store else { return }
         Task {

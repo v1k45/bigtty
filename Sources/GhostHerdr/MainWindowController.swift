@@ -56,6 +56,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
     var pinnedWorkspaceID: String? { pinnedSpace?.workspace }
     var onShowSpace: ((SpaceRef) -> Void)?
+    /// Switch this Mac's session (the app delegate handles space windows).
+    var onShowSession: ((Machine) -> Void)?
     var onConnectMachine: (() -> Void)?
     var onMachineProblem: ((Machine) -> Void)?
     /// The pinned workspace no longer exists in herdr.
@@ -73,7 +75,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     init(manager: MachineManager, terminalController: TerminalController) {
         self.manager = manager
-        machine = manager.local
+        machine = manager.activeLocal
         self.terminalController = terminalController
         let window = MainWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
@@ -199,6 +201,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self.onMachineProblem?(machine)
         }
         sidebar.onNewSpace = { [weak self] in self?.newWorkspace(nil) }
+        sidebar.onSessionMenu = { [weak self] in self?.sessionMenu() }
         sidebar.onConnectMachine = { [weak self] in self?.onConnectMachine?() }
         topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
         placeholder.onStart = { [weak self] in self?.onStartHerdr?() }
@@ -554,6 +557,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// Points this window at another machine: its panes go, its spaces come.
     func switchMachine(to target: Machine) {
+        if target.isLocal { manager.activeLocal = target }
         guard target !== machine else { return }
         for view in paneViews.values {
             view.terminal?.detach()
@@ -577,17 +581,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     /// The sidebar: every machine with its spaces; the selected one lists its tabs.
+    /// The session on this Mac the sidebar lists: this window's, else the
+    /// one last switched to.
+    private var localSession: Machine { machine.isLocal ? machine : manager.activeLocal }
+
+    /// Machines the sidebar shows: one session of this Mac, every remote.
+    private var visibleMachines: [Machine] { [localSession] + manager.remotes }
+
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
         var number = 0
-        for machine in manager.all {
+        for machine in visibleMachines {
             guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
                   case .connected = store.state
             else {
                 let status = machine.isLocal
                     ? (machine.store?.state == .connecting ? "connecting…" : "not running")
                     : machine.statusText
-                model.machines.append(.init(id: machine.id, name: machine.name, status: status, statusIsProblem: machine.statusIsProblem, spaces: []))
+                model.machines.append(.init(id: machine.id, name: machine.name, status: status, statusIsProblem: machine.statusIsProblem,
+                                            session: sessionChip(machine), spaces: []))
                 if machine.isLocal, case .disconnected = machine.store?.state { model.message = "No spaces yet." }
                 continue
             }
@@ -622,7 +634,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
                 )
             }
-            model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem, statusTip: machine.statusTip, spaces: spaces))
+            model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem,
+                                        statusTip: machine.statusTip, session: sessionChip(machine), spaces: spaces))
         }
         return model
     }
@@ -632,9 +645,154 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         pane.hostKind == .browser && pane.hostID.flatMap { HostPaneStore.shared[$0]?.audible } == true
     }
 
+    /// The session switcher on this Mac's header: its name, and how many
+    /// panes in the other sessions need you.
+    private func sessionChip(_ machine: Machine) -> SidebarModel.SessionChip? {
+        guard machine.isLocal else { return nil }
+        let others = manager.localMachines.filter { $0 !== machine }
+            .reduce(0) { $0 + ($1.attention?.attention.needingAttention.count ?? 0) }
+        return .init(name: machine.sessionName, othersNeedingYou: others)
+    }
+
+    // MARK: - Sessions
+
+    /// The switcher: every session on this Mac, then new/stop/delete.
+    func sessionMenu() -> NSMenu {
+        manager.refreshSessions()
+        let menu = NSMenu()
+        let header = NSMenuItem(title: "Sessions on This Mac", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        let current = localSession
+        var known = manager.knownSessions
+        if known.isEmpty { known = [.init(name: manager.local.session, running: true)] }
+        for info in known {
+            let machine = manager.localMachines.first { $0.session == info.name }
+            let item = ClosureMenuItem(title: info.title, keyEquivalent: "") { [weak self] in
+                guard let self else { return }
+                let target = info.running ? (machine ?? info.name.map { self.manager.open(session: $0) } ?? self.manager.local) : self.manager.startSession(info.name)
+                self.onShowSession?(info.name == self.manager.local.session && info.running ? self.manager.local : target)
+            }
+            item.state = machine === current ? .on : .off
+            let waiting = machine?.attention?.attention.needingAttention.count ?? 0
+            if !info.running {
+                item.badge = NSMenuItemBadge(string: "stopped")
+                item.toolTip = "Starts the session"
+            } else if waiting > 0 {
+                item.badge = NSMenuItemBadge(count: waiting)
+                item.toolTip = "\(waiting) pane\(waiting == 1 ? "" : "s") need\(waiting == 1 ? "s" : "") you"
+            } else if let count = machine?.store?.snapshot.workspaces.count {
+                item.badge = NSMenuItemBadge(string: "\(count) space\(count == 1 ? "" : "s")")
+            }
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let new = ClosureMenuItem(title: "New Session…", keyEquivalent: "n") { [weak self] in self?.newSession(nil) }
+        new.keyEquivalentModifierMask = [.control, .command]
+        menu.addItem(new)
+        if case .connected = current.store?.state {
+            menu.addItem(ClosureMenuItem(title: "Stop “\(current.sessionName)”…", keyEquivalent: "") { [weak self] in
+                self?.confirmStopSession(current)
+            })
+        }
+        let stopped = known.compactMap { $0.running ? nil : $0.name }
+        if !stopped.isEmpty {
+            let delete = NSMenuItem(title: "Delete Stopped Session", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for name in stopped {
+                sub.addItem(ClosureMenuItem(title: name, keyEquivalent: "") { [weak self] in self?.confirmDeleteSession(name) })
+            }
+            delete.submenu = sub
+            menu.addItem(delete)
+        }
+        return menu
+    }
+
+    /// Debug hook: logs the session switcher's items.
+    @objc func debugLogSessionMenu(_: Any?) {
+        func describe(_ menu: NSMenu, _ indent: String) -> [String] {
+            menu.items.flatMap { item -> [String] in
+                let badge = item.badge.map { " [\($0.stringValue)]" } ?? ""
+                let line = indent + (item.isSeparatorItem ? "---" : "\(item.state == .on ? "✓ " : "")\(item.title)\(badge)\(item.isEnabled ? "" : " (disabled)")")
+                return [line] + (item.submenu.map { describe($0, indent + "  ") } ?? [])
+            }
+        }
+        NSLog("ghostherdr: session menu:\n%@", describe(sessionMenu(), "").joined(separator: "\n"))
+    }
+
+    /// ⇧⌘S: the switcher, under this Mac's header (or the window's corner).
+    @objc func showSessionSwitcher(_: Any?) {
+        if sidebarVisible, sidebar.popUpSessionMenu() { return }
+        guard let view = window?.contentView else { return }
+        sessionMenu().popUp(positioning: nil, at: NSPoint(x: 80, y: view.bounds.maxY - 40), in: view)
+    }
+
+    /// ⌃⌘N: a new herdr session on this Mac, started and switched to.
+    @objc func newSession(_: Any?) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "New Session"
+        alert.informativeText = "A separate herdr session with its own spaces, like a separate workspace for another project or client. Letters, digits, - and _."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "work"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if let existing = self.manager.knownSessions.first(where: { $0.name == name }), existing.running {
+                self.onShowSession?(self.manager.open(session: name))
+                return
+            }
+            guard MachineManager.isValidSessionName(name) else {
+                NSSound.beep()
+                return
+            }
+            self.onShowSession?(self.manager.startSession(name))
+        }
+    }
+
+    private func confirmStopSession(_ session: Machine) {
+        guard let window else { return }
+        let alert = NSAlert()
+        let spaces = session.store?.snapshot.workspaces.count ?? 0
+        alert.messageText = "Stop the “\(session.sessionName)” session?"
+        alert.informativeText = "Its \(spaces) space\(spaces == 1 ? "" : "s") close and every process running in them ends, agents included. herdr keeps the session to start again later."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stop Session").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.manager.stopSession(session.session)
+            // Move to another running session, if there is one.
+            if let other = self.manager.localMachines.first(where: { machine in
+                guard machine !== session, case .connected = machine.store?.state else { return false }
+                return true
+            }) {
+                self.onShowSession?(other)
+            }
+        }
+    }
+
+    private func confirmDeleteSession(_ name: String) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete the “\(name)” session?"
+        alert.informativeText = "Its saved layout and settings are removed. It isn’t running, so no process is affected."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.manager.deleteSession(name)
+        }
+    }
+
     /// Spaces in sidebar order, for ⌘1…⌘9.
     private var orderedSpaces: [SpaceRef] {
-        manager.all.flatMap { machine -> [SpaceRef] in
+        visibleMachines.flatMap { machine -> [SpaceRef] in
             guard let store = machine.store, case .connected = store.state else { return [] }
             return store.snapshot.workspaces.map { SpaceRef(machine: machine.id, workspace: $0.workspaceID) }
         }
@@ -876,8 +1034,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         HostPaneStore.shared[hostID] = state
         // The registry owns the web view so agents can drive it while no
         // window shows it; this window borrows it.
-        if state.machine == nil, !machine.isLocal {
-            state.machine = machine.id
+        if state.machine == nil, let tag = machine.hostTag {
+            state.machine = tag
             HostPaneStore.shared[hostID] = state
         }
         let browser = BrowserRegistry.shared.view(for: hostID, machine: machine)
@@ -894,7 +1052,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func makeFiles(pane: Pane, hostID: String) -> FilesPaneView {
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: pane.hostKind ?? .files, path: pane.cwd)
         state.paneID = pane.paneID
-        if state.machine == nil, !machine.isLocal { state.machine = machine.id }
+        if state.machine == nil, let tag = machine.hostTag { state.machine = tag }
         HostPaneStore.shared[hostID] = state
         let files = FilesRegistry.shared.view(for: hostID, machine: machine)
         let id = pane.paneID
@@ -930,7 +1088,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let cwd = pane?.foregroundCwd ?? pane?.cwd ?? home
         HostPaneStore.open(
             HostPaneState(kind: mode == .changes ? .diff : .files, path: cwd, mode: mode.rawValue,
-                          machine: machine.isLocal ? nil : machine.id),
+                          machine: machine.hostTag),
             beside: target, direction: .right, store: store, remote: !machine.isLocal
         )
     }
@@ -970,7 +1128,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             browser.load(url)
             return
         }
-        HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.isLocal ? nil : machine.id), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
+        HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.hostTag), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
     }
 
     /// A clicked path or non-web link. Paths, `path:line[:col]` and file://
@@ -1040,7 +1198,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         HostPaneStore.open(
             HostPaneState(kind: .files, path: root, selection: path, mode: FilesPaneView.Mode.files.rawValue, line: line,
-                          machine: machine.isLocal ? nil : machine.id),
+                          machine: machine.hostTag),
             beside: paneID, direction: .right, store: store, remote: !machine.isLocal
         )
     }
@@ -1076,13 +1234,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let workspaceID else { return }
         pendingAddressFocus = true
         tabID = nil // follow herdr to the new (focused) tab, as ⌘T does
-        HostPaneStore.openTab(HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id),
+        HostPaneStore.openTab(HostPaneState(kind: .browser, machine: machine.hostTag),
                               in: workspaceID, store: store, remote: !machine.isLocal)
     }
 
     /// Turns the focused pane (e.g. one just split off) into a browser.
     @objc func openBrowserHere(_: Any?) {
-        convertFocusedPane(to: HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id), focusAddress: true)
+        convertFocusedPane(to: HostPaneState(kind: .browser, machine: machine.hostTag), focusAddress: true)
     }
 
     /// Turns the focused pane into a files pane for its folder.
@@ -1090,7 +1248,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let pane = focusedPaneID.flatMap({ store.pane($0) }) else { return }
         let cwd = pane.foregroundCwd ?? pane.cwd ?? machine.homeDirectory ?? "/"
         convertFocusedPane(to: HostPaneState(kind: .files, path: cwd, mode: FilesPaneView.Mode.files.rawValue,
-                                             machine: machine.isLocal ? nil : machine.id), focusAddress: false)
+                                             machine: machine.hostTag), focusAddress: false)
     }
 
     /// Only a pane idle at its shell prompt is replaced; a running program
@@ -1125,7 +1283,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func newBrowserPane(_: Any?) {
         guard let target = focusedPaneID else { return }
         pendingAddressFocus = true
-        HostPaneStore.open(HostPaneState(kind: .browser, machine: machine.isLocal ? nil : machine.id), beside: target, direction: .right, store: store, remote: !machine.isLocal)
+        HostPaneStore.open(HostPaneState(kind: .browser, machine: machine.hostTag), beside: target, direction: .right, store: store, remote: !machine.isLocal)
     }
 
     /// ⌘L: the focused browser pane's address bar, or a new browser pane.
