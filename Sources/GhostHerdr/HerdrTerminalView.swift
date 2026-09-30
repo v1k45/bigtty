@@ -117,11 +117,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Frames go to the surface; a close only matters for the current channel.
     private func wire(_ channel: TerminalChannel) {
         let session = session!
-        // Frames never carry the app's paste mode. Newer herdr re-brackets
-        // a bracketed paste for the app, so pastes go out bracketed there;
-        // older herdr passes them through, so only where the app wants them.
-        let bracketed = clickRoute() != .none
-        session.receive(Data((bracketed ? "\u{1b}[?2004h" : "\u{1b}[?2004l").utf8))
+        // Frames never carry the app's paste mode; herdr (0.9.2+, which the
+        // app requires) re-brackets a bracketed paste for the app's own mode.
+        session.receive(Data("\u{1b}[?2004h".utf8))
         channel.onFrame = { session.receive($0) }
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
@@ -303,18 +301,6 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// clicks wobble a point or two).
     private static let clickSlop: CGFloat = 5
 
-    /// How clicks reach the app.
-    enum ClickRoute {
-        /// herdr ≥ 0.9.2: terminal.mouse, encoded for the app's mouse mode.
-        case herdr
-        /// Older herdr: typed in as SGR mouse reports. Only for apps known
-        /// to keep mouse reporting on (Claude Code), else they'd be text.
-        case sgr
-        case none
-    }
-
-    var clickRoute: () -> ClickRoute = { .none }
-
     private func pressed(_ event: NSEvent, button: String) {
         pressedCell = cellPosition(of: event).map { ($0.column, $0.row, button) }
         pressedPoint = convert(event.locationInWindow, from: nil)
@@ -330,19 +316,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let modifiers = (event.modifierFlags.contains(.shift) ? 1 : 0)
             | (event.modifierFlags.contains(.control) ? 2 : 0)
             | (event.modifierFlags.contains(.option) ? 4 : 0)
-        switch clickRoute() {
-        case .herdr:
-            channel?.mouse("down", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
-            channel?.mouse("up", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
-        case .sgr:
-            // Button 0 left, 2 right; +4 Shift, +8 Alt, +16 Ctrl; 1-based cells.
-            let code = (press.button == "right" ? 2 : 0) + (modifiers & 1 != 0 ? 4 : 0)
-                + (modifiers & 4 != 0 ? 8 : 0) + (modifiers & 2 != 0 ? 16 : 0)
-            let at = "\(code);\(cell.column + 1);\(cell.row + 1)"
-            channel?.sendInput(Data("\u{1b}[<\(at)M\u{1b}[<\(at)m".utf8))
-        case .none:
-            break
-        }
+        channel?.mouse("down", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
+        channel?.mouse("up", button: press.button, column: cell.column, row: cell.row, modifiers: modifiers)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -402,9 +377,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         guard mode == .control, !displaced, let cell = cellPosition(of: event) else { return }
         if let last = lastMotionCell, last.column == cell.column, last.row == cell.row { return }
         lastMotionCell = cell
-        // Only through herdr, which knows whether the app tracks motion:
-        // guessed motion reports would land as text in a shell.
-        if clickRoute() == .herdr { channel?.mouse("move", column: cell.column, row: cell.row) }
+        // herdr delivers it only to apps that track motion.
+        channel?.mouse("move", column: cell.column, row: cell.row)
     }
 
     override func mouseExited(with event: NSEvent) {

@@ -205,6 +205,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         placeholder.onConnect = { [weak self] in self?.onConnectMachine?() }
         placeholder.onAction = { [weak self] in
             guard let self else { return }
+            if self.herdrVersionProblem() != nil {
+                // After an update: ask both versions again.
+                LocalHerdr.forget()
+                if self.machine.isLocal { self.store.stop(); self.store.start() } else { self.machine.connect() }
+                self.render()
+                return
+            }
             switch self.machine.status {
             case .notRunning: self.machine.startServer()
             default: self.machine.connect()
@@ -303,8 +310,48 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// A pane move is in flight; see `drop(_:on:)`.
     private var rearranging = false
 
+    /// The oldest herdr GhostHerdr works with: terminal.mouse (clicks and
+    /// hover for pane apps) and paste re-bracketing arrived in 0.9.2.
+    static let minimumHerdr = [0, 9, 2]
+
+    /// Why this window's machine can't be used, when its herdr (the server,
+    /// or this Mac's herdr CLI that carries the terminal streams) is too old.
+    private func herdrVersionProblem() -> (title: String, detail: String)? {
+        guard case let .connected(server) = store.state else { return nil }
+        let cli = LocalHerdr.version(of: store.client.endpoint.herdrBinary) ?? "unknown"
+        let need = Self.minimumHerdr.map(String.init).joined(separator: ".")
+        let serverOld = !Self.version(server, atLeast: Self.minimumHerdr)
+        let cliOld = !Self.version(cli, atLeast: Self.minimumHerdr)
+        guard serverOld || cliOld else { return nil }
+        let update = "Update with  herdr update --handoff  (run it outside herdr); --handoff keeps running panes."
+        if machine.isLocal {
+            return ("GhostHerdr needs herdr \(need) or newer",
+                    "This Mac has herdr \(cliOld ? cli : server)\(cliOld && serverOld && cli != server ? " (server \(server))" : "").\n\(update)")
+        }
+        if serverOld {
+            return ("herdr on \(machine.name) is too old",
+                    "\(machine.name) runs herdr \(server); GhostHerdr needs \(need) or newer. \(update) Run it on \(machine.name).")
+        }
+        return ("This Mac’s herdr is too old for \(machine.name)",
+                "This Mac has herdr \(cli); it carries the terminal streams, so it needs \(need) or newer too. \(update)")
+    }
+
     private func render() {
         if rearranging { return }
+        if let problem = herdrVersionProblem() {
+            // Nothing half-works: no panes until herdr is new enough.
+            for view in paneViews.values {
+                view.terminal?.detach()
+                view.removeFromSuperview()
+            }
+            paneViews.removeAll()
+            splitTree.show(nil, zoomedPane: nil)
+            clientHost?.teardown()
+            clientHost = nil
+            sidebar.update(sidebarModel())
+            placeholder.state = .remote(title: problem.title, detail: problem.detail, action: "Check Again")
+            return
+        }
         if case .connected = store.state { HostPaneStore.restoreTags(store: store, remote: !machine.isLocal) }
         if Settings.terminalMode == .herdrClient { return renderClient() }
         let snapshot = store.snapshot
@@ -653,7 +700,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
             terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
             terminal.onOpenURL = { [weak self] url in self?.openURL(url, from: id) }
-            terminal.clickRoute = { [weak self] in self?.clickRoute(for: id) ?? .none }
             content = terminal
         }
         let view = PaneContainerView(paneID: id, content: content)
@@ -666,22 +712,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// herdr forwards clicks itself from 0.9.2 (terminal.mouse); before
     /// that, only Claude Code panes get them, as typed-in mouse reports.
-    private func clickRoute(for paneID: String) -> HerdrTerminalView.ClickRoute {
-        // terminal.mouse passes through the local herdr CLI (it parses the
-        // stdin commands), so both it and the server must know it: a remote
-        // server can be newer than this Mac's herdr.
-        if case let .connected(version) = store.state, Self.version(version, atLeast: [0, 9, 2]),
-           let cli = LocalHerdr.version(of: store.client.endpoint.herdrBinary), Self.version(cli, atLeast: [0, 9, 2]) {
-            return .herdr
-        }
-        let agent = store.pane(paneID).flatMap { $0.agent ?? $0.displayAgent }?.lowercased() ?? ""
-        return agent.contains("claude") ? .sgr : .none
-    }
-
     /// `herdr --version` of the binaries this app runs, asked once each.
     enum LocalHerdr {
         nonisolated(unsafe) private static var cache: [String: String] = [:]
         private static let lock = NSLock()
+
+        static func forget() { lock.withLock { cache.removeAll() } }
 
         static func version(of binary: String) -> String? {
             if let known = lock.withLock({ cache[binary] }) { return known }
