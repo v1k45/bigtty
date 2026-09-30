@@ -61,7 +61,12 @@ enum DebugDump {
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
         else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
-        let webViews = allSubviews(of: view).compactMap { $0 as? WKWebView }.filter { $0.window != nil && !$0.isHiddenOrHasHiddenAncestor }
+        // Skip web views covered by a sibling drawn above them (error pages).
+        let webViews = allSubviews(of: view).compactMap { $0 as? WKWebView }.filter { web in
+            guard web.window != nil, !web.isHiddenOrHasHiddenAncestor, let parent = web.superview,
+                  let index = parent.subviews.firstIndex(of: web) else { return false }
+            return !parent.subviews[(index + 1)...].contains { !$0.isHidden && $0.frame.contains(web.frame) }
+        }
         let group = DispatchGroup()
         var shots: [(NSRect, NSImage)] = []
         for webView in webViews {

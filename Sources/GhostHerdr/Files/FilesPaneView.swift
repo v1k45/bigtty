@@ -19,6 +19,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     private let outlineScroll = NSScrollView()
     private let divider = PaneDivider()
     let code = CodeView()
+    private let preview = ImagePreview()
     private var treeWidth: CGFloat = 240
 
     private var tree: FileNode
@@ -74,6 +75,8 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
         addSubview(outlineScroll)
         addSubview(code)
+        preview.isHidden = true
+        addSubview(preview)
         addSubview(divider)
         divider.onDrag = { [weak self] x in
             guard let self else { return }
@@ -99,10 +102,14 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         modeControl.frame = NSRect(x: 8, y: y, width: control.width, height: 22)
         titleLabel.frame = NSRect(x: modeControl.frame.maxX + 10, y: y + 3, width: max(0, b.width - modeControl.frame.maxX - 20), height: 16)
         let body = max(0, b.height - h)
-        let tree = min(treeWidth, max(120, b.width * 0.45))
+        // Narrow panes give the file itself the room; the tree comes back when wider.
+        let tree: CGFloat = b.width < 420 ? 0 : min(treeWidth, max(140, b.width * 0.35))
+        outlineScroll.isHidden = tree == 0
+        divider.isHidden = tree == 0
         outlineScroll.frame = NSRect(x: 0, y: 0, width: tree, height: body)
         divider.frame = NSRect(x: tree, y: 0, width: 1, height: body)
         code.frame = NSRect(x: tree + 1, y: 0, width: max(0, b.width - tree - 1), height: body)
+        preview.frame = code.frame
         code.dark = Theme.current?.isDark ?? true
     }
 
@@ -186,6 +193,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 
     private func showSelection() {
+        preview.isHidden = true
         guard let selection else {
             code.showMessage(mode == .changes
                 ? (git == nil ? "Not a git repository" : (changes.isEmpty ? "No changes" : "Select a changed file"))
@@ -197,6 +205,9 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             code.showAttributed(DiffRenderer.render(git.diff(selection, untracked: untracked), dark: code.dark), identity: "diff:" + selection)
         } else if GitClient.isDirectory(selection) {
             code.showMessage((selection as NSString).lastPathComponent + "/")
+        } else if ImagePreview.canShow(selection) {
+            preview.show(selection)
+            preview.isHidden = false
         } else {
             code.showFile(selection)
         }

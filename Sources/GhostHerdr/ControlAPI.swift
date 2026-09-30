@@ -35,6 +35,11 @@ final class ControlAPI {
         let (id, browser) = try resolveBrowser(params)
         let web = browser.webView
         let target = params["target"]?.stringValue
+        let verb = String(method.dropFirst("browser.".count))
+        if ["navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "scroll", "hover", "back", "forward", "reload", "eval"].contains(verb) {
+            let who = callerAgent(params) ?? "An agent"
+            browser.noteAutomation("\(who) is controlling this page · \(verb)\(target.map { " " + $0 } ?? "")")
+        }
 
         switch method.dropFirst("browser.".count) {
         case "navigate":
@@ -143,6 +148,12 @@ final class ControlAPI {
     }
 
     // MARK: - Targets
+
+    /// The agent running in the calling pane, for "claude is controlling this page".
+    private func callerAgent(_ params: JSONValue) -> String? {
+        guard let caller = params["caller_pane"]?.stringValue, let pane = store.pane(caller) else { return nil }
+        return pane.displayAgent ?? pane.agent
+    }
 
     private func require(_ target: String?) throws -> String {
         guard let target, !target.isEmpty else {

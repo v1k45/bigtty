@@ -13,6 +13,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private let reload = NSButton()
     private let external = NSButton()
     private let address = NSTextField()
+    private let addressBox = NSView()
+    private let toolbarLine = NSView()
+    private let progress = NSView()
+    private let automationStrip = AutomationStrip()
+    private let errorPage = BrowserErrorPage()
+    private var automationHide: DispatchWorkItem?
     private var observations: [NSKeyValueObservation] = []
 
     /// The page's title or URL changed.
@@ -20,7 +26,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// The user clicked into the pane.
     var onFocus: (() -> Void)?
 
-    static let toolbarHeight: CGFloat = 30
+    static let toolbarHeight: CGFloat = 34
 
     /// One cookie/storage store for every browser pane, persisted on disk.
     private static let dataStore = WKWebsiteDataStore.default()
@@ -66,12 +72,30 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         configure(external, "safari", "Open in Default Browser", #selector(openExternally))
         address.placeholderString = "Search or enter address"
         address.font = .systemFont(ofSize: 12)
-        address.bezelStyle = .roundedBezel
+        address.isBezeled = false
+        address.drawsBackground = false
+        address.focusRingType = .none
+        address.alignment = .center
         address.lineBreakMode = .byTruncatingTail
+        address.cell?.usesSingleLineMode = true
         address.delegate = self
         address.target = self
         address.action = #selector(addressEntered)
-        for view in [back, forward, reload, address, external, webView] as [NSView] { addSubview(view) }
+        addressBox.wantsLayer = true
+        addressBox.layer?.cornerRadius = 7
+        addressBox.addSubview(address)
+        toolbarLine.wantsLayer = true
+        progress.wantsLayer = true
+        progress.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        progress.isHidden = true
+        automationStrip.isHidden = true
+        automationStrip.onTakeOver = { [weak self] in self?.hideAutomation() }
+        errorPage.isHidden = true
+        errorPage.onReload = { [weak self] in self?.reloadPage() }
+        for view in [back, forward, reload, addressBox, external, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
+            addSubview(view)
+        }
+        wantsLayer = true
 
         observations = [
             webView.observe(\.url, options: .new) { [weak self] _, _ in
@@ -86,6 +110,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             webView.observe(\.canGoForward, options: .new) { [weak self] _, _ in
                 MainActor.assumeIsolated { self?.updateButtons() }
             },
+            webView.observe(\.isLoading, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.updateLoading() }
+            },
+            webView.observe(\.estimatedProgress, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.needsLayout = true }
+            },
         ]
 
         if let url = state.url.flatMap(Self.normalize) {
@@ -99,7 +129,9 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     required init?(coder _: NSCoder) { fatalError() }
 
     private func configure(_ button: NSButton, _ symbol: String, _ label: String, _ action: Selector) {
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        button.contentTintColor = .secondaryLabelColor
         button.isBordered = false
         button.toolTip = label
         button.target = self
@@ -109,14 +141,59 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     override func layout() {
         super.layout()
         let b = bounds
+        let theme = Theme.current
+        layer?.backgroundColor = theme?.pane.cgColor
         let h = Self.toolbarHeight
-        let y = b.height - h + (h - 22) / 2
-        back.frame = NSRect(x: 6, y: y, width: 24, height: 22)
-        forward.frame = NSRect(x: 30, y: y, width: 24, height: 22)
-        reload.frame = NSRect(x: 54, y: y, width: 24, height: 22)
-        external.frame = NSRect(x: b.width - 30, y: y, width: 24, height: 22)
-        address.frame = NSRect(x: 84, y: y, width: max(0, b.width - 84 - 36), height: 22)
-        webView.frame = NSRect(x: 0, y: 0, width: b.width, height: max(0, b.height - h))
+        let y = b.height - h + (h - 24) / 2
+        back.frame = NSRect(x: 8, y: y, width: 26, height: 24)
+        forward.frame = NSRect(x: 34, y: y, width: 26, height: 24)
+        reload.frame = NSRect(x: b.width - 36, y: y, width: 26, height: 24)
+        external.frame = NSRect(x: b.width - 62, y: y, width: 26, height: 24)
+        // A centered, Safari-like address field.
+        let available = b.width - 70 - 70
+        let fieldWidth = max(120, min(available, max(available * 0.8, 260)))
+        addressBox.frame = NSRect(x: (b.width - fieldWidth) / 2, y: y, width: fieldWidth, height: 24)
+        addressBox.layer?.backgroundColor = theme?.field.cgColor
+        address.frame = NSRect(x: 8, y: 4, width: fieldWidth - 16, height: 16)
+        toolbarLine.frame = NSRect(x: 0, y: b.height - h, width: b.width, height: 0.5)
+        toolbarLine.layer?.backgroundColor = theme?.separator.cgColor
+        progress.frame = NSRect(x: 0, y: b.height - h - 1, width: b.width * max(0.05, webView.estimatedProgress), height: 2)
+        var top = b.height - h
+        if !automationStrip.isHidden {
+            automationStrip.frame = NSRect(x: 0, y: top - 26, width: b.width, height: 26)
+            top -= 26
+        }
+        webView.frame = NSRect(x: 0, y: 0, width: b.width, height: max(0, top))
+        errorPage.frame = webView.frame
+    }
+
+    private func updateLoading() {
+        let loading = webView.isLoading
+        progress.isHidden = !loading
+        reload.image = NSImage(systemSymbolName: loading ? "xmark" : "arrow.clockwise", accessibilityDescription: loading ? "Stop" : "Reload")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        reload.toolTip = loading ? "Stop" : "Reload"
+        if loading { errorPage.isHidden = true }
+        needsLayout = true
+    }
+
+    /// Shows "claude is controlling this page · click @e3" for a few seconds
+    /// after each automation command, so it's clear who's driving.
+    func noteAutomation(_ text: String) {
+        automationStrip.text = text
+        if automationStrip.isHidden {
+            automationStrip.isHidden = false
+            needsLayout = true
+        }
+        automationHide?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hideAutomation() }
+        automationHide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+    }
+
+    private func hideAutomation() {
+        automationStrip.isHidden = true
+        needsLayout = true
     }
 
     // MARK: - Navigation
@@ -157,7 +234,15 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     @objc private func goBack() { webView.goBack() }
     @objc private func goForward() { webView.goForward() }
-    @objc private func reloadPage() { webView.reload() }
+    @objc private func reloadPage() {
+        if webView.isLoading {
+            webView.stopLoading()
+        } else if webView.url == nil, let url = Self.normalize(address.stringValue) {
+            webView.load(URLRequest(url: url))
+        } else {
+            webView.reload()
+        }
+    }
 
     @objc private func openExternally() {
         if let url = webView.url { NSWorkspace.shared.open(url) }
@@ -169,7 +254,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     }
 
     private func pageChanged() {
-        if let url = webView.url, window?.firstResponder !== address.currentEditor() {
+        if let url = webView.url, errorPage.isHidden, window?.firstResponder !== address.currentEditor() {
             address.stringValue = url.absoluteString
         }
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
@@ -242,6 +327,13 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         lastNavigationError = error.localizedDescription
         finishLoad()
+        let nsError = error as NSError
+        guard nsError.code != NSURLErrorCancelled else { return }
+        let failing = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Self.normalize(address.stringValue)
+        errorPage.show(error: nsError, url: failing)
+        // Keep the address that failed, not the page underneath.
+        if let failing { address.stringValue = failing.absoluteString }
+        needsLayout = true
     }
 
     // MARK: - WKUIDelegate
@@ -271,5 +363,109 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         target?.userContentController(controller, didReceive: message)
+    }
+}
+
+/// "claude is controlling this page · fill @e3", under the toolbar.
+private final class AutomationStrip: NSView {
+    var onTakeOver: (() -> Void)?
+    private let dot = NSView()
+    private let label = NSTextField(labelWithString: "")
+    private let hint = NSTextField(labelWithString: "Click to take over")
+    var text: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3
+        dot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        label.font = .systemFont(ofSize: 11.5)
+        label.textColor = NSColor.controlAccentColor.blended(withFraction: 0.35, of: .labelColor)
+        label.lineBreakMode = .byTruncatingTail
+        hint.font = .systemFont(ofSize: 11.5)
+        hint.textColor = .secondaryLabelColor
+        hint.alignment = .right
+        for view in [dot, label, hint] { addSubview(view) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        layer?.backgroundColor = Theme.current?.accentWash.cgColor
+        let y = (bounds.height - 15) / 2
+        dot.frame = NSRect(x: 12, y: bounds.midY - 3, width: 6, height: 6)
+        hint.frame = NSRect(x: bounds.width - 132, y: y, width: 120, height: 15)
+        label.frame = NSRect(x: 26, y: y, width: bounds.width - 170, height: 15)
+    }
+
+    override func mouseDown(with _: NSEvent) { onTakeOver?() }
+}
+
+/// A native page for loads that never reached a server.
+private final class BrowserErrorPage: NSView {
+    var onReload: (() -> Void)?
+    private let title = NSTextField(labelWithString: "")
+    private let detail = NSTextField(wrappingLabelWithString: "")
+    private let button = NSButton(title: "Reload", target: nil, action: nil)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        title.alignment = .center
+        detail.font = .systemFont(ofSize: 12.5)
+        detail.textColor = .secondaryLabelColor
+        detail.alignment = .center
+        button.bezelStyle = .rounded
+        button.target = self
+        button.action = #selector(reload)
+        for view in [title, detail, button] { addSubview(view) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    func show(error: NSError, url: URL?) {
+        let host = url?.host ?? "the page"
+        let local = ["localhost", "127.0.0.1", "0.0.0.0", "::1"].contains(host)
+        switch error.code {
+        case NSURLErrorCannotConnectToHost where local:
+            title.stringValue = "Nothing is listening on :\(url?.port.map(String.init) ?? "80")"
+            detail.stringValue = "Start the dev server in a terminal, then reload."
+        case NSURLErrorCannotFindHost:
+            title.stringValue = "Can’t find \(host)"
+            detail.stringValue = "Check the address, or your network connection."
+        case NSURLErrorNotConnectedToInternet:
+            title.stringValue = "You’re offline"
+            detail.stringValue = "Reconnect to the internet, then reload."
+        default:
+            title.stringValue = "Can’t open \(host)"
+            detail.stringValue = error.localizedDescription
+        }
+        isHidden = false
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.backgroundColor = Theme.current?.pane.cgColor
+        let midY = bounds.midY
+        title.frame = NSRect(x: 16, y: midY + 16, width: bounds.width - 32, height: 20)
+        detail.preferredMaxLayoutWidth = min(340, bounds.width - 32)
+        let dh = detail.fittingSize.height
+        detail.frame = NSRect(x: (bounds.width - detail.preferredMaxLayoutWidth) / 2, y: midY - dh + 6, width: detail.preferredMaxLayoutWidth, height: dh)
+        button.sizeToFit()
+        button.frame.origin = NSPoint(x: (bounds.width - button.frame.width) / 2, y: midY - dh - 30)
+    }
+
+    @objc private func reload() {
+        isHidden = true
+        onReload?()
     }
 }

@@ -67,8 +67,9 @@ final class SplitNodeView: NSView {
     private let second: NSView
     var onRatioCommit: ((Double) -> Void)?
 
-    private let dividerThickness: CGFloat = 1
-    private let dividerHitSlop: CGFloat = 4
+    /// The gap between pane cards; the window background shows through.
+    private let dividerThickness: CGFloat = 6
+    private let dividerHitSlop: CGFloat = 1
     private var dragging = false
 
     init(direction: SplitDirection, ratio: Double, first: NSView, second: NSView) {
@@ -112,10 +113,6 @@ final class SplitNodeView: NSView {
         }
     }
 
-    override func draw(_: NSRect) {
-        (Theme.current?.divider ?? .separatorColor).setFill()
-        dividerRect.fill()
-    }
 
     private var hitRect: NSRect {
         dividerRect.insetBy(dx: isHorizontal ? -dividerHitSlop : 0, dy: isHorizontal ? 0 : -dividerHitSlop)

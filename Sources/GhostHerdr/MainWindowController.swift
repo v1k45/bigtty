@@ -2,19 +2,21 @@ import AppKit
 import GhosttyTerminal
 import HerdrKit
 
-/// One app window: sidebar of workspaces, tab strip, and the selected tab's
-/// split tree. Each window keeps its own workspace/tab selection.
+/// One app window: a sidebar of machines and spaces (the selected space's
+/// tabs nested under it), and the selected tab's panes as rounded cards.
+/// Each window keeps its own space/tab selection.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActions {
     private let store: SessionStore
     private let attention: AttentionCenter
+    private let spaceInfo: SpaceInfoCenter
     private let terminalController: TerminalController
     private let sidebar = SidebarView()
-    private let tabStrip = TabStripView()
     private let splitTree = SplitTreeView()
-    private let emptyLabel = NSTextField(labelWithString: "")
-    private var observer: UUID?
-    private var attentionObserver: UUID?
+    private let topBar = CollapsedTopBar()
+    private let placeholder = PlaceholderView()
+    private var observers: [(UUID, (UUID) -> Void)] = []
+    private var settingsObserver: NSObjectProtocol?
     /// herdr's focused pane as of the last render, to notice when it moves.
     private var lastHerdrFocus: String?
     /// A pane to focus once its view exists (reveal, jump-to-unread).
@@ -27,7 +29,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private var lastFocusedPane: String?
     private var theme: Theme
     private var root: RootView!
-    private var main: MainContentView!
 
     var onClose: (() -> Void)?
     /// In window-per-space mode the window shows exactly this workspace, and
@@ -46,28 +47,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     var onShowSpace: ((String) -> Void)?
     /// The pinned workspace no longer exists in herdr.
     var onSpaceClosed: (() -> Void)?
+    var onStartHerdr: (() -> Void)?
+    var onJump: (() -> Void)?
 
     var sidebarVisible: Bool {
         get { root.sidebarVisible }
         set {
             root.sidebarVisible = newValue
-            main.tabsInTitlebar = !newValue
+            UserDefaults.standard.set(newValue, forKey: "sidebarVisible")
         }
     }
 
-    init(store: SessionStore, attention: AttentionCenter, terminalController: TerminalController) {
+    init(store: SessionStore, attention: AttentionCenter, spaceInfo: SpaceInfoCenter, terminalController: TerminalController) {
         self.store = store
         self.attention = attention
+        self.spaceInfo = spaceInfo
         self.terminalController = terminalController
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.minSize = NSSize(width: 600, height: 360)
+        window.isMovableByWindowBackground = true
+        window.minSize = NSSize(width: 640, height: 400)
         window.setFrameAutosaveName("GhostHerdrMain")
         window.tabbingMode = .disallowed
         theme = Theme(controller: terminalController)
@@ -75,8 +80,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window.delegate = self
         buildLayout()
         wireActions()
-        observer = store.observe { [weak self] in self?.render() }
-        attentionObserver = attention.observe { [weak self] in self?.render() }
+        let a = store.observe { [weak self] in self?.render() }
+        let b = attention.observe { [weak self] in self?.render() }
+        let c = spaceInfo.observe { [weak self] in self?.render() }
+        observers = [(a, { store.removeObserver($0) }), (b, { attention.removeObserver($0) }), (c, { spaceInfo.removeObserver($0) })]
+        settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.render() }
+        }
         render()
     }
 
@@ -87,13 +97,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func buildLayout() {
         guard let window else { return }
-        main = MainContentView(tabStrip: tabStrip, content: splitTree)
-        emptyLabel.textColor = .secondaryLabelColor
-        emptyLabel.alignment = .center
-        main.addSubview(emptyLabel)
-        main.emptyLabel = emptyLabel
-
+        let main = MainArea(content: splitTree, placeholder: placeholder, topBar: topBar)
         root = RootView(sidebar: sidebar, main: main)
+        root.sidebarVisible = Settings.sidebarVisible
         root.onAppearanceChange = { [weak self] in self?.applyTheme() }
         window.contentView = root
         applyTheme()
@@ -113,19 +119,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         terminalController.setColorScheme(dark ? .dark : .light)
         theme = Theme(controller: terminalController)
         Theme.current = theme
-        window.backgroundColor = theme.background
-        root.sidebarBackground = theme.sidebar
-        main.background = theme.chrome
+        window.backgroundColor = theme.window
+        root.background = theme.window
+        placeholder.background = theme.pane
         for view in paneViews.values { view.apply(theme) }
+        sidebar.refreshTheme()
         func redraw(_ view: NSView) {
             view.needsDisplay = true
+            view.needsLayout = true
             view.subviews.forEach(redraw)
         }
         window.contentView.map(redraw)
     }
 
     private func wireActions() {
-        sidebar.onSelect = { [weak self] id in
+        sidebar.onSelectSpace = { [weak self] id in
             guard let self else { return }
             if self.pinnedWorkspaceID != nil, id != self.pinnedWorkspaceID {
                 self.onShowSpace?(id)
@@ -133,12 +141,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 self.selectWorkspace(id)
             }
         }
-        sidebar.onNewWorkspace = { [weak self] in self?.newWorkspace(nil) }
-        sidebar.onClose = { [weak self] id in self?.store.perform { try await $0.closeWorkspace(id) } }
-        sidebar.onRename = { [weak self] id in self?.promptRename(workspaceID: id) }
-        tabStrip.onSelect = { [weak self] id in self?.selectTab(id) }
-        tabStrip.onClose = { [weak self] id in self?.store.perform { try await $0.closeTab(id) } }
-        tabStrip.onNew = { [weak self] in self?.newTab(nil) }
+        sidebar.onSelectTab = { [weak self] space, tab in
+            guard let self else { return }
+            if self.pinnedWorkspaceID != nil, space != self.pinnedWorkspaceID {
+                self.onShowSpace?(space)
+                return
+            }
+            if self.workspaceID != space { self.selectWorkspace(space) }
+            self.selectTab(tab)
+        }
+        sidebar.onSpaceMenu = { [weak self] id in self?.spaceMenu(id) }
+        sidebar.onNewSpace = { [weak self] in self?.newWorkspace(nil) }
+        sidebar.onConnectMachine = { [weak self] in self?.onJump?() }
+        topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
+        placeholder.onStart = { [weak self] in self?.onStartHerdr?() }
+        placeholder.onConnect = { [weak self] in self?.onJump?() }
     }
 
     // MARK: - Rendering
@@ -161,14 +178,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             tabID = store.workspace(workspaceID)?.activeTabID ?? store.tabs(in: workspaceID).first?.tabID
         }
 
-        let workspaceBadges = Dictionary(uniqueKeysWithValues: snapshot.workspaces.map {
-            ($0.workspaceID, attention.count(inWorkspace: $0.workspaceID))
-        })
-        sidebar.update(workspaces: snapshot.workspaces, badges: workspaceBadges, selected: workspaceID, status: statusText)
-        let tabs = workspaceID.map(store.tabs(in:)) ?? []
-        let tabBadges = Dictionary(uniqueKeysWithValues: tabs.map { ($0.tabID, attention.count(inTab: $0.tabID)) })
-        tabStrip.update(tabs: tabs, badges: tabBadges, selected: tabID)
-        tabStrip.spaceTitle = pinnedWorkspaceID.flatMap { store.workspace($0)?.label }
+        sidebar.update(sidebarModel())
 
         let layout = tabID.flatMap { store.layouts[$0] }
         let visible = Set(layout?.root.paneIDs ?? [])
@@ -198,19 +208,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             paneViews.removeValue(forKey: id)
             if id == lastFocusedPane || id == herdrFocus { pendingFocus = id }
         }
-        splitTree.show(layout?.root, zoomedPane: layout?.zoomed == true ? herdrFocus : nil)
+        let zoomed = layout?.zoomed == true ? herdrFocus : nil
+        splitTree.show(layout?.root, zoomedPane: zoomed)
         if !retagged.isEmpty { splitTree.rebuild() }
+        let dim = Settings.dimUnfocused
         for (id, view) in paneViews {
             view.update(pane: store.pane(id), attention: attention.reason(for: id))
+            view.dimsWhenUnfocused = dim && visible.count > 1 && zoomed == nil
             view.isFocusedPane = id == focused
+            view.isZoomed = id == zoomed
         }
 
-        emptyLabel.stringValue = switch store.state {
-        case .connecting: "Connecting to herdr…"
-        case let .disconnected(reason): "herdr is not reachable\n\(reason)\n\nStart it with `herdr` in a terminal."
-        case .connected: layout == nil ? "No tab selected" : ""
+        placeholder.state = switch store.state {
+        case .connecting: .connecting
+        case .disconnected: .notRunning(socket: store.client.endpoint.socketPath, binary: store.client.endpoint.herdrBinary)
+        case .connected: layout == nil ? .empty : .hidden
         }
-        emptyLabel.isHidden = layout != nil
+        topBar.update(space: store.workspace(workspaceID)?.label, tab: store.tab(tabID).map(tabLabel), alert: firstAlertElsewhere())
 
         if let target = pendingFocus ?? (lastFocusedPane == nil ? focused : nil), let view = paneViews[target] {
             pendingFocus = nil
@@ -229,13 +243,83 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
     }
 
-    private var statusText: String {
-        switch store.state {
-        case .connecting: "connecting…"
-        case let .connected(version): "herdr \(version)"
-        case .disconnected: "disconnected"
-        }
+    private func tabLabel(_ tab: Tab) -> String {
+        tab.label == String(tab.number) ? "tab \(tab.number)" : tab.label
     }
+
+    /// The sidebar: This Mac with its spaces; the selected one lists its tabs.
+    private func sidebarModel() -> SidebarModel {
+        var model = SidebarModel()
+        switch store.state {
+        case .connecting:
+            model.machines = [.init(name: "This Mac", status: "connecting…", statusIsProblem: false, spaces: [])]
+            return model
+        case .disconnected:
+            model.machines = [.init(name: "This Mac", status: "not running", statusIsProblem: false, spaces: [])]
+            model.message = "No spaces yet."
+            return model
+        case .connected:
+            break
+        }
+        let spaces = store.snapshot.workspaces.enumerated().map { index, workspace -> SidebarModel.Space in
+            let info = spaceInfo.info[workspace.workspaceID] ?? .init()
+            let dir = info.directory.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
+            let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
+            let selected = workspace.workspaceID == workspaceID
+            let tabs = selected ? store.tabs(in: workspace.workspaceID).map { tab -> SidebarModel.Tab in
+                let panes = store.panes(in: tab.tabID).count
+                let alert = attention.count(inTab: tab.tabID) > 0
+                return .init(
+                    id: tab.tabID, label: tabLabel(tab),
+                    detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
+                    selected: tab.tabID == tabID, alert: alert
+                )
+            } : []
+            let finished = store.snapshot.panes.contains {
+                $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
+            }
+            return .init(
+                id: workspace.workspaceID, name: workspace.label,
+                shortcut: index < 9 ? "⌘\(index + 1)" : "",
+                meta: meta, ports: info.ports, line: info.line,
+                alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
+                finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : []
+            )
+        }
+        model.machines = [.init(name: "This Mac", status: "", statusIsProblem: false, spaces: spaces)]
+        return model
+    }
+
+    /// A space other than this one with an agent waiting, for the top bar.
+    private func firstAlertElsewhere() -> String? {
+        store.snapshot.workspaces.first {
+            $0.workspaceID != workspaceID && spaceInfo.info[$0.workspaceID]?.lineIsAlert == true
+        }.map { "\($0.label) needs you" }
+    }
+
+    private func spaceMenu(_ id: String) -> NSMenu {
+        let menu = NSMenu()
+        func add(_ title: String, _ key: String = "", _ action: @escaping () -> Void) {
+            let item = ClosureMenuItem(title: title, keyEquivalent: key, action: action)
+            menu.addItem(item)
+        }
+        add("Rename Space…") { [weak self] in self?.promptRename(workspaceID: id) }
+        add("New Tab") { [weak self] in self?.store.perform { try await $0.createTab(workspaceID: id) } }
+        menu.addItem(.separator())
+        add("Show Changes") { [weak self] in
+            guard let self else { return }
+            if self.workspaceID != id { self.selectWorkspace(id) }
+            self.showChanges(nil)
+        }
+        if let dir = spaceInfo.info[id]?.directory {
+            add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)]) }
+        }
+        menu.addItem(.separator())
+        add("Close Space…") { [weak self] in self?.confirmCloseSpace(id) }
+        return menu
+    }
+
+    // MARK: - Panes
 
     private func paneView(for id: String) -> NSView? {
         guard let pane = store.pane(id) else { return paneViews[id] }
@@ -340,6 +424,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// A link clicked in a terminal opens in the tab's browser pane, or in a
     /// new one split off to the right of that terminal.
     func openURL(_ url: String, from paneID: String) {
+        if Settings.links == .defaultBrowser, let link = URL(string: url) {
+            NSWorkspace.shared.open(link)
+            return
+        }
         guard let tabID = store.pane(paneID)?.tabID else { return }
         if let browserPane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
            let browser = paneViews[browserPane.paneID]?.browser
@@ -397,6 +485,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return id
     }
 
+    /// The space this window shows.
+    var shownWorkspaceID: String? { workspaceID }
+
     /// Selects the pane's workspace and tab and focuses it.
     func reveal(_ pane: Pane) {
         window?.makeKeyAndOrderFront(nil)
@@ -413,7 +504,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     // MARK: - Selection
 
-    private func selectWorkspace(_ id: String) {
+    func selectWorkspace(_ id: String) {
         guard id != workspaceID else { return }
         workspaceID = id
         tabID = nil
@@ -444,9 +535,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         store.perform { try await $0.split(paneID: pane, direction: direction) }
     }
 
+    /// Asks first when an agent is still working or waiting in the pane.
     @objc func closePane(_: Any?) {
-        guard let pane = focusedPaneID else { return }
-        store.perform { try await $0.closePane(pane) }
+        guard let id = focusedPaneID, let pane = store.pane(id) else { return }
+        let busy = (pane.agent != nil || pane.displayAgent != nil) && (pane.agentStatus == .working || pane.agentStatus == .blocked)
+        guard busy, let window else {
+            store.perform { try await $0.closePane(id) }
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Close this pane?"
+        let agent = pane.displayAgent ?? pane.agent ?? "An agent"
+        alert.informativeText = "\(agent) is still \(pane.agentStatus == .blocked ? "waiting for you" : "working") in it. Closing the pane stops it."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Pane")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.store.perform { try await $0.closePane(id) }
+        }
     }
 
     @objc func zoomPane(_: Any?) {
@@ -496,10 +603,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         selectTab(tabs[(index + offset + tabs.count) % tabs.count].tabID)
     }
 
+    /// ⌘1…⌘9: spaces, in sidebar order.
     @objc func selectTabByNumber(_ sender: Any?) {
-        guard let workspaceID, let n = (sender as? NSMenuItem)?.tag else { return }
-        let tabs = store.tabs(in: workspaceID)
-        if n - 1 < tabs.count { selectTab(tabs[n - 1].tabID) }
+        guard let n = (sender as? NSMenuItem)?.tag else { return }
+        let spaces = store.snapshot.workspaces
+        guard n - 1 < spaces.count else { return }
+        sidebar.onSelectSpace?(spaces[n - 1].workspaceID)
     }
 
     /// The folder new spaces start in: the focused pane's working directory.
@@ -516,7 +625,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.prompt = "Open Workspace"
+        panel.prompt = "New Space"
+        panel.message = "Choose the folder the new space starts in."
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
@@ -528,16 +638,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func promptRename(workspaceID: String) {
         guard let window, let workspace = store.workspace(workspaceID) else { return }
         let alert = NSAlert()
-        alert.messageText = "Rename Workspace"
+        alert.messageText = "Rename Space"
         let field = NSTextField(string: workspace.label)
         field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
         alert.accessoryView = field
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
             let label = field.stringValue
             self?.store.perform { try await $0.renameWorkspace(workspaceID, label: label) }
+        }
+    }
+
+    private func confirmCloseSpace(_ id: String) {
+        guard let window, let workspace = store.workspace(id) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Close “\(workspace.label)”?"
+        alert.informativeText = "Its \(workspace.paneCount) pane\(workspace.paneCount == 1 ? "" : "s") and anything running in them stop. Files on disk are not touched."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Space")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.store.perform { try await $0.closeWorkspace(id) }
         }
     }
 
@@ -548,7 +673,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             let browser = view.browser.map {
                 "browser url=\($0.webView.url?.absoluteString ?? "-") title=\($0.webView.title ?? "-") frame=\($0.frame) attached=\($0.superview === view) web=\($0.webView.frame)"
             }
-            out += "pane \(id) frame=\(view.frame) \(view.terminal?.debugDescription ?? browser ?? "")\n"
+            out += "pane \(id) alpha=\(view.alphaValue) frame=\(view.frame) \(view.terminal?.debugDescription ?? browser ?? "")\n"
         }
         return out
     }
@@ -565,37 +690,57 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     func windowWillClose(_: Notification) {
         for view in paneViews.values { view.terminal?.detach() }
         paneViews.removeAll()
-        if let observer { store.removeObserver(observer) }
-        if let attentionObserver { attention.removeObserver(attentionObserver) }
+        for (id, remove) in observers { remove(id) }
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+        observers.removeAll()
         onClose?()
     }
 }
 
-/// Sidebar on the left with a draggable edge, main content on the right.
+extension Notification.Name {
+    static let ghostherdrSettingsChanged = Notification.Name("GhostHerdrSettingsChanged")
+}
+
+/// A menu item that runs a closure.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, keyEquivalent: String = "", action: @escaping () -> Void) {
+        handler = action
+        super.init(title: title, action: #selector(run), keyEquivalent: keyEquivalent)
+        target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder _: NSCoder) { fatalError() }
+
+    @objc private func run() { handler() }
+}
+
+/// Sidebar on the left with a draggable edge; the main area on the right.
 @MainActor
 private final class RootView: NSView {
     private let sidebar: NSView
-    private let main: NSView
-    private var sidebarWidth: CGFloat = 220
+    private let main: MainArea
+    private var sidebarWidth: CGFloat = 256
     private var dragging = false
+    var background: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
     var sidebarVisible = true {
         didSet {
             sidebar.isHidden = !sidebarVisible
+            main.showsTopBar = !sidebarVisible
             needsLayout = true
-            needsDisplay = true
             window?.invalidateCursorRects(for: self)
         }
     }
-    private var visibleWidth: CGFloat { sidebarVisible ? sidebarWidth : 0 }
     var onAppearanceChange: (() -> Void)?
-    var sidebarBackground: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearanceChange?()
     }
 
-    init(sidebar: NSView, main: NSView) {
+    init(sidebar: NSView, main: MainArea) {
         self.sidebar = sidebar
         self.main = main
         super.init(frame: .zero)
@@ -606,24 +751,21 @@ private final class RootView: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
+    override func draw(_: NSRect) {
+        background.setFill()
+        bounds.fill()
+    }
+
     override func layout() {
         super.layout()
         let b = bounds
-        let w = visibleWidth
+        let w = sidebarVisible ? sidebarWidth : 0
         sidebar.frame = NSRect(x: 0, y: 0, width: w, height: b.height)
-        let gap: CGFloat = sidebarVisible ? 1 : 0
-        main.frame = NSRect(x: w + gap, y: 0, width: b.width - w - gap, height: b.height)
+        main.frame = NSRect(x: w, y: 0, width: b.width - w, height: b.height)
+        main.leadingPadding = sidebarVisible ? 0 : 8
     }
 
-    override func draw(_: NSRect) {
-        guard sidebarVisible else { return }
-        sidebarBackground.setFill()
-        NSRect(x: 0, y: 0, width: sidebarWidth, height: bounds.height).fill()
-        (Theme.current?.divider ?? .separatorColor).setFill()
-        NSRect(x: sidebarWidth, y: 0, width: 1, height: bounds.height).fill()
-    }
-
-    private var edge: NSRect { NSRect(x: sidebarWidth - 3, y: 0, width: 7, height: bounds.height) }
+    private var edge: NSRect { NSRect(x: sidebarWidth - 3, y: 0, width: 6, height: bounds.height) }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         sidebarVisible && edge.contains(convert(point, from: superview)) ? self : super.hitTest(point)
@@ -632,38 +774,38 @@ private final class RootView: NSView {
     override func resetCursorRects() {
         if sidebarVisible { addCursorRect(edge, cursor: .resizeLeftRight) }
     }
+
+    override var mouseDownCanMoveWindow: Bool { false }
     override func mouseDown(with _: NSEvent) { dragging = true }
     override func mouseUp(with _: NSEvent) { dragging = false }
 
     override func mouseDragged(with event: NSEvent) {
         guard dragging else { return }
-        sidebarWidth = min(max(convert(event.locationInWindow, from: nil).x, 160), 400)
+        sidebarWidth = min(max(convert(event.locationInWindow, from: nil).x, 200), 420)
         needsLayout = true
-        needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
 }
 
-/// Tab strip on top, split tree below, both clear of the title bar.
+/// Panes (or a placeholder) with 8pt margins; a slim top bar when the
+/// sidebar is hidden, since the traffic lights then sit over the content.
 @MainActor
-private final class MainContentView: NSView {
-    let tabStrip: TabStripView
+private final class MainArea: NSView {
     let content: NSView
-    weak var emptyLabel: NSTextField?
-    var background: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
-    var tabsInTitlebar = false { didSet { needsLayout = true } }
+    let placeholder: PlaceholderView
+    let topBar: CollapsedTopBar
+    var showsTopBar = false { didSet { topBar.isHidden = !showsTopBar; needsLayout = true } }
+    var leadingPadding: CGFloat = 0 { didSet { needsLayout = true } }
 
-    override func draw(_: NSRect) {
-        background.setFill()
-        bounds.fill()
-    }
-
-    init(tabStrip: TabStripView, content: NSView) {
-        self.tabStrip = tabStrip
+    init(content: NSView, placeholder: PlaceholderView, topBar: CollapsedTopBar) {
         self.content = content
+        self.placeholder = placeholder
+        self.topBar = topBar
         super.init(frame: .zero)
-        addSubview(tabStrip)
+        topBar.isHidden = true
         addSubview(content)
+        addSubview(placeholder)
+        addSubview(topBar)
     }
 
     @available(*, unavailable)
@@ -671,19 +813,183 @@ private final class MainContentView: NSView {
 
     override func layout() {
         super.layout()
-        let titlebar: CGFloat = 28
         let b = bounds
-        if tabsInTitlebar {
-            // No sidebar: tabs share the title bar row, clear of the traffic lights.
-            tabStrip.leadingInset = 78
-            tabStrip.frame = NSRect(x: 0, y: b.height - TabStripView.height - 2, width: b.width, height: TabStripView.height)
-        } else {
-            tabStrip.leadingInset = 8
-            tabStrip.frame = NSRect(x: 0, y: b.height - titlebar - TabStripView.height, width: b.width, height: TabStripView.height)
-        }
-        content.frame = NSRect(x: 0, y: 0, width: b.width, height: tabStrip.frame.minY)
-        if let emptyLabel {
-            emptyLabel.frame = NSRect(x: 20, y: b.midY - 60, width: b.width - 40, height: 120)
-        }
+        let top: CGFloat = showsTopBar ? 40 : 8
+        topBar.frame = NSRect(x: 0, y: b.height - 40, width: b.width, height: 40)
+        let area = NSRect(x: leadingPadding, y: 8, width: b.width - leadingPadding - 8, height: b.height - top - 8)
+        content.frame = area
+        placeholder.frame = area
     }
+}
+
+/// Shown instead of the sidebar's top when it is hidden.
+@MainActor
+private final class CollapsedTopBar: NSView {
+    var onShowSidebar: (() -> Void)?
+    private let button = NSButton()
+    private let space = NSTextField(labelWithString: "")
+    private let tab = NSTextField(labelWithString: "")
+    private let alert = NSTextField(labelWithString: "")
+    private let alertDot = NSView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Show Sidebar")
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.target = self
+        button.action = #selector(show)
+        space.font = .systemFont(ofSize: 13, weight: .semibold)
+        tab.font = .systemFont(ofSize: 12)
+        tab.textColor = .secondaryLabelColor
+        alert.font = .systemFont(ofSize: 12)
+        alert.textColor = .controlAccentColor
+        alert.alignment = .right
+        alertDot.wantsLayer = true
+        alertDot.layer?.cornerRadius = 3.5
+        alertDot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        for view in [button, space, tab, alert, alertDot] { addSubview(view) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    func update(space: String?, tab: String?, alert: String?) {
+        self.space.stringValue = space ?? ""
+        self.tab.stringValue = tab ?? ""
+        self.alert.stringValue = alert ?? ""
+        alertDot.isHidden = alert == nil
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let y = (bounds.height - 18) / 2
+        button.frame = NSRect(x: 84, y: y - 3, width: 26, height: 24)
+        let sw = ceil(space.intrinsicContentSize.width) + 4
+        space.frame = NSRect(x: 116, y: y, width: sw, height: 18)
+        tab.frame = NSRect(x: 116 + sw + 8, y: y + 1, width: 200, height: 16)
+        let aw = alert.intrinsicContentSize.width
+        alert.frame = NSRect(x: bounds.width - aw - 16, y: y + 1, width: aw, height: 16)
+        alertDot.frame = NSRect(x: bounds.width - aw - 28, y: y + 5, width: 7, height: 7)
+    }
+
+    @objc private func show() { onShowSidebar?() }
+}
+
+/// What the main area shows with no panes: connecting, herdr not running,
+/// or an empty space.
+@MainActor
+final class PlaceholderView: NSView {
+    enum State: Equatable {
+        case hidden, connecting, empty
+        case notRunning(socket: String, binary: String)
+    }
+
+    var onStart: (() -> Void)?
+    var onConnect: (() -> Void)?
+    var background: NSColor = .textBackgroundColor { didSet { layer?.backgroundColor = background.cgColor } }
+    var state: State = .hidden { didSet { if state != oldValue { apply() } } }
+
+    private let spinner = NSProgressIndicator()
+    private let icon = NSImageView()
+    private let title = NSTextField(labelWithString: "")
+    private let detail = NSTextField(wrappingLabelWithString: "")
+    private let start = NSButton(title: "Start herdr", target: nil, action: nil)
+    private let connect = NSButton(title: "Connect Machine…", target: nil, action: nil)
+    private let footnote = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = PaneContainerView.cornerRadius
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 26, weight: .light)
+        icon.contentTintColor = .secondaryLabelColor
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        title.alignment = .center
+        detail.font = .systemFont(ofSize: 13)
+        detail.textColor = .secondaryLabelColor
+        detail.alignment = .center
+        start.bezelStyle = .rounded
+        start.keyEquivalent = "\r"
+        start.target = self
+        start.action = #selector(startClicked)
+        connect.bezelStyle = .rounded
+        connect.target = self
+        connect.action = #selector(connectClicked)
+        footnote.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        footnote.textColor = .tertiaryLabelColor
+        footnote.alignment = .center
+        for view in [spinner, icon, title, detail, start, connect, footnote] { addSubview(view) }
+        apply()
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    private func apply() {
+        isHidden = state == .hidden
+        let notRunning: Bool
+        switch state {
+        case .connecting:
+            notRunning = false
+            title.stringValue = ""
+            detail.stringValue = "Connecting to herdr…"
+            spinner.startAnimation(nil)
+        case let .notRunning(socket, binary):
+            notRunning = true
+            title.stringValue = "herdr isn’t running"
+            detail.stringValue = "GhostHerdr shows the spaces, agents and terminals of a herdr server. Start one here, or connect to a machine that already runs herdr."
+            footnote.stringValue = "looked for \((socket as NSString).abbreviatingWithTildeInPath) · herdr at \((binary as NSString).abbreviatingWithTildeInPath)"
+            spinner.stopAnimation(nil)
+        case .empty:
+            notRunning = false
+            title.stringValue = ""
+            detail.stringValue = "This space has no open tab. ⌘T opens one."
+            spinner.stopAnimation(nil)
+        case .hidden:
+            notRunning = false
+            spinner.stopAnimation(nil)
+        }
+        spinner.isHidden = state != .connecting
+        for view in [icon, title, start, connect, footnote] { view.isHidden = !notRunning }
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let midX = bounds.midX
+        var y = bounds.midY + 70
+        icon.frame = NSRect(x: midX - 28, y: y, width: 56, height: 56)
+        y -= 36
+        title.frame = NSRect(x: 0, y: y, width: bounds.width, height: 26)
+        detail.preferredMaxLayoutWidth = 420
+        let dh = detail.fittingSize.height
+        if case .notRunning = state {
+            y -= dh + 8
+        } else {
+            y = bounds.midY - dh / 2
+        }
+        detail.frame = NSRect(x: midX - 210, y: y, width: 420, height: dh)
+        spinner.frame = NSRect(x: midX - 110, y: y + (dh - 16) / 2, width: 16, height: 16)
+        if case .connecting = state {
+            detail.frame = NSRect(x: midX - 80, y: y, width: 200, height: dh)
+            detail.alignment = .left
+        } else {
+            detail.alignment = .center
+        }
+        start.sizeToFit()
+        connect.sizeToFit()
+        let total = start.frame.width + connect.frame.width + 10
+        y -= 44
+        start.frame.origin = NSPoint(x: midX - total / 2, y: y)
+        connect.frame.origin = NSPoint(x: midX - total / 2 + start.frame.width + 10, y: y)
+        footnote.frame = NSRect(x: 0, y: y - 34, width: bounds.width, height: 16)
+    }
+
+    @objc private func startClicked() { onStart?() }
+    @objc private func connectClicked() { onConnect?() }
 }

@@ -35,6 +35,8 @@ enum MainMenu {
         let appMenu = submenu(main, "GhostHerdr")
         appMenu.addItem(withTitle: "About GhostHerdr", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        item(appMenu, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Install ghr and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide GhostHerdr", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -74,17 +76,20 @@ enum MainMenu {
         item(pane, "Resize Up", #selector(PaneActions.resizeUp(_:)), arrow(.upArrow), [.command, .control])
         item(pane, "Resize Down", #selector(PaneActions.resizeDown(_:)), arrow(.downArrow), [.command, .control])
 
-        let tabs = submenu(main, "Tab")
+        let tabs = submenu(main, "Go")
+        item(tabs, "Jump To…", #selector(AppDelegate.showJump(_:)), "k")
+        tabs.addItem(.separator())
         item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "]", [.command, .shift])
         item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "[", [.command, .shift])
         tabs.addItem(.separator())
         for n in 1...9 {
-            let i = item(tabs, "Tab \(n)", #selector(PaneActions.selectTabByNumber(_:)), "\(n)")
+            let i = item(tabs, "Space \(n)", #selector(PaneActions.selectTabByNumber(_:)), "\(n)")
             i.tag = n
         }
 
         let view = submenu(main, "View")
-        item(view, "Show Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
+        item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
+        item(view, "Dim Unfocused Panes", #selector(AppDelegate.toggleDimming(_:)), "")
         item(view, "One Window per Space", #selector(AppDelegate.toggleWindowPerSpace(_:)), "")
 
         let window = submenu(main, "Window")

@@ -93,6 +93,11 @@ final class AttentionCenter: NSObject, UNUserNotificationCenterDelegate {
 
     private func notify(_ transition: Attention.Transition) {
         guard notificationsAvailable, let pane = store.pane(transition.paneID) else { return }
+        switch Settings.notify {
+        case .never: return
+        case .needsYou: if transition.reason == .done { return }
+        case .needsYouOrFinishes: break
+        }
         let workspace = store.workspace(pane.workspaceID)?.label ?? pane.workspaceID
         let agent = pane.displayAgent ?? pane.agent ?? "Agent"
         let content = UNMutableNotificationContent()

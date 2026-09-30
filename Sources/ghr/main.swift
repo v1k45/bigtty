@@ -25,7 +25,7 @@ browser commands (targets are refs from `snapshot`, like @e3, or CSS selectors):
   get <text|html|value|attr|count|box|visible|enabled|checked|url|title> [target] [attr]
   eval <js>                     run JavaScript in the page ("-" reads stdin)
   wait [--selector S | --text T | --url U | --fn JS | --load] [--gone] [--timeout secs]
-  screenshot [path]             PNG of the page; prints the path
+  screenshot [path] [--open]    PNG of the page; prints the path (--open: preview it beside you)
   console [--clear]             captured console output and page errors
   navigate <url> | back | forward | reload | focus | close
 
@@ -241,6 +241,12 @@ func browser(_ args: [String]) {
     do {
         let result = try ControlClient().call(method, params)
         printResult(command, result, json: parsed.switches.contains("json"))
+        // `screenshot --open`: show it in a preview pane beside the caller.
+        if command == "screenshot", parsed.switches.contains("open"), let path = result["path"]?.stringValue {
+            var open: [String: JSONValue] = ["path": .string(path)]
+            if let caller = params["caller_pane"] { open["caller_pane"] = caller }
+            _ = try ControlClient().call("files.open", open)
+        }
     } catch HerdrError.connect {
         fail("GhostHerdr is not running (no socket at \(GhostHerdrControl.socketPath))", code: 3)
     } catch let HerdrError.server(code, message) {

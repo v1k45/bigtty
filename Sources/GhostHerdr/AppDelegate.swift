@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private(set) var store: SessionStore!
     private(set) var terminalController: TerminalController!
     private(set) var attention: AttentionCenter!
+    private(set) var spaceInfo: SpaceInfoCenter!
     private var controlServer: ControlServer?
     private var controlAPI: ControlAPI!
     private var windows: [MainWindowController] = []
@@ -14,8 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Each herdr workspace ("space") gets its own window, cmux-style, and the
     /// sidebar is optional. Off: sidebar windows that switch between spaces.
     private var windowPerSpace: Bool {
-        get { UserDefaults.standard.object(forKey: "windowPerSpace") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "windowPerSpace") }
+        get { Settings.windowPerSpace }
+        set { Settings.windowPerSpace = newValue }
     }
 
     /// Spaces whose window the user closed; they stay closed until asked for.
@@ -26,12 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationDidFinishLaunching(_: Notification) {
         let env = ProcessInfo.processInfo.environment
+        // Debug: GHOSTHERDR_APPEARANCE=light|dark overrides the system setting.
+        if let look = env["GHOSTHERDR_APPEARANCE"] {
+            NSApp.appearance = NSAppearance(named: look == "light" ? .aqua : .darkAqua)
+        }
         let endpoint = HerdrEndpoint(session: env["GHOSTHERDR_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
         store = SessionStore(endpoint: endpoint)
         terminalController = Self.makeTerminalController()
         attention = AttentionCenter(store: store)
         attention.viewedPanes = { [weak self] in Set(self?.windows.compactMap(\.viewedPane) ?? []) }
         attention.reveal = { [weak self] pane in self?.reveal(pane) }
+        spaceInfo = SpaceInfoCenter(store: store, attention: attention)
         NSApp.mainMenu = MainMenu.build()
         NSApp.windowsMenu?.delegate = self
         store.observe { [weak self] in
@@ -116,8 +122,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @discardableResult
     private func openWindow(pinnedTo spaceID: String?, activate: Bool = true) -> MainWindowController {
-        let controller = MainWindowController(store: store, attention: attention, terminalController: terminalController)
-        controller.sidebarVisible = !windowPerSpace
+        let controller = MainWindowController(
+            store: store, attention: attention, spaceInfo: spaceInfo, terminalController: terminalController
+        )
+        controller.onStartHerdr = { [weak self] in self?.startHerdr() }
+        controller.onJump = { [weak self] in self?.showJump(nil) }
         controller.onClose = { [weak self, weak controller] in
             guard let self, let controller else { return }
             if let id = controller.pinnedWorkspaceID { self.dismissedSpaces.insert(id) }
@@ -192,6 +201,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
+    /// Starts the herdr server for this endpoint in the background, detached
+    /// from the app so it outlives it.
+    private func startHerdr() {
+        let endpoint = store.client.endpoint
+        let args = ([endpoint.herdrBinary] + endpoint.sessionArguments + ["server"])
+            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "nohup \(args) >/dev/null 2>&1 &"]
+        do {
+            try process.run()
+        } catch {
+            NSLog("ghostherdr: could not start herdr: \(error)")
+        }
+    }
+
+    /// ⌘K. The palette arrives with remote machines; for now it opens the
+    /// space picker.
+    /// Debug hook: filter the open palette.
+    @objc func debugPaletteType(_ sender: Any?) {
+        JumpPalette.shared.debugType(sender as? String ?? "")
+    }
+
+    @objc func showJump(_: Any?) {
+        JumpPalette.shared.show(store: store, spaceInfo: spaceInfo, attention: attention) { [weak self] target in
+            self?.jump(to: target)
+        }
+    }
+
+    private func jump(to target: JumpPalette.Target) {
+        switch target {
+        case let .space(id):
+            if windowPerSpace {
+                showSpace(id)
+            } else {
+                let key = windows.first { $0.window?.isKeyWindow == true } ?? windows.first
+                key?.window?.makeKeyAndOrderFront(nil)
+                key?.selectWorkspace(id)
+            }
+        case let .pane(pane):
+            reveal(pane)
+        case .newSpace:
+            (windows.first { $0.window?.isKeyWindow == true } ?? windows.first)?.newWorkspace(nil)
+        }
+    }
+
     @objc func toggleWindowPerSpace(_: Any?) {
         windowPerSpace.toggle()
         for controller in windows { controller.onClose = nil; controller.close() }
@@ -202,8 +257,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reconcileSpaceWindows()
     }
 
+    @objc func toggleDimming(_: Any?) {
+        Settings.dimUnfocused.toggle()
+        Settings.changed()
+    }
+
+    @objc func showSettings(_: Any?) {
+        let settings = SettingsWindowController.shared
+        settings.herdrDescription = { [weak self] in
+            guard let self else { return "" }
+            let endpoint = self.store.client.endpoint
+            var version = "not running"
+            if case let .connected(v) = self.store.state { version = v }
+            let session = endpoint.session ?? "default session"
+            return "\((endpoint.herdrBinary as NSString).abbreviatingWithTildeInPath) · \(version) · \(session)"
+        }
+        settings.onWindowModeChange = { [weak self] in self?.toggleWindowPerSpace(nil) }
+        settings.show()
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleWindowPerSpace(_:)) { item.state = windowPerSpace ? .on : .off }
+        if item.action == #selector(toggleDimming(_:)) {
+            item.state = (UserDefaults.standard.object(forKey: "dimUnfocused") as? Bool ?? true) ? .on : .off
+        }
         return true
     }
 
@@ -268,14 +345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let separator = NSMenuItem.separator()
         separator.tag = Self.spaceItemTag
         menu.addItem(separator)
-        for (index, space) in spaces.enumerated() {
+        for space in spaces {
             let count = attention.count(inWorkspace: space.workspaceID)
             let title = count > 0 ? "\(space.label)  (\(count))" : space.label
-            let item = NSMenuItem(
-                title: title, action: #selector(showSpaceFromMenu(_:)),
-                keyEquivalent: index < 9 ? "\(index + 1)" : ""
-            )
-            item.keyEquivalentModifierMask = [.command, .control]
+            let item = NSMenuItem(title: title, action: #selector(showSpaceFromMenu(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = space.workspaceID
             item.tag = Self.spaceItemTag
@@ -291,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     override var debugDescription: String {
         var out = "state: \(store.state) windowPerSpace=\(windowPerSpace)\n"
+        out += JumpPalette.shared.debugRows + "\n"
         out += "workspaces: \(store.snapshot.workspaces.map(\.workspaceID)) dismissed=\(dismissedSpaces.sorted())\n"
         out += "attention: blocked=\(attention.attention.blocked.sorted()) unseenDone=\(attention.attention.unseenDone.sorted())\n"
         for (i, window) in windows.enumerated() {

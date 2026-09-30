@@ -34,14 +34,15 @@ open build/GhostHerdr.app    # connects to your default herdr session
 terminal uses your Ghostty config (`config.ghostty` or `config` under
 `~/.config/ghostty` or `~/Library/Application Support/com.mitchellh.ghostty`).
 
-By default every herdr workspace ("space") gets its own window, with its tabs
-in the title bar. **View ▸ One Window per Space** switches to sidebar windows
-that flip between spaces instead. When two windows show the same pane, the one
-you last focused or typed in controls it and the other mirrors it read-only.
-
-Panes whose agent is blocked get an orange ring, finished ones you haven't
-looked at a blue one; tabs, spaces and the Dock icon carry counts, and a
-notification fires for panes you aren't looking at.
+The window is a native Mac layout: a sidebar of machines and spaces on the
+left, the selected tab's panes as rounded cards on the right. Each space card
+shows its git branch and folder, the ports its processes listen on, and what
+its agents are doing; the selected space lists its tabs. Unfocused panes dim;
+a pane whose agent needs you gets a thin accent ring, and its space lights up
+with the agent's question. ⌘K jumps to any space, agent or pane. Settings (⌘,)
+switches to one window per space, and sets notifications and where terminal
+links open. When two windows show the same pane, the one you last focused or
+typed in controls it and the other mirrors it read-only.
 
 ## Keys
 
@@ -52,10 +53,9 @@ notification fires for panes you aren't looking at.
 | ⌃⌘ arrows | resize pane |
 | ⌘⇧↩ | zoom pane |
 | ⌘W / ⌘⌥W | close pane / tab |
-| ⌘T, ⌘1…9, ⌘⇧[ ] | new tab, select tab, cycle tabs |
-| ⌘N | new space in the current folder (new window in sidebar mode) |
-| ⌘⇧N | new space from a folder picker |
-| ⌃⌘1…9 | show space |
+| ⌘T, ⌘⇧[ ] | new tab, cycle tabs |
+| ⌘1…9, ⌘K | switch space, jump to a space, agent or pane |
+| ⌘N / ⌘⇧N | new space in the current folder / from a folder picker |
 | ⌘⇧U | jump to next pane needing attention |
 | ⌃⌘S | toggle sidebar |
 | ⌘⌥B / ⌘L | new browser pane / address bar |
@@ -85,7 +85,8 @@ terminal opens it in the tab's browser pane, or a new one to the right.
 
 A files pane (⌘⌥F, or `ghr open <path>[:line]` from a herdr pane) shows the
 folder as a tree with git status and the selected file with syntax
-highlighting and line numbers. **Changes** (⌘⌥G, or `ghr diff`) lists what git
+highlighting and line numbers; images and PDFs show as previews
+(`ghr browser screenshot --open` previews a page screenshot beside you). **Changes** (⌘⌥G, or `ghr diff`) lists what git
 sees as changed and shows each file's diff against HEAD. Both refresh live as
 files change. Right-click a file to insert its path into the tab's terminal.
 
