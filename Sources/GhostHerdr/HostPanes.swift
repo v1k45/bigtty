@@ -127,6 +127,43 @@ final class HostPaneStore {
         try await client.sendText(paneID: pane, text: "exec \(command)\r")
     }
 
+    /// herdr drops pane tags on a restart or live handoff while the pane's
+    /// placeholder keeps running. Untagged panes are checked once: one
+    /// running `ghr pane-host <kind> <id>` (or, remotely, our placeholder in
+    /// a pane we recorded) gets its tags back.
+    private static var checkedPanes: Set<String> = []
+
+    static func restoreTags(store: SessionStore, remote: Bool) {
+        let untagged = store.snapshot.panes.filter { $0.hostID == nil }
+        let key: (Pane) -> String = { "\(store.client.endpoint.socketPath)|\($0.paneID)|\($0.terminalID)" }
+        let pending = untagged.filter { !checkedPanes.contains(key($0)) }
+        guard !pending.isEmpty else { return }
+        for pane in pending { checkedPanes.insert(key(pane)) }
+        let recorded = Dictionary(shared.states.compactMap { id, state in state.paneID.map { ($0, (id, state)) } }, uniquingKeysWith: { a, _ in a })
+        store.perform { client in
+            for pane in pending {
+                let info = try? await client.call("pane.process_info", ["pane_id": .string(pane.paneID)])
+                guard case let .array(processes)? = info?["process_info"]?["foreground_processes"] else { continue }
+                for process in processes {
+                    guard case let .array(argv)? = process["argv"] else { continue }
+                    let args = argv.compactMap(\.stringValue)
+                    var tag: (id: String, kind: HostPaneKind)?
+                    if let at = args.firstIndex(of: "pane-host"), args.count > at + 2, let kind = HostPaneKind(rawValue: args[at + 1]) {
+                        tag = (args[at + 2], kind)
+                    } else if remote, args.first.map({ ($0 as NSString).lastPathComponent == "cat" }) == true,
+                              let (id, state) = recorded[pane.paneID] {
+                        tag = (id, state.kind)
+                    }
+                    guard let tag else { continue }
+                    let state = await MainActor.run { shared[tag.id] } ?? HostPaneState(kind: tag.kind)
+                    try await client.reportMetadata(paneID: pane.paneID, title: hostTitle(state),
+                                                    tokens: ["ghr_kind": tag.kind.rawValue, "ghr_id": tag.id])
+                    break
+                }
+            }
+        }
+    }
+
     static func hostTitle(_ state: HostPaneState) -> String {
         switch state.kind {
         case .browser: "🌐 " + (state.title ?? state.url ?? "Browser")

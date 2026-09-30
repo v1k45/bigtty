@@ -197,6 +197,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     // MARK: - Rendering
 
     private func render() {
+        if case .connected = store.state { HostPaneStore.restoreTags(store: store, remote: !machine.isLocal) }
         if Settings.terminalMode == .herdrClient { return renderClient() }
         let snapshot = store.snapshot
         if let pinned = pinnedWorkspaceID {
