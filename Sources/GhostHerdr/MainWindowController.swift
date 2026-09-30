@@ -308,6 +308,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         HostPaneStore.open(HostPaneState(kind: .browser, url: url), beside: paneID, direction: .right, store: store)
     }
 
+    /// Debug hook: scrolls the focused terminal by N lines (negative: down).
+    @objc func debugScroll(_ sender: Any?) {
+        guard let lines = (sender as? String).flatMap(Int32.init), let id = focusedPaneID else { return }
+        paneViews[id]?.terminal?.debugScroll(lines: lines)
+    }
+
     /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
     @objc func debugOpenURL(_ sender: Any?) {
         if let url = sender as? String, let pane = focusedPaneID { openURL(url, from: pane) }

@@ -176,19 +176,39 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         return ok
     }
 
-    /// herdr owns scrollback. Unless the program in the pane captured the
-    /// mouse, turn wheel movement into `terminal.scroll`.
+    /// The wheel goes to herdr as `terminal.scroll`: herdr scrolls its
+    /// scrollback, or, for full-screen apps that asked for mouse input
+    /// (Claude Code, vim, less), forwards one wheel event per message. So each
+    /// line is its own message, at the cell under the pointer. herdr's frames
+    /// don't carry the app's mouse modes, so Ghostty can't tell the difference
+    /// itself.
     override func scrollWheel(with event: NSEvent) {
-        if isMouseCaptured {
-            super.scrollWheel(with: event)
-            return
-        }
         let lineHeight: CGFloat = event.hasPreciseScrollingDeltas ? 16 : 1
         scrollAccumulator += event.scrollingDeltaY / lineHeight
         let lines = Int(scrollAccumulator.rounded(.towardZero))
         guard lines != 0 else { return }
         scrollAccumulator -= CGFloat(lines)
-        channel?.scroll(up: lines > 0, lines: abs(lines))
+        let cell = cellPosition(of: event)
+        for _ in 0..<min(abs(lines), 40) {
+            channel?.scroll(up: lines > 0, lines: 1, column: cell?.column, row: cell?.row)
+        }
+    }
+
+    /// Zero-based grid cell under the event, from the surface's cell size.
+    private func cellPosition(of event: NSEvent) -> (column: Int, row: Int)? {
+        guard let viewport, viewport.cellWidthPixels > 0, viewport.cellHeightPixels > 0 else { return nil }
+        let scale = window?.backingScaleFactor ?? 2
+        let point = convert(event.locationInWindow, from: nil)
+        let column = Int(point.x * scale) / Int(viewport.cellWidthPixels)
+        let row = Int((bounds.height - point.y) * scale) / Int(viewport.cellHeightPixels)
+        return (min(max(column, 0), Int(viewport.columns) - 1), min(max(row, 0), Int(viewport.rows) - 1))
+    }
+
+    /// Debug hook: a synthetic wheel event, `lines` positive for up.
+    func debugScroll(lines: Int32) {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0),
+              let event = NSEvent(cgEvent: cg) else { return }
+        scrollWheel(with: event)
     }
 }
 
