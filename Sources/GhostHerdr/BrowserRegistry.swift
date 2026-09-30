@@ -60,13 +60,17 @@ final class BrowserRegistry {
 
     func existing(_ hostID: String) -> BrowserPaneView? { views[hostID] }
 
-    func noteFocus(_ hostID: String) { lastFocused = hostID }
+    func noteFocus(_ hostID: String) {
+        lastFocused = hostID
+        if let view = views[hostID] { WebExtensions.tabActivated(view) }
+    }
 
     /// Drops views whose herdr pane is gone.
     func prune(keeping live: Set<String>) {
         for (id, view) in views where !live.contains(id) && HostPaneStore.shared[id] == nil {
             view.removeFromSuperview()
             views.removeValue(forKey: id)
+            WebExtensions.tabClosed(view)
         }
         if let lastFocused, views[lastFocused] == nil { self.lastFocused = nil }
     }

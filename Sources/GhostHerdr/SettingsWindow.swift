@@ -144,6 +144,9 @@ final class SettingsWindowController: NSWindowController {
     private let fullscreen = NSPopUpButton()
     private let paneKeys = NSPopUpButton()
     private let herdr = NSTextField(labelWithString: "")
+    private let getUBlock = NSButton(title: "Get uBlock Origin Lite", target: nil, action: nil)
+    private let extensionsFolder = NSButton(title: "Open Folder", target: nil, action: nil)
+    private let extensionsStatus = NSTextField(wrappingLabelWithString: "")
 
     private let engine = NSPopUpButton()
     private let copySelect = NSSwitch()
@@ -269,8 +272,68 @@ final class SettingsWindowController: NSWindowController {
             [label("Open terminal links:"), links],
             [label("Go to pane:"), stack(paneKeys, "⌥ alone is quicker, but then ⌥1–9 no longer type ¡ ™ £ … or reach terminal apps.")],
             [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
+            [label("Browser extensions:"), extensionsRow()],
             [label("herdr:"), herdr],
         ])
+    }
+
+    /// Web extensions for browser panes: the uBlock installer, the folder
+    /// for any other unpacked MV3 extension, and what's loaded.
+    private func extensionsRow() -> NSView {
+        getUBlock.bezelStyle = .rounded
+        getUBlock.target = self
+        getUBlock.action = #selector(installUBlock)
+        extensionsFolder.bezelStyle = .rounded
+        extensionsFolder.target = self
+        extensionsFolder.action = #selector(openExtensionsFolder)
+        extensionsStatus.font = .systemFont(ofSize: 11)
+        extensionsStatus.textColor = .secondaryLabelColor
+        extensionsStatus.preferredMaxLayoutWidth = 380
+        let buttons = NSStackView(views: [getUBlock, extensionsFolder])
+        buttons.spacing = 8
+        let column = NSStackView(views: [buttons, extensionsStatus])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 4
+        NotificationCenter.default.addObserver(forName: .ghostherdrExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateExtensionsStatus() }
+        }
+        updateExtensionsStatus()
+        return column
+    }
+
+    private func updateExtensionsStatus() {
+        guard WebExtensions.isSupported else {
+            getUBlock.isEnabled = false
+            extensionsFolder.isEnabled = false
+            extensionsStatus.stringValue = "Needs macOS 15.4 or later."
+            return
+        }
+        let loaded = WebExtensions.status
+        extensionsStatus.stringValue = (loaded.isEmpty ? "None loaded." : "Loaded: " + loaded.joined(separator: ", ") + ".")
+            + " Unpacked Safari or Chrome MV3 extensions in the folder load at launch."
+        getUBlock.title = loaded.contains(where: { $0.hasPrefix("uBlock") }) ? "Update uBlock Origin Lite" : "Get uBlock Origin Lite"
+    }
+
+    @objc private func installUBlock() {
+        getUBlock.isEnabled = false
+        extensionsStatus.stringValue = "Downloading uBlock Origin Lite…"
+        WebExtensions.installUBlockLite { [weak self] result in
+            guard let self else { return }
+            self.getUBlock.isEnabled = true
+            switch result {
+            case let .success(version):
+                self.extensionsStatus.stringValue = "Installed uBlock Origin Lite \(version)."
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.updateExtensionsStatus() }
+            case let .failure(error):
+                self.extensionsStatus.stringValue = "Couldn’t install: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    @objc private func openExtensionsFolder() {
+        try? FileManager.default.createDirectory(at: WebExtensions.folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(WebExtensions.folder)
     }
 
     private func buildTerminal() -> NSView {

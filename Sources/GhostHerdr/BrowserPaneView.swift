@@ -13,6 +13,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private let reload = NSButton()
     private let external = NSButton()
     private let closeButton = NSButton()
+    /// Toolbar buttons of loaded web extensions (uBlock Origin Lite…).
+    private var extensionButtons: [NSButton] = []
+    private var extensionActions: [() -> Void] = []
+    private var extensionObserver: NSObjectProtocol?
+    /// Where an extension's popup points: its toolbar button.
+    var extensionAnchor: NSView? { extensionButtons.first }
     /// The pane's × button.
     var onClose: (() -> Void)?
     private let address = NSTextField()
@@ -29,7 +35,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// The user clicked into the pane.
     var onFocus: (() -> Void)?
 
-    static let toolbarHeight: CGFloat = 34
+    static let toolbarHeight: CGFloat = 28
 
     /// One cookie/storage store for every browser pane, persisted on disk.
     private static let dataStore = WKWebsiteDataStore.default()
@@ -171,6 +177,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         // Safari's version, and sites then call the browser outdated.
         config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Safari/605.1.15"
         config.mediaTypesRequiringUserActionForPlayback = []
+        WebExtensions.configure(config)
         // Which frames are playing sound, for the tab's speaker.
         content.addUserScript(WKUserScript(source: Self.mediaHook, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         webView = WKWebView(frame: .zero, configuration: config)
@@ -190,18 +197,19 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         configure(external, "safari", "Open in Default Browser", #selector(openExternally))
         configure(closeButton, "xmark", "Close Pane", #selector(closePane))
         address.placeholderString = "Search or enter address"
-        address.font = .systemFont(ofSize: 12)
+        address.font = .systemFont(ofSize: 11.5)
+        address.textColor = .secondaryLabelColor
         address.isBezeled = false
         address.drawsBackground = false
         address.focusRingType = .none
-        address.alignment = .center
+        address.alignment = .left
         address.lineBreakMode = .byTruncatingTail
         address.cell?.usesSingleLineMode = true
         address.delegate = self
         address.target = self
         address.action = #selector(addressEntered)
         addressBox.wantsLayer = true
-        addressBox.layer?.cornerRadius = 7
+        addressBox.layer?.cornerRadius = 6
         addressBox.addSubview(address)
         toolbarLine.wantsLayer = true
         progress.wantsLayer = true
@@ -211,7 +219,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         automationStrip.onTakeOver = { [weak self] in self?.hideAutomation() }
         errorPage.isHidden = true
         errorPage.onReload = { [weak self] in self?.reloadPage() }
-        for view in [back, forward, reload, addressBox, external, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
+        for view in [back, forward, addressBox, reload, external, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
             addSubview(view)
         }
         wantsLayer = true
@@ -241,6 +249,40 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             navigate(to: url)
         }
         updateButtons()
+        extensionObserver = NotificationCenter.default.addObserver(forName: .ghostherdrExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshExtensionButtons() }
+        }
+        WebExtensions.tabOpened(self)
+        refreshExtensionButtons()
+    }
+
+    isolated deinit {
+        if let extensionObserver { NotificationCenter.default.removeObserver(extensionObserver) }
+    }
+
+    /// One toolbar button per extension with an action, left of ↗.
+    func refreshExtensionButtons() {
+        extensionButtons.forEach { $0.removeFromSuperview() }
+        let actions = WebExtensions.actions(for: self)
+        extensionActions = actions.map(\.perform)
+        extensionButtons = actions.enumerated().map { index, action in
+            let button = NSButton()
+            button.image = action.icon ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: action.name)
+            button.imageScaling = .scaleProportionallyDown
+            button.isBordered = false
+            button.toolTip = action.badge.isEmpty ? action.name : "\(action.name) · \(action.badge)"
+            button.tag = index
+            button.target = self
+            button.action = #selector(extensionClicked(_:))
+            addSubview(button)
+            return button
+        }
+        needsLayout = true
+    }
+
+    @objc private func extensionClicked(_ sender: NSButton) {
+        guard extensionActions.indices.contains(sender.tag) else { return }
+        extensionActions[sender.tag]()
     }
 
     @available(*, unavailable)
@@ -248,8 +290,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     private func configure(_ button: NSButton, _ symbol: String, _ label: String, _ action: Selector) {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        button.contentTintColor = .secondaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: 10.5, weight: .regular))
+        button.contentTintColor = .tertiaryLabelColor
         button.isBordered = false
         button.toolTip = label
         button.target = self
@@ -263,18 +305,29 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         layer?.backgroundColor = theme?.pane.cgColor
         let h = pageFullscreen ? 0 : Self.toolbarHeight
         for view in [back, forward, closeButton, reload, external, addressBox, toolbarLine] as [NSView] { view.isHidden = pageFullscreen }
-        let y = b.height - h + (h - 24) / 2
-        back.frame = NSRect(x: 8, y: y, width: 26, height: 24)
-        forward.frame = NSRect(x: 34, y: y, width: 26, height: 24)
-        closeButton.frame = NSRect(x: b.width - 34, y: y, width: 26, height: 24)
-        reload.frame = NSRect(x: b.width - 60, y: y, width: 26, height: 24)
-        external.frame = NSRect(x: b.width - 86, y: y, width: 26, height: 24)
-        // A centered, Safari-like address field.
-        let available = b.width - 94 - 94
-        let fieldWidth = max(120, min(available, max(available * 0.8, 260)))
-        addressBox.frame = NSRect(x: (b.width - fieldWidth) / 2, y: y, width: fieldWidth, height: 24)
-        addressBox.layer?.backgroundColor = theme?.field.cgColor
-        address.frame = NSRect(x: 8, y: 4, width: fieldWidth - 16, height: 16)
+        // Light and compact: ‹ › on the left, the address (with ↻ inside)
+        // in the middle, extensions, ↗ and × on the right.
+        let y = b.height - h + (h - 20) / 2
+        back.frame = NSRect(x: 6, y: y, width: 20, height: 20)
+        forward.frame = NSRect(x: 26, y: y, width: 20, height: 20)
+        closeButton.frame = NSRect(x: b.width - 26, y: y, width: 20, height: 20)
+        external.frame = NSRect(x: b.width - 46, y: y, width: 20, height: 20)
+        // Narrow panes keep ‹, the address and ×; the rest steps aside.
+        let roomy = b.width >= 300, tight = b.width < 200
+        forward.isHidden = pageFullscreen || tight
+        external.isHidden = pageFullscreen || !roomy
+        let extensionsShown = roomy ? extensionButtons.count : 0
+        for (index, button) in extensionButtons.enumerated() {
+            button.frame = NSRect(x: b.width - 70 - CGFloat(index) * 22, y: y + 1, width: 18, height: 18)
+            button.isHidden = pageFullscreen || index >= extensionsShown
+        }
+        let right = (roomy ? 52 : 30) + CGFloat(extensionsShown) * 22
+        let fieldX: CGFloat = tight ? 30 : 52
+        let fieldWidth = max(40, b.width - fieldX - right - 4)
+        addressBox.frame = NSRect(x: fieldX, y: y, width: fieldWidth, height: 20)
+        addressBox.layer?.backgroundColor = theme?.field.withAlphaComponent(0.55).cgColor
+        address.frame = NSRect(x: 8, y: 2, width: fieldWidth - 34, height: 16)
+        reload.frame = NSRect(x: addressBox.frame.maxX - 22, y: y, width: 20, height: 20)
         toolbarLine.frame = NSRect(x: 0, y: b.height - h, width: b.width, height: 0.5)
         toolbarLine.layer?.backgroundColor = theme?.separator.cgColor
         progress.frame = NSRect(x: 0, y: b.height - h - 1, width: b.width * max(0.05, webView.estimatedProgress), height: 2)
@@ -291,7 +344,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let loading = webView.isLoading
         progress.isHidden = !loading
         reload.image = NSImage(systemSymbolName: loading ? "xmark" : "arrow.clockwise", accessibilityDescription: loading ? "Stop" : "Reload")?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
         reload.toolTip = loading ? "Stop" : "Reload"
         if loading { errorPage.isHidden = true }
         needsLayout = true
@@ -421,6 +474,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         state.audible = isAudible
         HostPaneStore.shared[hostID] = state
         onStateChange?(state)
+        WebExtensions.tabChanged(self)
     }
 
     override func viewDidMoveToSuperview() {

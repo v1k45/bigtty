@@ -44,6 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         manager.observe { [weak self] in self?.machinesChanged() }
         wireMachines()
         startControlServer()
+        WebExtensions.start()
+        // An extension's own pages (uBlock's dashboard) open in a browser pane.
+        NotificationCenter.default.addObserver(forName: .ghostherdrExtensionOpenURL, object: nil, queue: .main) { [weak self] note in
+            let url = note.object as? String
+            MainActor.assumeIsolated {
+                if let url { self?.keyWindow?.openBrowserPane(url: url) }
+            }
+        }
         DebugDump.install { [weak self] in self?.debugDescription ?? "" }
         DebugDump.installTyping { NSApp.keyWindow?.firstResponder as? HerdrTerminalView
             ?? (ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_TYPE_BACK"] == nil ? Array(NSApp.orderedWindows) : NSApp.orderedWindows.reversed()).lazy.compactMap { $0.firstResponder as? HerdrTerminalView }.first }
@@ -614,6 +622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             let spaces = machine.store?.snapshot.workspaces.map(\.workspaceID) ?? []
             out += "machine \(machine.id) \(machine.name) status=\(machine.status) text=\(machine.statusText) socks=\(machine.socksPort ?? 0) error=\(machine.lastError ?? "-") spaces=\(spaces)\n"
         }
+        out += "extensions: \(WebExtensions.status) \(WebExtensions.debugDetail)\n"
         out += JumpPalette.shared.debugRows + "\n"
         for (i, window) in windows.enumerated() {
             let pinned = window.pinnedSpace?.key ?? "-"

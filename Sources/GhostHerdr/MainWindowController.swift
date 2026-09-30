@@ -1280,6 +1280,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
+    /// A browser pane showing `url`, beside the focused pane.
+    func openBrowserPane(url: String) {
+        guard let target = focusedPaneID else { return }
+        HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.hostTag), beside: target, direction: .right, store: store, remote: !machine.isLocal)
+    }
+
     @objc func newBrowserPane(_: Any?) {
         guard let target = focusedPaneID else { return }
         pendingAddressFocus = true
