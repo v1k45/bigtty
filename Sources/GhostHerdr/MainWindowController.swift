@@ -1369,6 +1369,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         sidebarVisible.toggle()
     }
 
+    /// ⌘N: a space in the focused pane's folder, named after it.
+    @objc func newSpaceHere(_: Any?) {
+        let pane = focusedPaneID.flatMap { store.pane($0) }
+        let cwd = pane?.foregroundCwd ?? pane?.cwd ?? machine.homeDirectory ?? NSHomeDirectory()
+        if pinnedWorkspaceID == nil { workspaceID = nil }
+        store.perform { try await $0.createWorkspace(cwd: cwd, label: (cwd as NSString).lastPathComponent) }
+    }
+
+    @objc func renameSpace(_: Any?) {
+        if let workspaceID { promptRename(workspaceID: workspaceID) }
+    }
+
+    @objc func closeSpace(_: Any?) {
+        if let workspaceID { confirmCloseSpace(workspaceID) }
+    }
+
+    // MARK: - Text size (View ▸ Bigger / Smaller / Actual Size)
+
+    /// The browser pane in focus zooms its page; anywhere else the
+    /// terminal font changes (for every terminal, like Ghostty's config).
+    @objc func makeTextBigger(_: Any?) { changeTextSize(by: 1) }
+    @objc func makeTextSmaller(_: Any?) { changeTextSize(by: -1) }
+    @objc func makeTextActualSize(_: Any?) { changeTextSize(by: 0) }
+
+    private func changeTextSize(by step: Int) {
+        if let id = focusedPaneID, let browser = paneViews[id]?.browser {
+            browser.webView.pageZoom = step == 0 ? 1 : min(3, max(0.5, browser.webView.pageZoom + CGFloat(step) * 0.1))
+            return
+        }
+        let base = 13.0
+        let current = Settings.fontSize > 0 ? Settings.fontSize : base
+        Settings.fontSize = step == 0 ? 0 : min(36, max(8, current + Double(step)))
+        TerminalAppearance.apply(to: terminalController)
+    }
+
     @objc func newWorkspace(_: Any?) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true

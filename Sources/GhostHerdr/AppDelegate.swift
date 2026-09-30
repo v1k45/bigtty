@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         watchGhosttyConfig()
         let endpoint = HerdrEndpoint(session: env["GHOSTHERDR_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
         manager = MachineManager(localEndpoint: endpoint)
+        // View ▸ Enter Full Screen is ours; don't let AppKit add a second one.
+        UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
         NSApp.mainMenu = MainMenu.build()
         NSApp.windowsMenu?.delegate = self
         manager.observe { [weak self] in self?.machinesChanged() }
@@ -408,6 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reconcileSpaceWindows()
     }
 
+    @objc func toggleTranslucency(_: Any?) {
+        Settings.translucentWindow.toggle()
+        Settings.changed()
+    }
+
     @objc func toggleDimming(_: Any?) {
         Settings.dimUnfocused.toggle()
         Settings.changed()
@@ -434,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleWindowPerSpace(_:)) { item.state = windowPerSpace ? .on : .off }
         if item.action == #selector(toggleDimming(_:)) { item.state = Settings.dimUnfocused ? .on : .off }
+        if item.action == #selector(toggleTranslucency(_:)) { item.state = Settings.translucentWindow ? .on : .off }
         return true
     }
 

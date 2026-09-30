@@ -59,7 +59,9 @@ final class SidebarView: NSView {
     private let connectButton = FooterButton(title: "Connect Machine…", symbol: "server.rack", shortcut: "⌥⌘K")
     private let newButton = FooterButton(title: "New Space", symbol: "plus", shortcut: "⌘N")
     private let footerLine = NSView()
+    private let brand = BrandMark()
     private var model = SidebarModel()
+    private var selectedID: String?
 
     static let titlebarHeight: CGFloat = 40
 
@@ -79,6 +81,7 @@ final class SidebarView: NSView {
         newButton.action = #selector(newClicked)
         addSubview(connectButton)
         addSubview(newButton)
+        addSubview(brand)
     }
 
     @available(*, unavailable)
@@ -93,6 +96,11 @@ final class SidebarView: NSView {
         footerLine.layer?.backgroundColor = Theme.current?.separator.cgColor
         connectButton.frame = NSRect(x: 8, y: 34, width: b.width - 16, height: 30)
         newButton.frame = NSRect(x: 8, y: 4, width: b.width - 16, height: 30)
+        // Right of the traffic lights, in the title strip.
+        let mark = brand.fittingSize
+        brand.frame = NSRect(x: b.width - mark.width - 14, y: b.height - Self.titlebarHeight + (Self.titlebarHeight - mark.height) / 2 + 2,
+                             width: mark.width, height: mark.height)
+        brand.isHidden = b.width < 170
         layoutList()
     }
 
@@ -100,6 +108,27 @@ final class SidebarView: NSView {
         guard model != self.model else { return }
         self.model = model
         rebuild()
+        // A newly selected space (⌘N, ⌘K, a notification…) scrolls into view.
+        let selected = model.machines.flatMap(\.spaces).first { $0.selected }?.id
+        if selected != selectedID {
+            selectedID = selected
+            revealSelected()
+        }
+    }
+
+    private func revealSelected() {
+        guard let card = list.subviews.compactMap({ $0 as? SpaceCard }).first(where: { $0.space.selected }) else { return }
+        layoutSubtreeIfNeeded()
+        let frame = card.frame.insetBy(dx: 0, dy: -12)
+        let visible = scroll.contentView.documentVisibleRect
+        guard !visible.contains(frame) else { return }
+        // Just enough to show it, with a little context around.
+        let y = frame.minY < visible.minY ? frame.minY : frame.maxY - visible.height
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            scroll.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: max(0, y)))
+        }
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     /// Re-applies theme colors (appearance changes).
@@ -141,6 +170,39 @@ final class SidebarView: NSView {
 
     @objc private func connectClicked() { onConnectMachine?() }
     @objc private func newClicked() { onNewSpace?() }
+}
+
+/// App icon and name, quiet, in the sidebar's title strip.
+private final class BrandMark: NSView {
+    private let icon = NSImageView()
+    private let name = NSTextField(labelWithString: "GhostHerdr")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        name.font = .systemFont(ofSize: 12, weight: .semibold)
+        name.textColor = .secondaryLabelColor
+        addSubview(icon)
+        addSubview(name)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    // Title-strip behavior (drag, double-click to zoom) stays the window's.
+    override func hitTest(_: NSPoint) -> NSView? { nil }
+
+    override var fittingSize: NSSize {
+        NSSize(width: 18 + 5 + ceil(name.intrinsicContentSize.width) + 4, height: 18)
+    }
+
+    override func layout() {
+        super.layout()
+        icon.frame = NSRect(x: 0, y: 0, width: 18, height: 18)
+        let text = name.intrinsicContentSize
+        name.frame = NSRect(x: 23, y: (bounds.height - text.height) / 2, width: ceil(text.width) + 4, height: text.height)
+    }
 }
 
 // MARK: - Rows

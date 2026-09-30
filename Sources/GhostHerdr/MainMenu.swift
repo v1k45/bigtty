@@ -23,6 +23,12 @@ import AppKit
     func nextTab(_ sender: Any?)
     func previousTab(_ sender: Any?)
     func newWorkspace(_ sender: Any?)
+    func newSpaceHere(_ sender: Any?)
+    func renameSpace(_ sender: Any?)
+    func closeSpace(_ sender: Any?)
+    func makeTextBigger(_ sender: Any?)
+    func makeTextSmaller(_ sender: Any?)
+    func makeTextActualSize(_ sender: Any?)
     func selectSpaceByNumber(_ sender: Any?)
     func selectTabByNumber(_ sender: Any?)
     func nextSpace(_ sender: Any?)
@@ -46,27 +52,73 @@ enum MainMenu {
         appMenu.addItem(withTitle: "About GhostHerdr", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         item(appMenu, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
-        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Install ghr and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide GhostHerdr", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Quit GhostHerdr", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let services = NSMenu(title: "Services")
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        servicesItem.submenu = services
+        appMenu.addItem(servicesItem)
+        NSApp.servicesMenu = services
+        appMenu.addItem(.separator())
+        item(appMenu, "Hide GhostHerdr", #selector(NSApplication.hide(_:)), "h")
+        item(appMenu, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
+        item(appMenu, "Show All", #selector(NSApplication.unhideAllApplications(_:)), "")
+        appMenu.addItem(.separator())
+        item(appMenu, "Quit GhostHerdr", #selector(NSApplication.terminate(_:)), "q")
 
         let file = submenu(main, "File")
-        item(file, "New Window", #selector(AppDelegate.newWindow(_:)), "n")
+        item(file, "New Space", #selector(PaneActions.newSpaceHere(_:)), "n")
+        item(file, "New Space in Folder…", #selector(PaneActions.newWorkspace(_:)), "n", [.command, .option])
         item(file, "New Tab", #selector(PaneActions.newTab(_:)), "t")
         item(file, "New Browser Tab", #selector(PaneActions.newBrowserTab(_:)), "t", [.command, .option])
-        item(file, "New Space…", #selector(PaneActions.newWorkspace(_:)), "n", [.command, .shift])
+        item(file, "New Window", #selector(AppDelegate.newWindow(_:)), "n", [.command, .shift])
+        file.addItem(.separator())
         item(file, "Connect Machine…", #selector(AppDelegate.connectMachine(_:)), "k", [.command, .option])
+        item(file, "Open Location…", #selector(PaneActions.openLocation(_:)), "l")
+        file.addItem(.separator())
+        item(file, "Rename Space…", #selector(PaneActions.renameSpace(_:)), "")
         file.addItem(.separator())
         item(file, "Close Pane", #selector(PaneActions.closePane(_:)), "w")
         item(file, "Close Tab", #selector(PaneActions.closeTab(_:)), "w", [.command, .option])
+        item(file, "Close Space…", #selector(PaneActions.closeSpace(_:)), "")
         item(file, "Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift])
 
         let edit = submenu(main, "Edit")
+        item(edit, "Undo", Selector(("undo:")), "z")
+        item(edit, "Redo", Selector(("redo:")), "z", [.command, .shift])
+        edit.addItem(.separator())
+        item(edit, "Cut", #selector(NSText.cut(_:)), "x")
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
+        item(edit, "Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v", [.command, .option, .shift])
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+        edit.addItem(.separator())
+        let find = NSMenu(title: "Find")
+        let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        findItem.submenu = find
+        edit.addItem(findItem)
+        for (title, key, flags, action) in [
+            ("Find…", "f", NSEvent.ModifierFlags.command, NSTextFinder.Action.showFindInterface),
+            ("Find Next", "g", [.command], .nextMatch),
+            ("Find Previous", "g", [.command, .shift], .previousMatch),
+            ("Use Selection for Find", "e", [.command], .setSearchString),
+        ] {
+            item(find, title, #selector(NSResponder.performTextFinderAction(_:)), key, flags).tag = action.rawValue
+        }
+
+        let view = submenu(main, "View")
+        item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
+        view.addItem(.separator())
+        item(view, "Bigger", #selector(PaneActions.makeTextBigger(_:)), "=")
+        alternate(item(view, "Bigger", #selector(PaneActions.makeTextBigger(_:)), "+"))
+        item(view, "Smaller", #selector(PaneActions.makeTextSmaller(_:)), "-")
+        item(view, "Actual Size", #selector(PaneActions.makeTextActualSize(_:)), "0")
+        view.addItem(.separator())
+        item(view, "Dim Unfocused Panes", #selector(AppDelegate.toggleDimming(_:)), "")
+        item(view, "Translucent Window", #selector(AppDelegate.toggleTranslucency(_:)), "")
+        item(view, "One Window per Space", #selector(AppDelegate.toggleWindowPerSpace(_:)), "")
+        view.addItem(.separator())
+        item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
 
         let pane = submenu(main, "Pane")
         item(pane, "Split Right", #selector(PaneActions.splitRight(_:)), "d")
@@ -102,6 +154,7 @@ enum MainMenu {
 
         let tabs = submenu(main, "Go")
         item(tabs, "Jump To…", #selector(AppDelegate.showJump(_:)), "k")
+        item(tabs, "Next Pane That Needs You", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
         tabs.addItem(.separator())
         // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and
         // browsers; ⌘⇧] / ⌘⇧[ kept as alternates.
@@ -123,23 +176,23 @@ enum MainMenu {
             item(tabs, "Space \(n)", #selector(PaneActions.selectSpaceByNumber(_:)), "\(n)").tag = n
         }
 
-        let view = submenu(main, "View")
-        item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
-        item(view, "Dim Unfocused Panes", #selector(AppDelegate.toggleDimming(_:)), "")
-        item(view, "One Window per Space", #selector(AppDelegate.toggleWindowPerSpace(_:)), "")
-
         let window = submenu(main, "Window")
-        item(window, "Jump to Next Unread", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
-        window.addItem(.separator())
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         item(window, "Zoom", #selector(NSWindow.performZoom(_:)), "")
-        item(window, "Toggle Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
         window.addItem(.separator())
         item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), "")
         NSApp.windowsMenu = window
 
         let help = submenu(main, "Help")
         item(help, "Keyboard Shortcuts", #selector(PaneActions.toggleShortcutSheet(_:)), "/")
+        help.addItem(.separator())
+        for (title, url) in [
+            ("GhostHerdr on GitHub", "https://github.com/v1k45/ghostherdr"),
+            ("Report an Issue…", "https://github.com/v1k45/ghostherdr/issues/new"),
+            ("herdr Documentation", "https://herdr.dev"),
+        ] {
+            help.addItem(ClosureMenuItem(title: title, keyEquivalent: "") { NSWorkspace.shared.open(URL(string: url)!) })
+        }
         NSApp.helpMenu = help
 
         return main
