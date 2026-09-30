@@ -458,6 +458,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         jump(to: .session(name == manager.local.session ? manager.local.session : name))
     }
 
+    /// Debug hook: a README screenshot of the main window, to a path.
+    @objc func debugScreenshot(_ sender: Any?) {
+        // "settings:<path>" pictures the Settings window instead.
+        guard var path = sender as? String else { return }
+        var window = keyWindow?.window ?? NSApp.orderedWindows.first(where: { $0 is MainWindow })
+        if path.hasPrefix("settings:") {
+            path = String(path.dropFirst("settings:".count))
+            window = SettingsWindowController.shared.window
+        }
+        guard let window else { return }
+        // Settings: its page only (the toolbar's glass selection doesn't render off screen).
+        DebugDump.writeScreenshot(of: window, to: path, contentOnly: window === SettingsWindowController.shared.window)
+    }
+
+    /// Debug hook: opens Settings on a tab by its label ("Terminal").
+    @objc func debugSettingsTab(_ sender: Any?) {
+        showSettings(nil)
+        guard let label = sender as? String,
+              let tabs = SettingsWindowController.shared.window?.contentViewController as? NSTabViewController,
+              let index = tabs.tabViewItems.firstIndex(where: { $0.label == label }) else { return }
+        tabs.selectedTabViewItemIndex = index
+    }
+
+    /// Debug hook: "WxH" content size for the main window, e.g. 1600x1000.
+    @objc func debugWindowSize(_ sender: Any?) {
+        guard let parts = (sender as? String)?.split(separator: "x").compactMap({ Double($0) }), parts.count == 2,
+              let window = keyWindow?.window else { return }
+        window.setContentSize(NSSize(width: parts[0], height: parts[1]))
+    }
+
     /// Debug hook: filter the open palette.
     @objc func debugPaletteType(_ sender: Any?) {
         JumpPalette.shared.debugType(sender as? String ?? "")

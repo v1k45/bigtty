@@ -673,8 +673,10 @@ private final class TabRow: NSView {
         super.layout()
         let h = bounds.height
         icon.frame = NSRect(x: 6, y: (h - 12) / 2, width: 13, height: 12)
-        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: bounds.width - 110, height: 15)
-        detail.frame = NSRect(x: bounds.width - 88, y: (h - 14) / 2, width: 82, height: 14)
+        // The name takes whatever the detail ("needs you", "2 panes") leaves.
+        let detailWidth = detail.stringValue.isEmpty ? 0 : ceil(detail.intrinsicContentSize.width) + 4
+        detail.frame = NSRect(x: bounds.width - detailWidth - 6, y: (h - 14) / 2, width: detailWidth, height: 14)
+        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: max(0, bounds.width - 24 - detailWidth - 12), height: 15)
     }
 
     override func mouseDown(with _: NSEvent) { onClick?() }

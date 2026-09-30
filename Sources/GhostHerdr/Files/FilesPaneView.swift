@@ -216,6 +216,11 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             tree.update(with: listings)
         case .changes:
             changes = status.changes.keys.sorted().map { FileNode(path: $0, isDirectory: false) }
+            // Nothing picked (or the pick is no longer changed): show the
+            // first change rather than an empty "select a file".
+            if selection.map({ status.changes[$0] == nil }) ?? true, let first = changes.first {
+                selection = first.path
+            }
         }
         outline.reloadData()
         restoreExpansion(expanded)

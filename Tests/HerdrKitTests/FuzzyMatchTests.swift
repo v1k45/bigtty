@@ -45,6 +45,11 @@ import Testing
         #expect(FuzzyMatch.matchWords("tests golf", in: "backend-load-tests") == nil)
     }
 
+    @Test func wholeWordBeatsScatteredLetters() throws {
+        let result = try #require(FuzzyMatch.match("coupon", in: "Checkout coupon field"))
+        #expect(result.positions == Array(9..<15))
+    }
+
     @Test func picksTheBestAlignment() throws {
         // "ts" should use the word start of "status", not the first t.
         let result = try #require(FuzzyMatch.match("ls", in: "platform-live-status"))

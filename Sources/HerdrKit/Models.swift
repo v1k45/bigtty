@@ -99,9 +99,14 @@ public struct Pane: Sendable, Codable, Equatable, Identifiable {
     public var shownTitle: String? {
         if let label, !label.isEmpty { return label }
         guard let raw = title ?? terminalTitle else { return nil }
-        let cleaned = raw.drop { !$0.isLetter && !$0.isNumber && $0 != "~" && $0 != "/" && $0 != "#" && $0 != "(" && $0 != "[" }
-            .trimmingCharacters(in: .whitespaces)
+        let cleaned = Self.cleanTitle(raw)
         return cleaned.isEmpty ? nil : cleaned
+    }
+
+    /// A title without its leading status glyph or emoji ("✳ ", "📁 ").
+    public static func cleanTitle(_ raw: String) -> String {
+        raw.drop { !$0.isLetter && !$0.isNumber && $0 != "~" && $0 != "/" && $0 != "#" && $0 != "(" && $0 != "[" }
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// Best short name for headers: explicit label, agent, title, then cwd.

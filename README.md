@@ -17,7 +17,7 @@
   <a href="#build-from-source">Build</a>
 </p>
 
-![Tests, a live dashboard in a browser pane, server logs and code, side by side](docs/screenshots/workspace.png)
+![Tests, a live dashboard in a browser pane, server logs and code side by side; the sidebar lists each space's tabs by what its agents are doing](docs/screenshots/workspace.png)
 
 You run Claude Code, Codex and friends in herdr because it keeps them alive:
 sessions survive, panes persist, agents report what they're doing. GhostHerdr
@@ -65,11 +65,13 @@ GhostHerdr is the window onto it.
 | | |
 |---|---|
 | ![An agent waiting on a question in another space](docs/screenshots/attention.png) | ![A diff next to an agent's question](docs/screenshots/changes-and-agents.png) |
-| **Attention that finds you.** The storefront agent is asking a question; its space says so, word for word. | **The diff next to the decision.** Changes on the right, the agent's question below. |
+| **Attention that finds you.** The storefront agent is asking a question: its pane is ringed, its space quotes it, its tab says "needs you". | **The diff next to the decision.** The agent's question on the left, exactly what it changed on the right. |
 | ![⌘K jump palette](docs/screenshots/jump-palette.png) | ![Hold ⌘ for shortcut badges](docs/screenshots/shortcut-hints.png) |
-| **⌘K to anywhere.** Spaces, agents and their state, panes, actions. | **Hold ⌘.** Every space, tab and pane shows its shortcut. |
+| **⌘K to anywhere.** Fuzzy over spaces, agents and panes, and through what every terminal printed. | **Hold ⌘.** Every space, tab and pane shows its shortcut. |
 | ![⌘/ keyboard shortcuts](docs/screenshots/shortcuts-sheet.png) | ![Terminal settings](docs/screenshots/settings-terminal.png) |
 | **⌘/** lists every shortcut, always in sync with the menus. | **Make it yours.** Themes, fonts, translucency, contrast, Ghostty config. |
+| ![Browser settings](docs/screenshots/settings-browser.png) | |
+| **Browser panes, your way.** Where links open, video full screen, uBlock Origin Lite. | |
 
 ## Install
 

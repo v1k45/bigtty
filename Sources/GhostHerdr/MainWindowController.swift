@@ -276,6 +276,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     @objc func toggleShortcutSheet(_: Any?) { setSheet(sheet.isHidden) }
 
+    /// Debug hook: the hold-⌘ badges on ("on") or off.
+    @objc func debugHints(_ sender: Any?) { setHints((sender as? String) != "off") }
+
     private func setSheet(_ visible: Bool) {
         guard let root = window?.contentView else { return }
         if visible {
@@ -550,10 +553,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// else the title the terminal set, else the agent.
     static func tabTitle(_ tab: Tab, store: SessionStore, agentTitles: [String: String]) -> String {
         if tab.label != String(tab.number), !tab.label.isEmpty { return tab.label }
+        // Named after its terminal or agent: a browser or files pane beside
+        // it only names a tab that has nothing else.
         let panes = store.panes(in: tab.tabID)
-        let lead = panes.first { $0.focused } ?? panes.first
+        let terminals = panes.filter { $0.hostKind == nil }
+        let lead = terminals.first { $0.focused } ?? terminals.first { $0.agent != nil } ?? terminals.first ?? panes.first
         if let label = lead?.label, !label.isEmpty { return label }
-        if let title = lead?.title?.trimmingCharacters(in: .whitespaces), !title.isEmpty { return title }
+        if let title = lead?.title.map(Pane.cleanTitle), !title.isEmpty { return title }
         if let lead, let title = agentTitles[lead.paneID] { return title }
         if let title = lead?.shownTitle { return title }
         if let agent = lead?.displayAgent ?? lead?.agent { return agent }

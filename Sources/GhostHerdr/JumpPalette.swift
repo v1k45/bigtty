@@ -173,8 +173,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 var hit = item
                 hit.highlights = Self.ranges(result.positions)
                 matched.append((hit, result.score * 2 + 100))
-            } else if let result = FuzzyMatch.matchWords(query, in: item.haystack) {
-                matched.append((item, result.score))
+            } else if Self.containsWords(query, in: item.haystack) {
+                // Folder, branch, machine: plain words, not scattered
+                // letters (in a long description those match almost anything).
+                matched.append((item, 10))
             }
         }
         matched.sort { $0.1 > $1.1 }
@@ -185,7 +187,12 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 let machine = manager.machine(hit.machineID)
                 let store = machine?.store
                 let space = store?.workspace(hit.pane.workspaceID)?.label ?? ""
-                let where_ = [space, hit.pane.displayAgent ?? hit.pane.agent ?? hit.pane.displayName, machine.map { $0.isLocal ? ($0.id == "local" ? nil : $0.sessionName) : $0.name } ?? nil]
+                // The pane by what it's about, else its agent, else its
+                // folder (a shell's title is just user@host:dir).
+                let pane = hit.pane
+                let paneName = machine?.spaceInfo?.agentTitles[pane.paneID] ?? pane.title.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? pane.displayAgent ?? pane.agent ?? (pane.foregroundCwd ?? pane.cwd).map { ($0 as NSString).lastPathComponent }
+                let where_ = [space, paneName, machine.map { $0.isLocal ? ($0.id == "local" ? nil : $0.sessionName) : $0.name } ?? nil]
                     .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
                 return Item(section: "In Terminals", title: hit.snippet, detail: where_, symbol: "text.magnifyingglass",
                             alert: false, target: .pane(hit.machineID, hit.pane), haystack: "",
@@ -218,6 +225,12 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             table.scrollRowToVisible(first)
         }
         resizePanel()
+    }
+
+    /// Every word of the query appears in `text` (case-insensitive).
+    private static func containsWords(_ query: String, in text: String) -> Bool {
+        let words = query.lowercased().split(separator: " ")
+        return !words.isEmpty && words.allSatisfy { text.contains($0) }
     }
 
     /// Positions to ranges, runs merged.

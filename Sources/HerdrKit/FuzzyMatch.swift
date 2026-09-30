@@ -78,7 +78,31 @@ public enum FuzzyMatch {
             if i > 0 { j = Int(from[i][j]) }
         }
         // Shorter candidates win ties: "api" over "api-server-staging".
-        return Result(score: previous[end] - min(m / 10, 6), positions: positions)
+        var result = Result(score: previous[end] - min(m / 10, 6), positions: positions)
+        // The query as one piece ("coupon" in "Checkout coupon field")
+        // beats letters picked from different words.
+        if let run = contiguous(q, in: c, original: original), run.score >= result.score - 12 {
+            result = Result(score: max(run.score, result.score) + 1, positions: run.positions)
+        }
+        return result
+    }
+
+    /// The best exact occurrence of the query, scored like a run.
+    private static func contiguous(_ q: [UInt16], in c: [UInt16], original: [UInt16]) -> Result? {
+        let n = q.count, m = c.count
+        guard m >= n else { return nil }
+        var best: Result?
+        var start = 0
+        while start + n <= m {
+            if c[start] == q[0], Array(c[start..<(start + n)]) == q {
+                var score = base + boundaryBonus(original, start) + (start == 0 ? 12 : 0) - min(start, 12)
+                for j in (start + 1)..<(start + n) { score += base + boundaryBonus(original, j) + consecutive }
+                score -= min(m / 10, 6)
+                if best == nil || score > best!.score { best = Result(score: score, positions: Array(start..<(start + n))) }
+            }
+            start += 1
+        }
+        return best
     }
 
     /// Every word of the query (split on spaces) must match; scores add up.
