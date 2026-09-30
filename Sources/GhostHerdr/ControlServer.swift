@@ -24,7 +24,16 @@ final class ControlServer: @unchecked Sendable {
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true
         )
+        // Another GhostHerdr already answers here: leave it be (agents'
+        // `ghr` keeps reaching it) rather than stealing the socket.
+        if Self.isLive(path) {
+            throw Failure(code: "in_use", message: "\(path) is served by another GhostHerdr")
+        }
         unlink(path)
+        // sun_path holds 104 bytes; a longer path must fail, not crash.
+        guard path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
+            throw Failure(code: "path", message: "socket path too long: \(path)")
+        }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure(code: "socket", message: String(cString: strerror(errno))) }
         var addr = sockaddr_un()
@@ -48,8 +57,27 @@ final class ControlServer: @unchecked Sendable {
     }
 
     func stop() {
-        if listenFD >= 0 { close(listenFD) }
+        guard listenFD >= 0 else { return } // never ours: don't remove another instance's socket
+        close(listenFD)
         unlink(path)
+    }
+
+    /// Whether something accepts connections at `path`.
+    static func isLive(_ path: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            raw.copyBytes(from: path.utf8.prefix(raw.count - 1))
+            raw[min(path.utf8.count, raw.count - 1)] = 0
+        }
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+            }
+        }
     }
 
     private func acceptLoop() {

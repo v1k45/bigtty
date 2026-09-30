@@ -24,6 +24,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private let topBar = CollapsedTopBar()
     private let placeholder = PlaceholderView()
     private var observers: [(UUID, (UUID) -> Void)] = []
+    private var audioObserver: NSObjectProtocol?
     private var settingsObserver: NSObjectProtocol?
     /// herdr's focused pane as of the last render, to notice when it moves.
     private var lastHerdrFocus: String?
@@ -95,6 +96,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         // Every machine's store, attention and sidebar info report through the manager.
         let a = manager.observe { [weak self] in self?.render() }
         observers = [(a, { manager.removeObserver($0) })]
+        audioObserver = NotificationCenter.default.addObserver(forName: .ghostherdrAudioChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.render() }
+        }
         settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             // The terminal theme (or mode) may have changed; the chrome follows.
             MainActor.assumeIsolated {
@@ -454,7 +458,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     return .init(
                         id: tab.tabID, label: tabLabel(tab),
                         detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
-                        selected: tab.tabID == tabID, alert: alert
+                        selected: tab.tabID == tabID, alert: alert,
+                        audible: store.panes(in: tab.tabID).contains(where: Self.isAudible)
                     )
                 } : []
                 let finished = store.snapshot.panes.contains {
@@ -465,12 +470,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     shortcut: number <= 9 ? "⌘\(number)" : "",
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
-                    finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : []
+                    finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : [],
+                    audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
                 )
             }
             model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem, statusTip: machine.statusTip, spaces: spaces))
         }
         return model
+    }
+
+    /// A browser pane playing sound.
+    private static func isAudible(_ pane: Pane) -> Bool {
+        pane.hostKind == .browser && pane.hostID.flatMap { HostPaneStore.shared[$0]?.audible } == true
     }
 
     /// Spaces in sidebar order, for ⌘1…⌘9.

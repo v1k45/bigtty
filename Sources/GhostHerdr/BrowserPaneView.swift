@@ -33,6 +33,35 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     /// One cookie/storage store for every browser pane, persisted on disk.
     private static let dataStore = WKWebsiteDataStore.default()
+
+    /// The installed Safari's version, for the user agent.
+    static let safariVersion: String = {
+        let info = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
+        return info?["CFBundleShortVersionString"] as? String ?? "26.0"
+    }()
+
+    /// Reports whether any audible media plays in the frame.
+    static let mediaHook = """
+    (() => {
+      const report = () => {
+        const playing = Array.from(document.querySelectorAll('video, audio')).some(m =>
+          !m.paused && !m.ended && !m.muted && m.volume > 0);
+        try { window.webkit.messageHandlers.ghrMedia.postMessage(playing); } catch (_) {}
+      };
+      for (const type of ['play', 'playing', 'pause', 'ended', 'volumechange', 'emptied'])
+        document.addEventListener(type, report, true);
+    })();
+    """
+
+    private var audibleFrames: [String: Bool] = [:]
+    /// Some frame is playing sound; shown on the tab.
+    private(set) var isAudible = false {
+        didSet {
+            guard isAudible != oldValue else { return }
+            pageChanged()
+            NotificationCenter.default.post(name: .ghostherdrAudioChanged, object: self)
+        }
+    }
     /// Automation runs here, out of the page's reach.
     static let automationWorld = WKContentWorld.world(name: "ghostherdr")
 
@@ -64,12 +93,21 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             source: AutomationScript.consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true
         ))
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Video full screen (YouTube's button, the page's requestFullscreen).
+        config.preferences.isElementFullscreenEnabled = true
+        // Identify as the installed Safari: WebKit's default string lacks
+        // Safari's version, and sites then call the browser outdated.
+        config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Safari/605.1.15"
+        config.mediaTypesRequiringUserActionForPlayback = []
+        // Which frames are playing sound, for the tab's speaker.
+        content.addUserScript(WKUserScript(source: Self.mediaHook, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         webView = WKWebView(frame: .zero, configuration: config)
         super.init(frame: .zero)
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrConsole")
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrMedia")
         webView.allowsBackForwardNavigationGestures = true
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -306,6 +344,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
         state.url = shown?.absoluteString ?? state.url
         state.title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
+        state.audible = isAudible
         HostPaneStore.shared[hostID] = state
         onStateChange?(state)
     }
@@ -320,6 +359,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     // MARK: - Console and load state
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "ghrMedia" {
+            let frame = message.frameInfo.isMainFrame ? "main" : message.frameInfo.request.url?.absoluteString ?? "frame"
+            audibleFrames[frame] = (message.body as? Bool) == true ? true : nil
+            isAudible = !audibleFrames.isEmpty
+            return
+        }
         guard let body = message.body as? [String: Any] else { return }
         console.append(ConsoleEntry(
             level: body["level"] as? String ?? "log", text: body["text"] as? String ?? "", date: Date()
@@ -357,6 +402,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let waiters = loadWaiters
         loadWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
+    }
+
+    func webView(_: WKWebView, didCommit _: WKNavigation!) {
+        // A new page: its old media is gone.
+        audibleFrames.removeAll()
+        isAudible = false
     }
 
     func webView(_: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
@@ -514,4 +565,9 @@ private final class BrowserErrorPage: NSView {
         isHidden = true
         onReload?()
     }
+}
+
+extension Notification.Name {
+    /// A browser pane started or stopped playing sound.
+    static let ghostherdrAudioChanged = Notification.Name("GhostHerdrAudioChanged")
 }

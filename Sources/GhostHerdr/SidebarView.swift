@@ -9,6 +9,7 @@ struct SidebarModel: Equatable {
         let detail: String
         let selected: Bool
         let alert: Bool
+        var audible = false
     }
 
     struct Space: Equatable {
@@ -22,6 +23,7 @@ struct SidebarModel: Equatable {
         let finished: Bool
         let selected: Bool
         let tabs: [Tab]
+        var audible = false
     }
 
     struct Machine: Equatable {
@@ -254,6 +256,7 @@ private final class SpaceCard: NSView, SidebarRow {
     private let dot = NSView()
     private let name = NSTextField(labelWithString: "")
     private let shortcut = NSTextField(labelWithString: "")
+    private let speaker = NSImageView()
     private let meta = NSTextField(labelWithString: "")
     private let line = NSTextField(wrappingLabelWithString: "")
     private var chips: [NSTextField] = []
@@ -271,6 +274,11 @@ private final class SpaceCard: NSView, SidebarRow {
         dot.layer?.backgroundColor = space.alert ? NSColor.controlAccentColor.cgColor : NSColor.systemBlue.withAlphaComponent(0.8).cgColor
         dot.isHidden = !(space.alert || space.finished)
 
+        speaker.image = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "Playing audio")
+        speaker.symbolConfiguration = .init(pointSize: 10, weight: .regular)
+        speaker.contentTintColor = .controlAccentColor
+        speaker.isHidden = !space.audible
+        addSubview(speaker)
         name.stringValue = space.name
         name.font = .systemFont(ofSize: 13, weight: .semibold)
         name.textColor = .labelColor
@@ -357,8 +365,9 @@ private final class SpaceCard: NSView, SidebarRow {
             dot.frame = NSRect(x: 10, y: 13, width: 7, height: 7)
             x = 23
         }
-        name.frame = NSRect(x: x, y: 8, width: w - x - 40, height: 17)
+        name.frame = NSRect(x: x, y: 8, width: w - x - (space.audible ? 58 : 40), height: 17)
         shortcut.frame = NSRect(x: w - 42, y: 9, width: 32, height: 15)
+        speaker.frame = NSRect(x: w - 58, y: 10, width: 14, height: 13)
         meta.frame = NSRect(x: 10, y: 26, width: w - 20, height: 15)
         var y: CGFloat = 44
         var lx: CGFloat = 10
@@ -410,9 +419,9 @@ private final class TabRow: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = tab.selected ? Theme.sidebarRow.cgColor : nil
         }
-        icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        icon.image = NSImage(systemSymbolName: tab.audible ? "speaker.wave.2.fill" : "terminal", accessibilityDescription: tab.audible ? "Playing audio" : nil)
         icon.symbolConfiguration = .init(pointSize: 10, weight: .regular)
-        icon.contentTintColor = tab.selected ? .labelColor : .secondaryLabelColor
+        icon.contentTintColor = tab.audible ? .controlAccentColor : tab.selected ? .labelColor : .secondaryLabelColor
         label.stringValue = tab.label
         label.font = .systemFont(ofSize: 12)
         label.textColor = tab.selected ? .labelColor : .secondaryLabelColor

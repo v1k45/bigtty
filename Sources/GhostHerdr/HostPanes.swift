@@ -22,6 +22,8 @@ struct HostPaneState: Codable, Equatable {
     /// Whether the files pane shows its tree; unset: only when opened on a
     /// folder (a file opens on its own, full width).
     var showsTree: Bool?
+    /// A browser pane is playing sound (shown on the tab and pane title).
+    var audible: Bool?
     /// A line to reveal once (from `ghr open file:line`); not persisted meaningfully.
     var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.
@@ -169,7 +171,7 @@ final class HostPaneStore {
 
     static func hostTitle(_ state: HostPaneState) -> String {
         switch state.kind {
-        case .browser: "🌐 " + (state.title ?? state.url ?? "Browser")
+        case .browser: (state.audible == true ? "🔊 " : "🌐 ") + (state.title ?? state.url ?? "Browser")
         case .files, .diff:
             (state.mode == "changes" || (state.mode == nil && state.kind == .diff) ? "± " : "📁 ")
                 + ((state.selection ?? state.path).map { ($0 as NSString).lastPathComponent } ?? "Files")
