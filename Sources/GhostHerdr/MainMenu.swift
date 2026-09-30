@@ -34,6 +34,8 @@ import AppKit
     func selectSpaceByNumber(_ sender: Any?)
     func selectTabByNumber(_ sender: Any?)
     func nextSpace(_ sender: Any?)
+    func recentSpace(_ sender: Any?)
+    func recentSpaceBack(_ sender: Any?)
     func previousSpace(_ sender: Any?)
     func toggleSidebar(_ sender: Any?)
     func newBrowserPane(_ sender: Any?)
@@ -178,6 +180,8 @@ enum MainMenu {
         tabs.addItem(.separator())
         item(tabs, "Next Space", #selector(PaneActions.nextSpace(_:)), "]", [.command, .control])
         item(tabs, "Previous Space", #selector(PaneActions.previousSpace(_:)), "[", [.command, .control])
+        item(tabs, "Recent Space", #selector(PaneActions.recentSpace(_:)), "\t", [.command, .control])
+        item(tabs, "Recent Space, Back", #selector(PaneActions.recentSpaceBack(_:)), "\t", [.command, .control, .shift])
         for n in 1...9 {
             item(tabs, "Space \(n)", #selector(PaneActions.selectSpaceByNumber(_:)), "\(n)").tag = n
         }

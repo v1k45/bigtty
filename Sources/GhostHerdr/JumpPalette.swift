@@ -109,7 +109,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 let info = spaceInfo.info[workspace.workspaceID]
                 let detail = ([info?.line, info?.branch].compactMap { $0 }.first ?? "") + suffix
                 items.append(Item(
-                    section: "Spaces", title: workspace.label, detail: detail + (visible && number <= 9 && !Settings.relativeSpaceNumbers ? "   ⌘\(number)" : ""),
+                    section: "Spaces", title: workspace.label, detail: detail + (visible && number <= 9 ? "   ⌘\(number)" : ""),
                     symbol: "square.stack", alert: info?.lineIsAlert == true,
                     target: .space(SpaceRef(machine: machine.id, workspace: workspace.workspaceID)),
                     haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.isLocal ? machine.sessionName : "")".lowercased()

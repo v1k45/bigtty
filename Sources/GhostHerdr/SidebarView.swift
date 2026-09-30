@@ -70,6 +70,9 @@ final class SidebarView: NSView {
     var onConnectMachine: (() -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
+    /// A space card dropped at a position among its machine's spaces.
+    var onMoveSpace: ((String, Int) -> Void)?
+    private let dropLine = NSView()
     var onToggleFiles: (() -> Void)?
     /// Title-strip buttons, right of the traffic lights.
     private let hideButton = StripButton(symbol: "sidebar.left", tip: "Hide Sidebar (⌃⌘S)")
@@ -112,6 +115,35 @@ final class SidebarView: NSView {
         filesButton.action = #selector(filesClicked)
         addSubview(hideButton)
         addSubview(filesButton)
+        list.registerForDraggedTypes([.ghostherdrSpace])
+        list.onDrag = { [weak self] key, point, done in self?.dragSpace(key, at: point, drop: done) ?? false }
+        list.onDragEnd = { [weak self] in self?.dropLine.isHidden = true }
+        dropLine.wantsLayer = true
+        dropLine.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        dropLine.layer?.cornerRadius = 1
+        dropLine.isHidden = true
+        list.addSubview(dropLine)
+    }
+
+    /// Where a dragged space would land among its machine's cards: shows
+    /// the insertion line, or on drop moves it. Other machines' lists
+    /// don't take it.
+    private func dragSpace(_ key: String, at point: NSPoint, drop: Bool) -> Bool {
+        let machine = key.split(separator: "|").first.map(String.init) ?? ""
+        let cards = list.subviews.compactMap { $0 as? SpaceCard }.filter { $0.space.id.hasPrefix(machine + "|") }
+        guard cards.contains(where: { $0.space.id == key }) else { dropLine.isHidden = true; return false }
+        let others = cards.filter { $0.space.id != key }
+        let index = others.filter { $0.frame.midY < point.y }.count
+        if drop {
+            dropLine.isHidden = true
+            if cards.firstIndex(where: { $0.space.id == key }) != index { onMoveSpace?(key, index) }
+            return true
+        }
+        let y = index < others.count ? others[index].frame.minY - 2 : (others.last?.frame.maxY ?? 0) + 1
+        dropLine.frame = NSRect(x: 12, y: y - 1, width: list.bounds.width - 24, height: 2)
+        dropLine.isHidden = false
+        list.addSubview(dropLine) // on top
+        return true
     }
 
     @objc private func hideClicked() { onHideSidebar?() }
@@ -230,7 +262,7 @@ final class SidebarView: NSView {
     private func layoutList() {
         let width = scroll.contentSize.width
         var y: CGFloat = 0
-        for view in list.subviews {
+        for view in list.subviews where view is SidebarRow {
             let height = (view as? SidebarRow)?.height(forWidth: width - 16) ?? 24
             view.frame = NSRect(x: 8, y: y, width: width - 16, height: height)
             y += height + 3
@@ -301,6 +333,25 @@ private protocol SidebarRow: NSView {
 
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+
+    /// Space cards dragged over the list (the sidebar decides).
+    var onDrag: ((String, NSPoint, Bool) -> Bool)?
+    var onDragEnd: (() -> Void)?
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let key = sender.draggingPasteboard.string(forType: .ghostherdrSpace) else { return [] }
+        return onDrag?(key, convert(sender.draggingLocation, from: nil), false) == true ? .move : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let key = sender.draggingPasteboard.string(forType: .ghostherdrSpace) else { return false }
+        return onDrag?(key, convert(sender.draggingLocation, from: nil), true) ?? false
+    }
+
+    override func draggingExited(_: NSDraggingInfo?) { onDragEnd?() }
+    override func draggingEnded(_: NSDraggingInfo) { onDragEnd?() }
 }
 
 private final class MessageRow: NSView, SidebarRow {
@@ -449,7 +500,12 @@ private final class MachineHeader: NSView, SidebarRow {
 
 /// One space: name, shortcut, branch and folder, ports and the agent line;
 /// the selected space also lists its tabs.
-private final class SpaceCard: NSView, SidebarRow {
+extension NSPasteboard.PasteboardType {
+    /// A space card being dragged to a new place: its "machine|workspace" key.
+    static let ghostherdrSpace = NSPasteboard.PasteboardType("dev.ghostherdr.space")
+}
+
+private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     // The window drags by its background; rows and cards must take the
     // click instead, over their whole area, even in an inactive window.
     override var mouseDownCanMoveWindow: Bool { false }
@@ -626,11 +682,40 @@ private final class SpaceCard: NSView, SidebarRow {
     override func mouseEntered(with _: NSEvent) { hovering = true }
     override func mouseExited(with _: NSEvent) { hovering = false }
 
+    private var pressEvent: NSEvent?
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if tabRows.contains(where: { $0.frame.contains(point) }) { return super.mouseDown(with: event) }
+        pressEvent = event
         onClick?()
     }
+
+    /// Dragged a few points: the card itself moves (drop between cards to
+    /// reorder; the order sets ⌘1–9).
+    override func mouseDragged(with event: NSEvent) {
+        guard let press = pressEvent else { return }
+        let start = convert(press.locationInWindow, from: nil), now = convert(event.locationInWindow, from: nil)
+        guard hypot(now.x - start.x, now.y - start.y) > 4 else { return }
+        pressEvent = nil
+        let item = NSPasteboardItem()
+        item.setString(space.id, forType: .ghostherdrSpace)
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        let image = NSImage(size: bounds.size)
+        if let rep = bitmapImageRepForCachingDisplay(in: bounds) {
+            cacheDisplay(in: bounds, to: rep)
+            image.addRepresentation(rep)
+        }
+        dragging.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [dragging], event: press, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pressEvent = nil
+        super.mouseUp(with: event)
+    }
+
+    func draggingSession(_: NSDraggingSession, sourceOperationMaskFor _: NSDraggingContext) -> NSDragOperation { .move }
 
     override func menu(for _: NSEvent) -> NSMenu? { menuProvider?() }
 }

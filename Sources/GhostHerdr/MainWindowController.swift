@@ -107,6 +107,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 guard let self else { return false }
                 if self.sheetConsumes(event) { return true }
                 if self.paneKeyConsumes(event) { return true }
+                // Letting go of ⌃ or ⌘ ends a ⌃⌘Tab walk through recent spaces.
+                if event.type == .flagsChanged, Self.cycle != nil,
+                   event.modifierFlags.intersection([.command, .control]) != [.command, .control] {
+                    self.endRecentCycle()
+                }
                 self.hintTrigger.observe(event)
                 return false
             }
@@ -225,6 +230,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         sidebar.onNewSpace = { [weak self] in self?.newWorkspace(nil) }
         sidebar.onSessionMenu = { [weak self] in self?.sessionMenu() }
+        sidebar.onMoveSpace = { [weak self] key, index in
+            guard let self, let ref = SpaceRef(key: key), let machine = self.manager.machine(ref.machine) else { return }
+            machine.store?.perform { try await $0.moveWorkspace(ref.workspace, to: index) }
+        }
         sidebar.onConnectMachine = { [weak self] in self?.onConnectMachine?() }
         topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
         topBar.onToggleFiles = { [weak self] in self?.toggleFileViewer(nil) }
@@ -590,7 +599,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
         var number = 0
-        let numbering = numberingStart(count: orderedSpaces.count, selected: selectedSpaceIndex)
         for machine in visibleMachines {
             guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
                   case .connected = store.state
@@ -635,7 +643,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 }
                 return .init(
                     id: ref.key, name: workspace.label,
-                    shortcut: spaceShortcut(position: number - 1, start: numbering),
+                    shortcut: number <= 9 ? "⌘\(number)" : "",
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
                     finished: finished, selected: selected, tabs: tabs,
@@ -821,6 +829,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return nil
     }
 
+    /// Puts a space at `index` of this machine's list (herdr's order).
+    func moveSpace(_ id: String, to index: Int) {
+        store.perform { try await $0.moveWorkspace(id, to: index) }
+    }
+
     private func spaceMenu(_ id: String) -> NSMenu {
         let menu = NSMenu()
         func add(_ title: String, _ key: String = "", _ action: @escaping () -> Void) {
@@ -842,6 +855,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         if let dir = spaceInfo.info[id]?.directory {
             add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)]) }
+        }
+        // Order decides ⌘1–9; herdr keeps it for every client.
+        let order = store.snapshot.workspaces.map(\.workspaceID)
+        if let index = order.firstIndex(of: id) {
+            menu.addItem(.separator())
+            if index > 0 {
+                add("Move to Top") { [weak self] in self?.moveSpace(id, to: 0) }
+                add("Move Up") { [weak self] in self?.moveSpace(id, to: index - 1) }
+            }
+            if index < order.count - 1 { add("Move Down") { [weak self] in self?.moveSpace(id, to: index + 1) } }
         }
         menu.addItem(.separator())
         add("Close Space…") { [weak self] in self?.confirmCloseSpace(id) }
@@ -1416,7 +1439,58 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         workspaceID = id
         tabID = nil
         lastFocusedPane = nil
+        noteVisited(SpaceRef(machine: machine.id, workspace: id))
         render()
+    }
+
+    // MARK: - Recent spaces (⌃⌘Tab)
+
+    /// Spaces by when you were last in them, newest first, across windows.
+    private static var recentSpaces: [SpaceRef] = []
+    /// While ⌃⌘ is held after ⌃⌘Tab: the list being stepped through.
+    private static var cycle: (list: [SpaceRef], index: Int)?
+
+    private func noteVisited(_ ref: SpaceRef) {
+        guard Self.cycle == nil else { return }
+        Self.recentSpaces.removeAll { $0 == ref }
+        Self.recentSpaces.insert(ref, at: 0)
+        if Self.recentSpaces.count > 30 { Self.recentSpaces.removeLast() }
+    }
+
+    /// ⌃⌘Tab: back to the space you were in before; keep ⌃⌘ held and press
+    /// Tab again for older ones (⇧ goes the other way), like ⌘Tab for apps.
+    @objc func recentSpace(_: Any?) { stepRecent(by: 1) }
+    @objc func recentSpaceBack(_: Any?) { stepRecent(by: -1) }
+
+    private func stepRecent(by step: Int) {
+        if Self.cycle == nil {
+            // Only spaces that still exist, the current one first.
+            let live = Set(manager.all.flatMap { machine -> [SpaceRef] in
+                (machine.store?.snapshot.workspaces ?? []).map { SpaceRef(machine: machine.id, workspace: $0.workspaceID) }
+            })
+            var list = Self.recentSpaces.filter(live.contains)
+            if let workspaceID {
+                let here = SpaceRef(machine: machine.id, workspace: workspaceID)
+                list.removeAll { $0 == here }
+                list.insert(here, at: 0)
+            }
+            guard list.count > 1 else { return NSSound.beep() }
+            Self.cycle = (list, 0)
+        }
+        guard var cycle = Self.cycle else { return }
+        cycle.index = (cycle.index + step + cycle.list.count) % cycle.list.count
+        Self.cycle = cycle
+        sidebar.onSelectSpace?(cycle.list[cycle.index].key)
+        // A tap with the modifiers already up (a menu click) ends right away.
+        let held = NSEvent.modifierFlags.intersection([.command, .control]) == [.command, .control]
+        if !held { endRecentCycle() }
+    }
+
+    /// ⌃ or ⌘ let go: the space landed on becomes the most recent.
+    func endRecentCycle() {
+        guard let cycle = Self.cycle else { return }
+        Self.cycle = nil
+        noteVisited(cycle.list[cycle.index])
     }
 
     private func selectTab(_ id: String) {
@@ -1528,34 +1602,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         selectTab(tabs[(index + offset + tabs.count) % tabs.count].tabID)
     }
 
-    /// ⌘1…⌘9: the first nine spaces, or with numbers that follow you the
-    /// nine around the selected one (see `numberingStart`).
+    /// ⌘1…⌘9: spaces in sidebar order. Which spaces sit in the first nine
+    /// is up to you: drag them, or Move to Top.
     @objc func selectSpaceByNumber(_ sender: Any?) {
         guard let n = Self.number(sender), (1...9).contains(n) else { return }
         let spaces = orderedSpaces
-        let target = numberingStart(count: spaces.count, selected: selectedSpaceIndex) + n - 1
-        guard spaces.indices.contains(target) else { return NSSound.beep() }
-        sidebar.onSelectSpace?(spaces[target].key)
-    }
-
-    /// Where ⌘1 points: the first space, or with numbers that follow you
-    /// four above the selected space (so ⌘1–9 cover the spaces above and
-    /// below it, the selected one in the middle), kept inside the list.
-    private func numberingStart(count: Int, selected: Int?) -> Int {
-        guard Settings.relativeSpaceNumbers, let selected, count > 9 else { return 0 }
-        return min(max(selected - 4, 0), count - 9)
-    }
-
-    /// Where the selected space sits in sidebar order.
-    private var selectedSpaceIndex: Int? {
-        guard let workspaceID else { return nil }
-        return orderedSpaces.firstIndex { $0.machine == machine.id && $0.workspace == workspaceID }
-    }
-
-    /// A space's shortcut label, ⌘1–9 within the numbered window.
-    private func spaceShortcut(position: Int, start: Int) -> String {
-        let n = position - start + 1
-        return (1...9).contains(n) ? "⌘\(n)" : ""
+        guard spaces.indices.contains(n - 1) else { return NSSound.beep() }
+        sidebar.onSelectSpace?(spaces[n - 1].key)
     }
 
     /// ⌃1…⌃8: tabs of this space; ⌃9 is the last tab, as in browsers.

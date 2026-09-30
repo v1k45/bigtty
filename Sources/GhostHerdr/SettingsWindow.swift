@@ -118,15 +118,6 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "copyOnSelect") }
     }
 
-    /// Space numbers that follow you, in the spirit of vim's relative
-    /// line numbers: ⌘1–9 are the nine spaces around the selected one (it
-    /// sits in the middle), so the spaces near you are always one ⌘-digit
-    /// away however many there are. Off: ⌘1–9 are the first nine.
-    static var relativeSpaceNumbers: Bool {
-        get { UserDefaults.standard.object(forKey: "relativeSpaceNumbers") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "relativeSpaceNumbers") }
-    }
-
     /// Played when an agent needs you or finishes (a system sound's name;
     /// empty for none).
     static var sound: String {
@@ -168,7 +159,6 @@ final class SettingsWindowController: NSWindowController {
     private let opacity = NSPopUpButton()
     private let notify = NSPopUpButton()
     private let sound = NSPopUpButton()
-    private let spaceNumbers = NSPopUpButton()
     private let links = NSPopUpButton()
     private let fullscreen = NSPopUpButton()
     private let paneKeys = NSPopUpButton()
@@ -280,9 +270,6 @@ final class SettingsWindowController: NSWindowController {
         for name in Settings.sounds { sound.addItem(withTitle: name) }
         sound.target = self
         sound.action = #selector(soundChanged)
-        spaceNumbers.addItems(withTitles: ["Follow the selected space", "Fixed: the first nine"])
-        spaceNumbers.target = self
-        spaceNumbers.action = #selector(spaceNumbersChanged)
         for item in Settings.Links.allCases { links.addItem(withTitle: item.title) }
         links.target = self
         links.action = #selector(linksChanged)
@@ -307,7 +294,6 @@ final class SettingsWindowController: NSWindowController {
             [label("Translucent window:"), stack(translucent, "The sidebar’s material also shows between panes.")],
             [label("Notify when an agent:"), stack(notify, "Only for panes you aren’t looking at.")],
             [label("Sound:"), stack(sound, "Plays with those notifications; the Dock icon also bounces when an agent needs you.")],
-            [label("Space numbers:"), stack(spaceNumbers, "Following: ⌘1–9 are the nine spaces around the one you’re in, above and below, so nearby spaces are always a ⌘-digit away. The sidebar shows the current numbers.")],
             [label("Go to pane:"), stack(paneKeys, "⌥ alone is quicker, but then ⌥1–9 no longer type ¡ ™ £ … or reach terminal apps.")],
             [label("herdr:"), herdr],
         ])
@@ -475,7 +461,6 @@ final class SettingsWindowController: NSWindowController {
         opacity.selectItem(at: opacityIndex)
         notify.selectItem(at: Settings.Notify.allCases.firstIndex(of: Settings.notify) ?? 0)
         if Settings.sound.isEmpty { sound.selectItem(at: 0) } else { sound.selectItem(withTitle: Settings.sound) }
-        spaceNumbers.selectItem(at: Settings.relativeSpaceNumbers ? 0 : 1)
         links.selectItem(at: Settings.Links.allCases.firstIndex(of: Settings.links) ?? 0)
         fullscreen.selectItem(at: Settings.BrowserFullscreen.allCases.firstIndex(of: Settings.browserFullscreen) ?? 0)
         paneKeys.selectItem(at: Settings.PaneKeys.allCases.firstIndex(of: Settings.paneKeys) ?? 0)
@@ -561,11 +546,6 @@ final class SettingsWindowController: NSWindowController {
         let name = sound.indexOfSelectedItem <= 0 ? "" : sound.titleOfSelectedItem ?? ""
         Settings.sound = name
         if !name.isEmpty { NSSound(named: name)?.play() }
-    }
-
-    @objc private func spaceNumbersChanged() {
-        Settings.relativeSpaceNumbers = spaceNumbers.indexOfSelectedItem == 0
-        Settings.changed()
     }
 
     @objc private func notifyChanged() {

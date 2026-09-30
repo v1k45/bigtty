@@ -170,6 +170,11 @@ public struct HerdrClient: Sendable {
         return try await call("workspace.create", .object(params), key: "root_pane", as: Pane.self)
     }
 
+    /// Moves a workspace to `index` in herdr's order (shared by every client).
+    public func moveWorkspace(_ workspaceID: String, to index: Int) async throws {
+        _ = try await call("workspace.move", ["workspace_id": .string(workspaceID), "insert_index": .number(Double(max(0, index)))])
+    }
+
     public func renameWorkspace(_ workspaceID: String, label: String) async throws {
         try await call("workspace.rename", ["workspace_id": .string(workspaceID), "label": .string(label)])
     }
