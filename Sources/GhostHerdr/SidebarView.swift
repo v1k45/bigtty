@@ -65,6 +65,11 @@ final class SidebarView: NSView {
     var onMachineClick: ((String) -> Void)?
     var onConnectMachine: (() -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
+    var onHideSidebar: (() -> Void)?
+    var onToggleFiles: (() -> Void)?
+    /// Title-strip buttons, right of the traffic lights.
+    private let hideButton = StripButton(symbol: "sidebar.left", tip: "Hide Sidebar (⌃⌘S)")
+    private let filesButton = StripButton(symbol: "folder", tip: "Toggle File Viewer (⇧⌘E)")
 
     private let scroll = NSScrollView()
     private let list = FlippedView()
@@ -97,7 +102,16 @@ final class SidebarView: NSView {
         addSubview(connectButton)
         addSubview(newButton)
         addSubview(brand)
+        hideButton.target = self
+        hideButton.action = #selector(hideClicked)
+        filesButton.target = self
+        filesButton.action = #selector(filesClicked)
+        addSubview(hideButton)
+        addSubview(filesButton)
     }
+
+    @objc private func hideClicked() { onHideSidebar?() }
+    @objc private func filesClicked() { onToggleFiles?() }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
@@ -117,6 +131,13 @@ final class SidebarView: NSView {
                              y: b.height - Self.titlebarHeight + (Self.titlebarHeight - mark.height) / 2 + 2,
                              width: mark.width, height: mark.height)
         brand.isHidden = b.width < 170 && !fullScreen
+        // Right of the traffic lights; in full screen (none), at the right.
+        let buttonY = b.height - Self.titlebarHeight + (Self.titlebarHeight - 24) / 2 + 2
+        let buttonX: CGFloat = fullScreen ? b.width - 64 : 76
+        hideButton.frame = NSRect(x: buttonX, y: buttonY, width: 26, height: 24)
+        filesButton.frame = NSRect(x: buttonX + 26, y: buttonY, width: 26, height: 24)
+        // The brand keeps clear of the buttons in narrow sidebars.
+        if !fullScreen, brand.frame.minX < filesButton.frame.maxX + 6 { brand.isHidden = true }
         layoutList()
     }
 
@@ -687,4 +708,23 @@ private final class FooterButton: NSButton {
         super.layout()
         keyLabel.frame = NSRect(x: bounds.width - 50, y: (bounds.height - 15) / 2, width: 40, height: 15)
     }
+}
+
+/// A borderless symbol button for the title strip; takes the click
+/// instead of moving the window.
+final class StripButton: NSButton {
+    init(symbol: String, tip: String) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+        isBordered = false
+        contentTintColor = .secondaryLabelColor
+        toolTip = tip
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
 }

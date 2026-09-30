@@ -42,6 +42,7 @@ import AppKit
     func openFilesHere(_ sender: Any?)
     func openLocation(_ sender: Any?)
     func newFilesPane(_ sender: Any?)
+    func toggleFileViewer(_ sender: Any?)
     func showChanges(_ sender: Any?)
 }
 
@@ -111,6 +112,7 @@ enum MainMenu {
 
         let view = submenu(main, "View")
         item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
+        item(view, "Toggle File Viewer", #selector(PaneActions.toggleFileViewer(_:)), "e", [.command, .shift])
         view.addItem(.separator())
         item(view, "Bigger", #selector(PaneActions.makeTextBigger(_:)), "=")
         alternate(item(view, "Bigger", #selector(PaneActions.makeTextBigger(_:)), "+"))

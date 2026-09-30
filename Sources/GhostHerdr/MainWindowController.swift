@@ -56,6 +56,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
     var pinnedWorkspaceID: String? { pinnedSpace?.workspace }
     var onShowSpace: ((SpaceRef) -> Void)?
+    /// Autosave name of the main (sidebar) window's frame.
+    static let frameName = "GhostHerdrMain"
     private var fullScreenObservers: [NSObjectProtocol] = []
     /// Switch this Mac's session (the app delegate handles space windows).
     var onShowSession: ((Machine) -> Void)?
@@ -88,7 +90,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 640, height: 400)
-        window.setFrameAutosaveName("GhostHerdrMain")
+        // The first window comes back where it was; the app delegate
+        // cascades further windows from it.
+        if Settings.remembersLayout {
+            if !window.setFrameUsingName(Self.frameName) { window.center() }
+            window.setFrameAutosaveName(Self.frameName)
+        } else {
+            window.center()
+        }
         window.tabbingMode = .disallowed
         theme = Theme(controller: terminalController)
         super.init(window: window)
@@ -220,6 +229,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         sidebar.onSessionMenu = { [weak self] in self?.sessionMenu() }
         sidebar.onConnectMachine = { [weak self] in self?.onConnectMachine?() }
         topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
+        topBar.onToggleFiles = { [weak self] in self?.toggleFileViewer(nil) }
+        sidebar.onHideSidebar = { [weak self] in self?.sidebarVisible = false }
+        sidebar.onToggleFiles = { [weak self] in self?.toggleFileViewer(nil) }
         placeholder.onStart = { [weak self] in self?.onStartHerdr?() }
         placeholder.onConnect = { [weak self] in self?.onConnectMachine?() }
         placeholder.onAction = { [weak self] in
@@ -1170,6 +1182,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private var lastTerminalPane: String?
 
     @objc func newFilesPane(_: Any?) { openFilesPane(mode: .files) }
+
+    /// ⇧⌘E and the title-strip button: the tab's file viewer closes if it
+    /// has one, else one opens beside the focused pane in its folder.
+    @objc func toggleFileViewer(_: Any?) {
+        if let tabID, let files = store.panes(in: tabID).first(where: { $0.hostKind == .files }) {
+            let id = files.paneID
+            store.perform { try await $0.closePane(id) }
+        } else {
+            openFilesPane(mode: .files)
+        }
+    }
     @objc func showChanges(_: Any?) { openFilesPane(mode: .changes) }
 
     private func openFilesPane(mode: FilesPaneView.Mode) {
@@ -1911,7 +1934,7 @@ final class MainWindow: NSWindow {
 private final class RootView: NSView {
     private let sidebar: NSView
     private let main: MainArea
-    private var sidebarWidth: CGFloat = 256
+    private var sidebarWidth: CGFloat = Settings.sidebarWidth
     private var dragging = false
     var background: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
     var sidebarVisible = true {
@@ -2007,7 +2030,11 @@ private final class RootView: NSView {
 
     override var mouseDownCanMoveWindow: Bool { false }
     override func mouseDown(with _: NSEvent) { dragging = true }
-    override func mouseUp(with _: NSEvent) { dragging = false }
+    override func mouseUp(with _: NSEvent) {
+        // Remembered for new windows and the next launch.
+        if dragging { Settings.sidebarWidth = sidebarWidth }
+        dragging = false
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard dragging else { return }
@@ -2075,7 +2102,9 @@ private final class MainArea: NSView {
 private final class CollapsedTopBar: NSView {
     var fullScreen = false { didSet { needsLayout = true } }
     var onShowSidebar: (() -> Void)?
+    var onToggleFiles: (() -> Void)?
     private let button = NSButton()
+    private let filesButton = NSButton()
     private let space = NSTextField(labelWithString: "")
     private let tab = NSTextField(labelWithString: "")
     private let alert = NSTextField(labelWithString: "")
@@ -2088,6 +2117,14 @@ private final class CollapsedTopBar: NSView {
         button.contentTintColor = .secondaryLabelColor
         button.target = self
         button.action = #selector(show)
+        button.toolTip = "Show Sidebar (⌃⌘S)"
+        filesButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "File Viewer")
+        filesButton.isBordered = false
+        filesButton.contentTintColor = .secondaryLabelColor
+        filesButton.target = self
+        filesButton.action = #selector(toggleFiles)
+        filesButton.toolTip = "Toggle File Viewer (⇧⌘E)"
+        addSubview(filesButton)
         space.font = .systemFont(ofSize: 13, weight: .semibold)
         tab.font = .systemFont(ofSize: 12)
         tab.textColor = .secondaryLabelColor
@@ -2117,15 +2154,17 @@ private final class CollapsedTopBar: NSView {
         // Right of the traffic lights; full screen has none.
         let x: CGFloat = fullScreen ? 10 : 84
         button.frame = NSRect(x: x, y: y - 3, width: 26, height: 24)
+        filesButton.frame = NSRect(x: x + 26, y: y - 3, width: 26, height: 24)
         let sw = ceil(space.intrinsicContentSize.width) + 4
-        space.frame = NSRect(x: x + 32, y: y, width: sw, height: 18)
-        tab.frame = NSRect(x: x + 32 + sw + 8, y: y + 1, width: 200, height: 16)
+        space.frame = NSRect(x: x + 58, y: y, width: sw, height: 18)
+        tab.frame = NSRect(x: x + 58 + sw + 8, y: y + 1, width: 200, height: 16)
         let aw = alert.intrinsicContentSize.width
         alert.frame = NSRect(x: bounds.width - aw - 16, y: y + 1, width: aw, height: 16)
         alertDot.frame = NSRect(x: bounds.width - aw - 28, y: y + 5, width: 7, height: 7)
     }
 
     @objc private func show() { onShowSidebar?() }
+    @objc private func toggleFiles() { onToggleFiles?() }
 }
 
 /// What the main area shows with no panes: connecting, herdr not running,

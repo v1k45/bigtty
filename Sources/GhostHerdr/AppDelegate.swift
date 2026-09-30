@@ -206,8 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private func pin(_ controller: MainWindowController, to space: SpaceRef?) {
         controller.pinnedSpace = space
-        if let space, let label = manager.machine(space.machine)?.store?.workspace(space.workspace)?.label {
-            controller.window?.setFrameAutosaveName("GhostHerdr.space.\(space.machine).\(label)")
+        // Each space's window comes back where it was.
+        if Settings.remembersLayout, let window = controller.window, let space,
+           let label = manager.machine(space.machine)?.store?.workspace(space.workspace)?.label
+        {
+            let name = "GhostHerdr.space.\(space.machine).\(label)"
+            if window.frameAutosaveName == MainWindowController.frameName { window.setFrameAutosaveName("") }
+            window.setFrameUsingName(name)
+            window.setFrameAutosaveName(name)
         }
     }
 

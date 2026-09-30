@@ -98,6 +98,15 @@ enum Settings {
     }
 
     /// Where a page's full screen (a video's button) goes.
+    /// Test copies (GHOSTHERDR_NO_REMOTES) don't save window frames or the
+    /// sidebar width, so they can't overwrite the real app's layout.
+    static let remembersLayout = ProcessInfo.processInfo.environment["GHOSTHERDR_NO_REMOTES"] != "1"
+
+    static var sidebarWidth: CGFloat {
+        get { let w = UserDefaults.standard.double(forKey: "sidebarWidth"); return w >= 200 ? min(w, 420) : 256 }
+        set { if remembersLayout { UserDefaults.standard.set(Double(newValue), forKey: "sidebarWidth") } }
+    }
+
     static var browserFullscreen: BrowserFullscreen {
         get { UserDefaults.standard.string(forKey: "browserFullscreen").flatMap(BrowserFullscreen.init) ?? .pane }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "browserFullscreen") }
