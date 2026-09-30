@@ -13,6 +13,18 @@ final class PaneContainerView: NSView {
     private let detached = DetachedOverlay()
     private let zoomPill = ZoomPill()
     private let grip = PaneGrip()
+    private var badge: KeyCap?
+
+    /// ⌘ held: this pane's shortcut, large, in its middle.
+    var hintBadge: String? {
+        didSet {
+            guard hintBadge != oldValue else { return }
+            badge?.removeFromSuperview()
+            badge = hintBadge.map { KeyCap($0, size: 18, prominent: true) }
+            if let badge { addSubview(badge) }
+            needsLayout = true
+        }
+    }
     private var hoverArea: NSTrackingArea?
 
     /// What a drag of this pane carries; nil turns dragging off.
@@ -138,6 +150,10 @@ final class PaneContainerView: NSView {
             ? NSRect(x: (b.width - min(b.width - 16, detached.fittingSize.width)) / 2, y: 10,
                      width: min(b.width - 16, detached.fittingSize.width), height: 30)
             : b
+        if let badge {
+            let size = badge.intrinsicContentSize
+            badge.frame = NSRect(x: (b.width - size.width) / 2, y: (b.height - size.height) / 2, width: size.width, height: size.height)
+        }
         // The whole top edge is the handle; the pill shows in its middle.
         grip.frame = NSRect(x: 0, y: b.height - PaneGrip.bandHeight, width: b.width, height: PaneGrip.bandHeight)
         let pill = zoomPill.fittingSize

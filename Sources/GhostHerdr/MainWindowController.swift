@@ -90,6 +90,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         theme = Theme(controller: terminalController)
         super.init(window: window)
         window.delegate = self
+        window.eventObserver = { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return false }
+                if self.sheetConsumes(event) { return true }
+                self.hintTrigger.observe(event)
+                return false
+            }
+        }
 
         buildLayout()
         wireActions()
@@ -129,6 +137,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         applyTheme()
 
         applyTerminalMode()
+        setUpHints()
         splitTree.paneView = { [weak self] id in self?.paneView(for: id) }
         splitTree.onRatioChange = { [weak self] path, ratio in
             guard let self, let tabID = self.tabID else { return }
@@ -203,6 +212,67 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     // MARK: - Rendering
+
+    // MARK: - Shortcut hints (hold ⌘) and the ⌘/ sheet
+
+    private let hintTrigger = ShortcutHintTrigger()
+    private let sheet = ShortcutSheetView()
+    private(set) var showsHints = false
+
+    private func setUpHints() {
+        hintTrigger.onChange = { [weak self] showing in self?.setHints(showing) }
+        sheet.onDismiss = { [weak self] in self?.setSheet(false) }
+    }
+
+    /// Badges on what the keys reach: ⌃N on tabs, ⌥⌘N on panes (⌘N is
+    /// always on the spaces).
+    private func setHints(_ showing: Bool) {
+        showsHints = showing
+        let order = tabID.flatMap { store.layouts[$0]?.root.paneIDs } ?? []
+        for (id, view) in paneViews {
+            let index = order.firstIndex(of: id)
+            view.hintBadge = showing ? index.flatMap { $0 < 9 ? "⌥⌘\($0 + 1)" : nil } : nil
+        }
+        sidebar.update(sidebarModel())
+    }
+
+    @objc func toggleShortcutSheet(_: Any?) { setSheet(sheet.isHidden) }
+
+    private func setSheet(_ visible: Bool) {
+        guard let root = window?.contentView else { return }
+        if visible {
+            hintTrigger.hide()
+            let size = sheet.reload()
+            if sheet.superview !== root { root.addSubview(sheet) }
+            let width = min(size.width, root.bounds.width - 40), height = min(size.height, root.bounds.height - 40)
+            sheet.frame = NSRect(x: (root.bounds.width - width) / 2, y: (root.bounds.height - height) / 2, width: width, height: height)
+            sheet.alphaValue = 0
+            sheet.isHidden = false
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.12; sheet.animator().alphaValue = 1 }
+        } else {
+            sheet.isHidden = true
+        }
+    }
+
+    /// Esc (or ⌘/ again) closes the sheet without reaching the terminal.
+    private func sheetConsumes(_ event: NSEvent) -> Bool {
+        guard !sheet.isHidden, event.type == .keyDown else { return false }
+        if event.keyCode == 53 { setSheet(false); return true }
+        return false
+    }
+
+    /// ⌥⌘1…⌥⌘9: panes of this tab in layout order.
+    @objc func selectPaneByNumber(_ sender: Any?) {
+        guard let n = Self.number(sender), let tabID, let panes = store.layouts[tabID]?.root.paneIDs, n - 1 < panes.count else { return }
+        let target = panes[n - 1]
+        if let view = paneViews[target] {
+            window?.makeFirstResponder(view.browser?.webView ?? view.content)
+            paneGainedFocus(target)
+        } else {
+            lastFocusedPane = nil
+            store.perform { try await $0.focusPane(target) }
+        }
+    }
 
     /// A pane move is in flight; see `drop(_:on:)`.
     private var rearranging = false
@@ -455,14 +525,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 let dir = info.directory.map { machine.displayPath($0) } ?? ""
                 let meta = [info.branch, dir.isEmpty ? nil : dir].compactMap { $0 }.joined(separator: " · ")
                 let selected = machine === self.machine && workspace.workspaceID == workspaceID
-                let tabs = selected ? store.tabs(in: workspace.workspaceID).map { tab -> SidebarModel.Tab in
+                let tabs = selected ? store.tabs(in: workspace.workspaceID).enumerated().map { index, tab -> SidebarModel.Tab in
                     let panes = store.panes(in: tab.tabID).count
                     let alert = attention.count(inTab: tab.tabID) > 0
                     return .init(
                         id: tab.tabID, label: tabLabel(tab),
                         detail: alert ? "needs you" : (panes > 1 ? "\(panes) panes" : ""),
                         selected: tab.tabID == tabID, alert: alert,
-                        audible: store.panes(in: tab.tabID).contains(where: Self.isAudible)
+                        audible: store.panes(in: tab.tabID).contains(where: Self.isAudible),
+                        hint: showsHints && index < 9 ? "⌃\(index + 1)" : nil
                     )
                 } : []
                 let finished = store.snapshot.panes.contains {
@@ -474,6 +545,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
                     finished: finished, selected: selected, tabs: tabs.count > 1 ? tabs : [],
+                    hinting: showsHints,
                     audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) }
                 )
             }
@@ -1241,6 +1313,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     // MARK: - NSWindowDelegate
 
+    func windowDidResignKey(_: Notification) { hintTrigger.hide() }
+
     func windowDidBecomeKey(_: Notification) {
         restartSeenClock()
         // Coming back to a window takes control of the pane it shows.
@@ -1361,7 +1435,11 @@ final class MainWindow: NSWindow {
     /// Height of the strip that acts as the title bar.
     static let titleStrip: CGFloat = 40
 
+    /// Sees every event first; true means it was used (shortcut sheet).
+    var eventObserver: ((NSEvent) -> Bool)?
+
     override func sendEvent(_ event: NSEvent) {
+        if eventObserver?(event) == true { return }
         if event.type == .leftMouseDown, event.clickCount == 2, isTitleStrip(event) {
             titleBarDoubleClicked()
             return

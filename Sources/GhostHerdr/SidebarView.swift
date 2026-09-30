@@ -10,6 +10,8 @@ struct SidebarModel: Equatable {
         let selected: Bool
         let alert: Bool
         var audible = false
+        /// Its shortcut, shown while ⌘ is held.
+        var hint: String? = nil
     }
 
     struct Space: Equatable {
@@ -23,6 +25,8 @@ struct SidebarModel: Equatable {
         let finished: Bool
         let selected: Bool
         let tabs: [Tab]
+        /// ⌘ held: the shortcut stands out.
+        var hinting = false
         var audible = false
     }
 
@@ -284,8 +288,8 @@ private final class SpaceCard: NSView, SidebarRow {
         name.textColor = .labelColor
         name.lineBreakMode = .byTruncatingTail
         shortcut.stringValue = space.shortcut
-        shortcut.font = .systemFont(ofSize: 11)
-        shortcut.textColor = .tertiaryLabelColor
+        shortcut.font = .systemFont(ofSize: 11, weight: space.hinting ? .bold : .regular)
+        shortcut.textColor = space.hinting ? .controlAccentColor : .tertiaryLabelColor
         shortcut.alignment = .right
         meta.stringValue = space.meta
         meta.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -425,7 +429,11 @@ private final class TabRow: NSView {
         label.stringValue = tab.label
         label.font = .systemFont(ofSize: 12)
         label.textColor = tab.selected ? .labelColor : .secondaryLabelColor
-        detail.stringValue = tab.detail
+        detail.stringValue = tab.hint ?? tab.detail
+        if tab.hint != nil {
+            detail.font = .systemFont(ofSize: 11, weight: .bold)
+            detail.textColor = .controlAccentColor
+        }
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = tab.alert ? .controlAccentColor : .secondaryLabelColor
         detail.alignment = .right

@@ -12,6 +12,8 @@ import AppKit
     func focusDown(_ sender: Any?)
     func nextPane(_ sender: Any?)
     func previousPane(_ sender: Any?)
+    func selectPaneByNumber(_ sender: Any?)
+    func toggleShortcutSheet(_ sender: Any?)
     func resizeLeft(_ sender: Any?)
     func resizeRight(_ sender: Any?)
     func resizeUp(_ sender: Any?)
@@ -84,6 +86,13 @@ enum MainMenu {
         item(pane, "Focus Down", #selector(PaneActions.focusDown(_:)), arrow(.downArrow), [.command, .option])
         item(pane, "Next Pane", #selector(PaneActions.nextPane(_:)), "]")
         item(pane, "Previous Pane", #selector(PaneActions.previousPane(_:)), "[")
+        let paneNumbers = NSMenu(title: "Pane")
+        let paneNumbersItem = NSMenuItem(title: "Go to Pane", action: nil, keyEquivalent: "")
+        paneNumbersItem.submenu = paneNumbers
+        pane.addItem(paneNumbersItem)
+        for n in 1...9 {
+            item(paneNumbers, "Pane \(n)", #selector(PaneActions.selectPaneByNumber(_:)), "\(n)", [.command, .option]).tag = n
+        }
         pane.addItem(.separator())
         item(pane, "Resize Left", #selector(PaneActions.resizeLeft(_:)), arrow(.leftArrow), [.command, .control])
         item(pane, "Resize Right", #selector(PaneActions.resizeRight(_:)), arrow(.rightArrow), [.command, .control])
@@ -127,6 +136,10 @@ enum MainMenu {
         window.addItem(.separator())
         item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), "")
         NSApp.windowsMenu = window
+
+        let help = submenu(main, "Help")
+        item(help, "Keyboard Shortcuts", #selector(PaneActions.toggleShortcutSheet(_:)), "/")
+        NSApp.helpMenu = help
 
         return main
     }
