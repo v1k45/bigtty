@@ -254,6 +254,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     // MARK: - Input routing
 
+    /// Dragging in a terminal selects text; it never moves the window.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     /// The app menu gets first pick at ⌘ shortcuts, so ⌘D splits through
     /// herdr instead of hitting Ghostty's own split keybind.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

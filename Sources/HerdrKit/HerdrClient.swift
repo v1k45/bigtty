@@ -106,6 +106,45 @@ public struct HerdrClient: Sendable {
         try await call("pane.zoom", .object(params))
     }
 
+    /// Where a dragged pane lands relative to the pane it's dropped on.
+    public enum DropZone: String, Sendable {
+        case left, right, top, bottom
+        /// Trade places.
+        case center
+    }
+
+    public func swapPanes(_ source: String, _ target: String) async throws {
+        try await call("pane.swap", ["source_pane_id": .string(source), "target_pane_id": .string(target)])
+    }
+
+    /// Moves `paneID` next to `target` in `tabID` (right of or below it).
+    public func movePane(_ paneID: String, toTab tabID: String, beside target: String?, split: String) async throws {
+        var destination: [String: JSONValue] = ["type": "tab", "tab_id": .string(tabID), "split": .string(split)]
+        if let target { destination["target_pane_id"] = .string(target) }
+        try await call("pane.move", ["pane_id": .string(paneID), "destination": .object(destination), "focus": true])
+    }
+
+    public func movePaneToNewTab(_ paneID: String, workspaceID: String) async throws {
+        try await call("pane.move", ["pane_id": .string(paneID), "destination": ["type": "new_tab", "workspace_id": .string(workspaceID)]])
+    }
+
+    /// Drag-and-drop: puts `source` on `zone` of `target`, which may be in
+    /// another tab. herdr can't move a pane within its own tab, so a
+    /// same-tab move goes out to a temporary tab and back (herdr drops the
+    /// emptied tab); split only goes right or down, so left and top swap
+    /// the pair afterwards. The pane and its process are kept throughout.
+    public func rearrange(_ source: String, onto target: String, zone: DropZone,
+                          sourceTab: String, targetTab: String, workspaceID: String) async throws {
+        guard source != target else { return }
+        if zone == .center { return try await swapPanes(source, target) }
+        if sourceTab == targetTab {
+            try await movePaneToNewTab(source, workspaceID: workspaceID)
+        }
+        let split = zone == .left || zone == .right ? "right" : "down"
+        try await movePane(source, toTab: targetTab, beside: target, split: split)
+        if zone == .left || zone == .top { try await swapPanes(source, target) }
+    }
+
     public func closePane(_ paneID: String) async throws {
         try await call("pane.close", ["pane_id": .string(paneID)])
     }

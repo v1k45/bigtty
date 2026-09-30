@@ -88,6 +88,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         theme = Theme(controller: terminalController)
         super.init(window: window)
         window.delegate = self
+
         buildLayout()
         wireActions()
         // Every machine's store, attention and sidebar info report through the manager.
@@ -433,10 +434,43 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             content = terminal
         }
         let view = PaneContainerView(paneID: id, content: content)
+        wireDrag(view)
         view.apply(theme)
         view.update(pane: pane, attention: attention.reason(for: id))
         paneViews[id] = view
         return view
+    }
+
+    /// Panes drag by their top-edge band onto each other: an edge splits
+    /// beside the target, the middle swaps. Only within this window's machine.
+    private func wireDrag(_ view: PaneContainerView) {
+        let id = view.paneID
+        view.dragPayload = { [weak self] in
+            guard let self, self.store.panes(in: self.tabID ?? "").count > 1 else { return nil }
+            return PaneDragPayload(machineID: self.machine.id, paneID: id)
+        }
+        view.dragTitle = { [weak self] in self?.store.pane(id)?.displayName ?? "Pane" }
+        view.acceptsDrop = { [weak self] payload in
+            guard let self else { return false }
+            return payload.machineID == self.machine.id && payload.paneID != id && self.store.pane(payload.paneID) != nil
+        }
+        view.onDrop = { [weak self] payload, zone in self?.dropPane(payload.paneID, onto: id, zone: zone) }
+    }
+
+    /// Debug hook: "source target zone", as if dragged and dropped.
+    @objc func debugDropPane(_ sender: Any?) {
+        let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
+        guard parts.count == 3, let zone = HerdrClient.DropZone(rawValue: parts[2]) else { return }
+        dropPane(parts[0], onto: parts[1], zone: zone)
+    }
+
+    private func dropPane(_ source: String, onto target: String, zone: HerdrClient.DropZone) {
+        guard let from = store.pane(source), let to = store.pane(target) else { return }
+        pendingFocus = source
+        store.perform { client in
+            try await client.rearrange(source, onto: target, zone: zone,
+                                       sourceTab: from.tabID, targetTab: to.tabID, workspaceID: from.workspaceID)
+        }
     }
 
     private func makeBrowser(pane: Pane, hostID: String) -> BrowserPaneView {
