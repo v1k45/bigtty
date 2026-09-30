@@ -5,6 +5,8 @@ let usageText = """
 ghr — drive GhostHerdr from a shell or an agent
 
 usage:
+  ghr open <path>[:line]                show a file or folder in a files pane beside you
+  ghr diff [path]                       show the repository's changes (git diff vs HEAD)
   ghr browser <command> [args] [--browser <id|pane>] [--json]
   ghr pane-host <kind> <id> [title]     placeholder process for a GhostHerdr pane
   ghr version
@@ -248,6 +250,36 @@ func browser(_ args: [String]) {
     }
 }
 
+// MARK: - files
+
+func files(command: String, _ args: [String]) {
+    let parsed = Arguments(args)
+    var target = parsed.positional.first ?? "."
+    var line: Int?
+    // path:line, as compilers and agents print them.
+    if let colon = target.lastIndex(of: ":"), let n = Int(target[target.index(after: colon)...]),
+       !FileManager.default.fileExists(atPath: target)
+    {
+        line = n
+        target = String(target[..<colon])
+    }
+    let cwd = FileManager.default.currentDirectoryPath
+    let absolute = URL(fileURLWithPath: target, relativeTo: URL(fileURLWithPath: cwd, isDirectory: true)).standardizedFileURL.path
+    var params: [String: JSONValue] = ["path": .string(absolute)]
+    if let line { params["line"] = .number(Double(line)) }
+    if let pane = ProcessInfo.processInfo.environment["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
+    do {
+        let result = try ControlClient().call(command == "diff" ? "files.diff" : "files.open", params)
+        if parsed.switches.contains("json") { print(result.jsonString) }
+    } catch HerdrError.connect {
+        fail("GhostHerdr is not running (no socket at \(GhostHerdrControl.socketPath))", code: 3)
+    } catch let HerdrError.server(code, message) {
+        fail("\(message) [\(code)]")
+    } catch {
+        fail("\(error)")
+    }
+}
+
 /// `nil` when no command was given at all.
 func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 
@@ -262,6 +294,8 @@ case "pane-host":
     paneHost(kind: args[1], id: args[2], title: args.count > 3 ? args[3] : nil)
 case "browser":
     browser(Array(args.dropFirst()))
+case "open", "diff":
+    files(command: args[0], Array(args.dropFirst()))
 case "help", "--help", "-h", nil:
     print(usageText)
 default:

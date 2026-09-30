@@ -15,8 +15,9 @@ final class PaneContainerView: NSView {
 
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
     var browser: BrowserPaneView? { content as? BrowserPaneView }
+    var files: FilesPaneView? { content as? FilesPaneView }
     /// What this view was built for; a pane re-tagged as another kind is rebuilt.
-    var hostKind: HostPaneKind? { browser != nil ? .browser : nil }
+    var hostKind: HostPaneKind? { browser != nil ? .browser : files?.kind }
     var isFocusedPane = false { didSet { updateChrome() } }
     private var status: AgentStatus = .unknown
     private var attention: Attention.Reason?
@@ -28,6 +29,8 @@ final class PaneContainerView: NSView {
         self.content = content
         super.init(frame: .zero)
         wantsLayer = true
+        // macOS 14 stopped clipping subviews by default; keep pane content in its pane.
+        clipsToBounds = true
 
         header.font = .systemFont(ofSize: 11, weight: .medium)
         header.textColor = .secondaryLabelColor
@@ -120,7 +123,7 @@ final class PaneContainerView: NSView {
 
     /// Hands a borrowed browser back rather than taking it down with us.
     isolated deinit {
-        if content.superview === self, browser != nil { content.removeFromSuperview() }
+        if content.superview === self, browser != nil || files != nil { content.removeFromSuperview() }
     }
 
     override func mouseDown(with event: NSEvent) {

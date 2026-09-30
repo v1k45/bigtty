@@ -23,6 +23,8 @@ import AppKit
     func toggleSidebar(_ sender: Any?)
     func newBrowserPane(_ sender: Any?)
     func openLocation(_ sender: Any?)
+    func newFilesPane(_ sender: Any?)
+    func showChanges(_ sender: Any?)
 }
 
 @MainActor
@@ -59,6 +61,8 @@ enum MainMenu {
         pane.addItem(.separator())
         item(pane, "New Browser Pane", #selector(PaneActions.newBrowserPane(_:)), "b", [.command, .option])
         item(pane, "Open Location…", #selector(PaneActions.openLocation(_:)), "l")
+        item(pane, "New Files Pane", #selector(PaneActions.newFilesPane(_:)), "f", [.command, .option])
+        item(pane, "Show Changes", #selector(PaneActions.showChanges(_:)), "g", [.command, .option])
         pane.addItem(.separator())
         item(pane, "Focus Left", #selector(PaneActions.focusLeft(_:)), arrow(.leftArrow), [.command, .option])
         item(pane, "Focus Right", #selector(PaneActions.focusRight(_:)), arrow(.rightArrow), [.command, .option])

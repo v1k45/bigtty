@@ -249,6 +249,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let content: NSView
         if pane.hostKind == .browser, let hostID = pane.hostID {
             content = makeBrowser(pane: pane, hostID: hostID)
+        } else if pane.hostKind == .files || pane.hostKind == .diff, let hostID = pane.hostID {
+            content = makeFiles(pane: pane, hostID: hostID)
         } else {
             let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
             terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
@@ -276,6 +278,46 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         return browser
+    }
+
+    private func makeFiles(pane: Pane, hostID: String) -> FilesPaneView {
+        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: pane.hostKind ?? .files, path: pane.cwd)
+        state.paneID = pane.paneID
+        HostPaneStore.shared[hostID] = state
+        let files = FilesRegistry.shared.view(for: hostID)
+        let id = pane.paneID
+        files.onFocus = { [weak self] in self?.paneGainedFocus(id) }
+        files.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        files.onInsertPath = { [weak self] path in self?.insertPath(path, near: id) }
+        return files
+    }
+
+    /// Types a shell-quoted path into the tab's most recent terminal pane.
+    private func insertPath(_ path: String, near paneID: String) {
+        guard let tabID = store.pane(paneID)?.tabID else { return }
+        let terminals = store.panes(in: tabID).filter { $0.hostKind == nil }
+        let target = terminals.first { $0.paneID == lastTerminalPane } ?? terminals.first
+        guard let target else { return }
+        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "' "
+        store.perform { try await $0.sendText(paneID: target.paneID, text: quoted) }
+        pendingFocus = target.paneID
+    }
+
+    /// The terminal pane focused most recently in this window.
+    private var lastTerminalPane: String?
+
+    @objc func newFilesPane(_: Any?) { openFilesPane(mode: .files) }
+    @objc func showChanges(_: Any?) { openFilesPane(mode: .changes) }
+
+    private func openFilesPane(mode: FilesPaneView.Mode) {
+        guard let target = focusedPaneID else { return }
+        let pane = store.pane(target)
+        let cwd = pane?.foregroundCwd ?? pane?.cwd ?? NSHomeDirectory()
+        let root = mode == .changes ? (GitClient.repository(containing: cwd)?.root ?? cwd) : cwd
+        HostPaneStore.open(
+            HostPaneState(kind: mode == .changes ? .diff : .files, path: root, mode: mode.rawValue),
+            beside: target, direction: .right, store: store
+        )
     }
 
     /// Mirrors a browser pane's page title to herdr, at most once a second.
@@ -338,6 +380,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func paneGainedFocus(_ id: String) {
         lastFocusedPane = id
+        if paneViews[id]?.terminal != nil { lastTerminalPane = id }
         for (paneID, view) in paneViews { view.isFocusedPane = paneID == id }
         attention.viewChanged()
         guard let tabID, store.layouts[tabID]?.focusedPaneID != id else { return }

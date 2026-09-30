@@ -40,3 +40,29 @@ final class BrowserRegistry {
         views.map { ($0.key, $0.value) }.sorted { $0.id < $1.id }
     }
 }
+
+/// Files panes, owned here for the same reasons as browsers: `ghr open`
+/// reaches a pane that isn't on screen, and windows only borrow the view.
+@MainActor
+final class FilesRegistry {
+    static let shared = FilesRegistry()
+    private var views: [String: FilesPaneView] = [:]
+
+    func view(for hostID: String) -> FilesPaneView {
+        if let view = views[hostID] { return view }
+        let state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .files)
+        let view = FilesPaneView(hostID: hostID, state: state)
+        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        views[hostID] = view
+        return view
+    }
+
+    func existing(_ hostID: String) -> FilesPaneView? { views[hostID] }
+
+    func prune(keeping live: Set<String>) {
+        for (id, view) in views where !live.contains(id) && HostPaneStore.shared[id] == nil {
+            view.removeFromSuperview()
+            views.removeValue(forKey: id)
+        }
+    }
+}

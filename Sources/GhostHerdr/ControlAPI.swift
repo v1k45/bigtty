@@ -26,6 +26,8 @@ final class ControlAPI {
             return .array(browserList())
         case "browser.open":
             return try await open(params)
+        case "files.open", "files.diff":
+            return try openFiles(params, changes: method == "files.diff")
         default:
             break
         }
@@ -225,6 +227,41 @@ final class ControlAPI {
         BrowserRegistry.shared.noteFocus(id)
         await browser.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
         return pageInfo(id, browser)
+    }
+
+    // MARK: - Files
+
+    /// Shows a file (or a repo's changes) in the caller's tab: in its files
+    /// pane if it has one covering the path, else in a new one beside it.
+    private func openFiles(_ params: JSONValue, changes: Bool) throws -> JSONValue {
+        guard let path = params["path"]?.stringValue, !path.isEmpty else {
+            throw Failure(code: "invalid_params", message: "path required")
+        }
+        guard FileManager.default.fileExists(atPath: path) else { throw Failure(code: "not_found", message: "\(path) does not exist") }
+        let line = params["line"]?.intValue
+        let isDirectory = GitClient.isDirectory(path)
+        let repo = GitClient.repository(containing: path)
+        let root = changes ? (repo?.root ?? path) : (repo?.root ?? (isDirectory ? path : (path as NSString).deletingLastPathComponent))
+        let selection: String? = isDirectory ? nil : path
+        let mode: FilesPaneView.Mode = changes ? .changes : .files
+
+        if let caller = params["caller_pane"]?.stringValue, let tab = store.pane(caller)?.tabID,
+           let existing = store.panes(in: tab).first(where: { ($0.hostKind == .files || $0.hostKind == .diff) }),
+           let hostID = existing.hostID
+        {
+            let view = FilesRegistry.shared.view(for: hostID)
+            if path.hasPrefix(view.root) || root == view.root {
+                view.setMode(mode)
+                if let selection { view.select(path: selection, line: line) }
+                return ["id": .string(hostID), "pane": .string(existing.paneID), "root": .string(view.root)]
+            }
+        }
+        guard let beside = params["caller_pane"]?.stringValue.flatMap({ store.pane($0)?.paneID }) ?? focusedPane() else {
+            throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in GhostHerdr")
+        }
+        let state = HostPaneState(kind: changes ? .diff : .files, path: root, selection: selection, mode: mode.rawValue, line: line)
+        let id = HostPaneStore.open(state, beside: beside, direction: .right, store: store)
+        return ["id": .string(id), "root": .string(root)]
     }
 
     // MARK: - Helpers

@@ -18,7 +18,7 @@ MIT licensed.
 | 4. Window per space, control handoff, attention rings, notifications | done |
 | 5. Host panes + browser | done |
 | 6. Control socket, `ghr` CLI, browser automation | done |
-| 7. File viewer + diffs | – |
+| 7. File viewer + diffs | done |
 
 ## Build and run
 
@@ -59,6 +59,7 @@ notification fires for panes you aren't looking at.
 | ⌘⇧U | jump to next pane needing attention |
 | ⌃⌘S | toggle sidebar |
 | ⌘⌥B / ⌘L | new browser pane / address bar |
+| ⌘⌥F / ⌘⌥G | files pane / changes (git diff) pane |
 
 ## How it works
 
@@ -79,6 +80,14 @@ resize, move, close) works on it, layouts survive restarts, and other herdr
 clients see a placeholder. URLs and titles are kept in
 `~/Library/Application Support/GhostHerdr/panes.json`. ⌘-clicking a link in a
 terminal opens it in the tab's browser pane, or a new one to the right.
+
+## Files and changes
+
+A files pane (⌘⌥F, or `ghr open <path>[:line]` from a herdr pane) shows the
+folder as a tree with git status and the selected file with syntax
+highlighting and line numbers. **Changes** (⌘⌥G, or `ghr diff`) lists what git
+sees as changed and shows each file's diff against HEAD. Both refresh live as
+files change. Right-click a file to insert its path into the tab's terminal.
 
 ## Agents: `ghr browser`
 

@@ -14,8 +14,13 @@ struct HostPaneState: Codable, Equatable {
     var kind: HostPaneKind
     var url: String?
     var title: String?
-    /// File or folder for file/diff panes.
+    /// Root folder (or file) for files/diff panes.
     var path: String?
+    /// The file shown in a files pane, and its mode ("files" or "changes").
+    var selection: String?
+    var mode: String?
+    /// A line to reveal once (from `ghr open file:line`); not persisted meaningfully.
+    var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.
     var paneID: String?
 }
@@ -112,8 +117,9 @@ final class HostPaneStore {
     static func hostTitle(_ state: HostPaneState) -> String {
         switch state.kind {
         case .browser: "🌐 " + (state.title ?? state.url ?? "Browser")
-        case .files: "📁 " + ((state.path as NSString?)?.lastPathComponent ?? "Files")
-        case .diff: "± " + ((state.path as NSString?)?.lastPathComponent ?? "Changes")
+        case .files, .diff:
+            (state.mode == "changes" || (state.mode == nil && state.kind == .diff) ? "± " : "📁 ")
+                + ((state.selection ?? state.path).map { ($0 as NSString).lastPathComponent } ?? "Files")
         }
     }
 

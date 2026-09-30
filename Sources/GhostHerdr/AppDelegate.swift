@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 let live = Set(self.store.snapshot.panes.compactMap(\.hostID))
                 HostPaneStore.shared.prune(keeping: live)
                 BrowserRegistry.shared.prune(keeping: live)
+                FilesRegistry.shared.prune(keeping: live)
             }
         }
         store.start()
