@@ -73,6 +73,11 @@ enum AgentTitles {
     nonisolated(unsafe) private static var cache: [String: Cached] = [:]
     private static let lock = NSLock()
 
+    /// When the session file last changed: the conversation's last activity.
+    static func lastActivity(agent: String, sessionID: String) -> Date? {
+        lock.withLock { cache[agent + "|" + sessionID]?.modified }
+    }
+
     /// Reads only when the file changed since last time.
     static func local(agent: String, sessionID: String) -> String? {
         guard let reader = readers[agent], validID(sessionID) else { return nil }
@@ -140,7 +145,7 @@ enum AgentTitles {
             let globs = reader.globs.map { $0.replacingOccurrences(of: "$ID", with: session.id) }.joined(separator: " ")
             let source = reader.fromEnd ? "tail -c 524288 \"$f\"" : "head -c 524288 \"$f\""
             return """
-            f=$(ls \(globs) 2>/dev/null | tail -1); [ -n "$f" ] && \(source) | grep -E '\(reader.marker)' | \(reader.fromEnd ? "tail" : "head") -n 40 | while IFS= read -r l; do printf 'T\\t%s\\t%s\\t%s\\n' '\(session.agent)' '\(session.id)' "$l"; done
+            f=$(ls \(globs) 2>/dev/null | tail -1); [ -n "$f" ] && { printf 'M\\t%s\\t%s\\n' '\(session.id)' "$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")"; \(source) | grep -E '\(reader.marker)' | \(reader.fromEnd ? "tail" : "head") -n 40 | while IFS= read -r l; do printf 'T\\t%s\\t%s\\t%s\\n' '\(session.agent)' '\(session.id)' "$l"; done; }
             """
         }.joined(separator: "\n")
     }

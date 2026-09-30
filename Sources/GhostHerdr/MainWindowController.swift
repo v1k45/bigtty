@@ -649,7 +649,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     finished: finished, selected: selected, tabs: tabs,
                     hinting: showsHints,
                     audible: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && Self.isAudible($0) },
-                    working: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && $0.agentStatus == .working }
+                    working: store.snapshot.panes.contains { $0.workspaceID == workspace.workspaceID && $0.agentStatus == .working },
+                    // Quiet for over 12 hours, nothing running or waiting.
+                    stale: !info.busy && !info.lineIsAlert && !finished
+                        && (info.lastActive.map { Date().timeIntervalSince($0) > 12 * 3600 } ?? false)
                 )
             }
             model.machines.append(.init(id: machine.id, name: machine.name, status: machine.statusText, statusIsProblem: machine.statusIsProblem,

@@ -34,6 +34,8 @@ struct SidebarModel: Equatable {
         var tabSummary: String? = nil
         /// An agent in it is working (a quieter dot than "needs you").
         var working = false
+        /// Nothing's happened in it for a long while: drawn faded.
+        var stale = false
     }
 
     /// This Mac's session switcher.
@@ -537,7 +539,13 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     private let tabSummary = NSTextField(labelWithString: "")
     private var chips: [NSTextField] = []
     private var tabRows: [TabRow] = []
-    private var hovering = false { didSet { updateBackground() } }
+    private var hovering = false { didSet { updateBackground(); updateFade() } }
+
+    /// Quiet spaces fade back until hovered or selected.
+    private func updateFade() {
+        let faded = space.stale && !space.selected && !hovering
+        for view in subviews { view.alphaValue = faded ? 0.55 : 1 }
+    }
 
     init(space: SidebarModel.Space) {
         self.space = space
@@ -606,6 +614,7 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
             addSubview(row)
         }
         updateBackground()
+        updateFade()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
         setAccessibilityRole(.button)
         setAccessibilityLabel("\(space.name), \(space.line ?? "")")

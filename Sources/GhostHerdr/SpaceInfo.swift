@@ -13,6 +13,11 @@ final class SpaceInfoCenter {
         /// "claude · working", "claude: Do you want to proceed? …"
         var line: String?
         var lineIsAlert = false
+        /// Last sign of life: an agent's conversation changing, or an agent
+        /// changing state. Nil if nothing's known.
+        var lastActive: Date?
+        /// Something is running or waiting on you: never "stale".
+        var busy = false
     }
 
     private let store: SessionStore
@@ -22,6 +27,11 @@ final class SpaceInfoCenter {
     private var ports: [String: [Int]] = [:]
     /// Agent conversation names by pane (Claude Code's session title).
     private(set) var agentTitles: [String: String] = [:]
+    /// When each pane's agent conversation last changed (its session file).
+    private var sessionActivity: [String: Date] = [:]
+    /// When each pane's agent last changed state, seen by this app.
+    private var statusChanged: [String: Date] = [:]
+    private var lastStatus: [String: AgentStatus] = [:]
     /// Question text of blocked panes, read once per block.
     private var questions: [String: String] = [:]
     private var observers: [UUID: @MainActor () -> Void] = [:]
@@ -65,6 +75,11 @@ final class SpaceInfoCenter {
     }
 
     private func recompute() {
+        // Agent state changes are activity too.
+        for pane in store.snapshot.panes where pane.agent != nil || pane.displayAgent != nil {
+            if let previous = lastStatus[pane.paneID], previous != pane.agentStatus { statusChanged[pane.paneID] = Date() }
+            lastStatus[pane.paneID] = pane.agentStatus
+        }
         var next: [String: Info] = [:]
         for workspace in store.snapshot.workspaces {
             let panes = store.snapshot.panes.filter { $0.workspaceID == workspace.workspaceID }
@@ -88,6 +103,13 @@ final class SpaceInfoCenter {
             } else if let idle = agents.first {
                 item.line = "\(name(idle)) · idle"
             }
+            item.busy = agents.contains { $0.agentStatus == .working || $0.agentStatus == .blocked }
+            item.lastActive = panes.compactMap { max(sessionActivity[$0.paneID] ?? .distantPast, statusChanged[$0.paneID] ?? .distantPast) }
+                .max().flatMap { $0 == .distantPast ? nil : $0 }
+            // "claude · idle · 3h": how long it's been quiet.
+            if !item.busy, let line = item.line, !item.lineIsAlert, let last = item.lastActive {
+                item.line = line + " · " + Self.age(since: last)
+            }
             next[workspace.workspaceID] = item
         }
         // Forget questions of panes that are no longer blocked.
@@ -95,6 +117,15 @@ final class SpaceInfoCenter {
         guard next != info else { return }
         info = next
         for handler in observers.values { handler() }
+    }
+
+    /// "now", "5m", "3h", "2d": compact, for card lines.
+    static func age(since date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        if seconds < 60 { return "now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h" }
+        return "\(Int(seconds / 86400))d"
     }
 
     /// The agent's question, from the bottom of its screen: the last line
@@ -170,14 +201,21 @@ final class SpaceInfoCenter {
                 if let pid = pids[pane.paneID + "|" + pane.terminalID] { shells[pane.workspaceID, default: []].insert(pid) }
             }
             var titles: [String: String] = [:]
+            var activity: [String: Date] = [:]
             let (branches, listening, parents): ([String: String], [Int32: Set<Int>], [Int32: Int32])
             if runner.ssh == nil {
                 (branches, listening, parents) = Self.localProbe(dirs: dirs, roots: shells.values.reduce(into: Set<Int32>()) { $0.formUnion($1) })
-                for session in sessions { titles[session.pane] = AgentTitles.local(agent: session.agent, sessionID: session.id) }
+                for session in sessions {
+                    titles[session.pane] = AgentTitles.local(agent: session.agent, sessionID: session.id)
+                    activity[session.pane] = AgentTitles.lastActivity(agent: session.agent, sessionID: session.id)
+                }
             } else {
                 let remote = Self.remoteProbe(dirs: dirs, sessions: sessions.map { ($0.agent, $0.id) }, runner: runner)
                 (branches, listening, parents) = (remote.branches, remote.listening, remote.parents)
-                for session in sessions { titles[session.pane] = remote.titles[session.id] }
+                for session in sessions {
+                    titles[session.pane] = remote.titles[session.id]
+                    activity[session.pane] = remote.modified[session.id]
+                }
             }
             var ports: [String: [Int]] = [:]
             for (workspace, roots) in shells {
@@ -193,6 +231,7 @@ final class SpaceInfoCenter {
                     self.agentTitles = titles
                     self.info = [:] // re-announce: tab names changed
                 }
+                self.sessionActivity = activity
                 self.branches = branches
                 self.ports = ports
                 self.refreshing = false
@@ -215,7 +254,7 @@ final class SpaceInfoCenter {
     /// Another machine: one SSH command for branches, sockets and the
     /// process tree.
     nonisolated private static func remoteProbe(dirs: Set<String>, sessions: [(agent: String, id: String)], runner: CommandRunner)
-        -> (branches: [String: String], listening: [Int32: Set<Int>], parents: [Int32: Int32], titles: [String: String])
+        -> (branches: [String: String], listening: [Int32: Set<Int>], parents: [Int32: Int32], titles: [String: String], modified: [String: Date])
     {
         let script = """
         for d in "$@"; do b=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null) && printf 'B\t%s\t%s\n' "$d" "$b"; done
@@ -226,7 +265,8 @@ final class SpaceInfoCenter {
         echo '--titles'
         \(AgentTitles.remoteScript(sessions: sessions))
         """
-        guard let out = runner.run("sh", ["-c", script, "sh"] + dirs.sorted()) else { return ([:], [:], [:], [:]) }
+        guard let out = runner.run("sh", ["-c", script, "sh"] + dirs.sorted()) else { return ([:], [:], [:], [:], [:]) }
+        var modified: [String: Date] = [:]
         var titleLines: [String: [Substring]] = [:]
         var branches: [String: String] = [:]
         var section = "branches"
@@ -242,11 +282,15 @@ final class SpaceInfoCenter {
             case "ports": portLines.append(line)
             case "titles":
                 if line.hasPrefix("T\t") { titleLines["", default: []].append(line.dropFirst(2)) }
+                if line.hasPrefix("M\t") {
+                    let parts = line.split(separator: "\t")
+                    if parts.count == 3, let epoch = Double(parts[2]) { modified[String(parts[1])] = Date(timeIntervalSince1970: epoch) }
+                }
             default: parentLines.append(line)
             }
         }
         let titles = AgentTitles.parseRemote(titleLines[""] ?? [])
-        return (branches, ProcessPorts.parseSS(portLines), ProcessPorts.parseParents(parentLines), titles)
+        return (branches, ProcessPorts.parseSS(portLines), ProcessPorts.parseParents(parentLines), titles, modified)
     }
 }
 
