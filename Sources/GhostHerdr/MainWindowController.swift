@@ -456,8 +456,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func makeFiles(pane: Pane, hostID: String) -> FilesPaneView {
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: pane.hostKind ?? .files, path: pane.cwd)
         state.paneID = pane.paneID
+        if state.machine == nil, !machine.isLocal { state.machine = machine.id }
         HostPaneStore.shared[hostID] = state
-        let files = FilesRegistry.shared.view(for: hostID)
+        let files = FilesRegistry.shared.view(for: hostID, machine: machine)
         let id = pane.paneID
         files.onFocus = { [weak self] in self?.paneGainedFocus(id) }
         files.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
@@ -484,19 +485,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func openFilesPane(mode: FilesPaneView.Mode) {
         guard let target = focusedPaneID else { return }
-        guard machine.isLocal else {
-            let alert = NSAlert()
-            alert.messageText = "Files panes work on this Mac for now"
-            alert.informativeText = "Browsing \(machine.name)’s files is coming. Terminals, agents and browser panes work there already."
-            if let window { alert.beginSheetModal(for: window) }
-            return
-        }
         let pane = store.pane(target)
-        let cwd = pane?.foregroundCwd ?? pane?.cwd ?? NSHomeDirectory()
-        let root = mode == .changes ? (GitClient.repository(containing: cwd)?.root ?? cwd) : cwd
+        let home = machine.isLocal ? NSHomeDirectory() : "/"
+        // The pane finds the repository root itself for Changes.
+        let cwd = pane?.foregroundCwd ?? pane?.cwd ?? home
         HostPaneStore.open(
-            HostPaneState(kind: mode == .changes ? .diff : .files, path: root, mode: mode.rawValue),
-            beside: target, direction: .right, store: store
+            HostPaneState(kind: mode == .changes ? .diff : .files, path: cwd, mode: mode.rawValue,
+                          machine: machine.isLocal ? nil : machine.id),
+            beside: target, direction: .right, store: store, remote: !machine.isLocal
         )
     }
 
@@ -543,6 +539,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
     @objc func debugOpenURL(_ sender: Any?) {
         if let url = sender as? String, let pane = focusedPaneID { openURL(url, from: pane) }
+    }
+
+    /// Debug hook: selects a path in the focused files pane; `changes`
+    /// or `files` switches its mode instead.
+    @objc func debugFilesSelect(_ sender: Any?) {
+        guard let arg = sender as? String, let id = focusedPaneID, let files = paneViews[id]?.files else { return }
+        if let mode = FilesPaneView.Mode(rawValue: arg) { files.setMode(mode) } else { files.select(path: arg) }
     }
 
     @objc func newBrowserPane(_: Any?) {
@@ -701,7 +704,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// ⌘1…⌘9: spaces, in sidebar order.
     @objc func selectTabByNumber(_ sender: Any?) {
-        guard let n = (sender as? NSMenuItem)?.tag else { return }
+        guard let n = (sender as? NSMenuItem)?.tag ?? (sender as? String).flatMap(Int.init) else { return }
         let spaces = orderedSpaces
         guard n - 1 < spaces.count else { return }
         sidebar.onSelectSpace?(spaces[n - 1].key)
@@ -836,10 +839,17 @@ private final class RootView: NSView {
         onAppearanceChange?()
     }
 
+    /// The sidebar's translucent material, like Finder's or Mail's.
+    private let material = NSVisualEffectView()
+
     init(sidebar: NSView, main: MainArea) {
         self.sidebar = sidebar
         self.main = main
         super.init(frame: .zero)
+        material.material = .sidebar
+        material.blendingMode = .behindWindow
+        material.state = .followsWindowActiveState
+        addSubview(material)
         addSubview(sidebar)
         addSubview(main)
     }
@@ -848,15 +858,19 @@ private final class RootView: NSView {
     required init?(coder _: NSCoder) { fatalError() }
 
     override func draw(_: NSRect) {
+        // Only the content side is opaque; the sidebar shows its material.
         background.setFill()
-        bounds.fill()
+        NSRect(x: sidebarVisible ? sidebarWidth : 0, y: 0, width: bounds.width, height: bounds.height).fill()
     }
 
     override func layout() {
         super.layout()
+        needsDisplay = true
         let b = bounds
         let w = sidebarVisible ? sidebarWidth : 0
         sidebar.frame = NSRect(x: 0, y: 0, width: w, height: b.height)
+        material.frame = sidebar.frame
+        material.isHidden = !sidebarVisible
         main.frame = NSRect(x: w, y: 0, width: b.width - w, height: b.height)
         main.leadingPadding = sidebarVisible ? 0 : 8
     }

@@ -10,9 +10,14 @@ struct CommandRunner: Sendable {
     static let local = CommandRunner(ssh: nil)
 
     func run(_ executable: String, _ args: [String], okStatuses: Set<Int32> = [0]) -> String? {
+        runData(executable, args, okStatuses: okStatuses).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// Like `run`, but the raw bytes (file contents, images).
+    func runData(_ executable: String, _ args: [String], okStatuses: Set<Int32> = [0]) -> Data? {
         if let ssh {
             let command = ([executable] + args).map(SSHTunnel.shellQuote).joined(separator: " ")
-            return SSHTunnel.runSSH(ssh, remoteCommand: command, okStatuses: okStatuses)?.output
+            return SSHTunnel.runSSH(ssh, remoteCommand: command, okStatuses: okStatuses)?.data
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable.hasPrefix("/") ? executable : "/usr/bin/env")
@@ -24,7 +29,7 @@ struct CommandRunner: Sendable {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard okStatuses.contains(process.terminationStatus) else { return nil }
-        return String(decoding: data, as: UTF8.self)
+        return data
     }
 }
 
@@ -276,8 +281,9 @@ final class SSHTunnel: @unchecked Sendable {
 
     struct Result {
         let status: Int32
-        let output: String
+        let data: Data
         let error: String
+        var output: String { String(decoding: data, as: UTF8.self) }
     }
 
     /// One command over the shared SSH connection.
@@ -300,7 +306,7 @@ final class SSHTunnel: @unchecked Sendable {
         let output = out.fileHandleForReading.readDataToEndOfFile()
         let error = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let result = Result(status: process.terminationStatus, output: String(decoding: output, as: UTF8.self), error: String(decoding: error, as: UTF8.self))
+        let result = Result(status: process.terminationStatus, data: output, error: String(decoding: error, as: UTF8.self))
         if let okStatuses, !okStatuses.contains(result.status) { return nil }
         return result
     }

@@ -44,23 +44,23 @@ final class ImagePreview: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
-    /// Loads (or reloads, keeping zoom) the file at `path`.
-    func show(_ path: String) {
+    /// Shows (or reloads, keeping zoom) the contents of `path`.
+    func show(_ path: String, data: Data) {
         let reload = path == self.path
         self.path = path
         let url = URL(fileURLWithPath: path)
-        let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        let bytes = data.count
         let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
         if url.pathExtension.lowercased() == "pdf" {
             scroll.isHidden = true
             pdfView.isHidden = false
-            pdfView.document = PDFDocument(url: url)
+            pdfView.document = PDFDocument(data: data)
             let pages = pdfView.document?.pageCount ?? 0
             caption.stringValue = "\(url.lastPathComponent) · \(pages) page\(pages == 1 ? "" : "s") · \(size)"
         } else {
             pdfView.isHidden = true
             scroll.isHidden = false
-            let image = NSImage(contentsOf: url)
+            let image = NSImage(data: data)
             imageView.image = image
             let rep = image?.representations.first
             let pixels = rep.map { "\($0.pixelsWide) × \($0.pixelsHigh)" } ?? "unreadable"

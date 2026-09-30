@@ -55,7 +55,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     // MARK: - Channel
 
     private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
+        let first = self.viewport == nil
         self.viewport = viewport
+        // Ghostty creates surfaces focused; only the first responder should
+        // draw a focused (blinking) cursor.
+        if first { syncSurfaceFocus() }
         if let channel, channel.isRunning, mode == .control {
             channel.resize(
                 columns: Int(viewport.columns), rows: Int(viewport.rows),
@@ -141,6 +145,15 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let text = session.readViewportText() ?? "<no surface>"
         let state = channel?.isRunning == true ? "\(mode)" : "none"
         return "viewport=\(grid) channel=\(state)\n\(text)"
+    }
+
+    /// Tells Ghostty whether this surface has focus. Unfocused surfaces draw
+    /// a hollow, steady cursor instead of blinking with the focused one.
+    func syncSurfaceFocus() {
+        guard window?.firstResponder !== self else { return }
+        // The package's focus hook lives in resignFirstResponder; calling it
+        // on a view that isn't first responder changes nothing else.
+        _ = resignFirstResponder()
     }
 
     // MARK: - Surface callbacks

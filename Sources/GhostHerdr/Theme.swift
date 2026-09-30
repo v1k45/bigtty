@@ -22,6 +22,21 @@ struct Theme {
     let isDark: Bool
 
     var accent: NSColor { .controlAccentColor }
+
+    /// Fills that sit on the translucent sidebar: tinted, not opaque, so the
+    /// material shows through (like Finder's selection).
+    static let sidebarSelection = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.10) : NSColor(white: 0, alpha: 0.08)
+    }
+    static let sidebarHover = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.05) : NSColor(white: 0, alpha: 0.04)
+    }
+    static let sidebarRow = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.10) : NSColor(white: 0, alpha: 0.07)
+    }
     var accentWash: NSColor { NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.16 : 0.12) }
     var accentLine: NSColor { NSColor.controlAccentColor.withAlphaComponent(0.5) }
 

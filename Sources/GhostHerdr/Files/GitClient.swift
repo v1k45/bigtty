@@ -1,8 +1,10 @@
 import Foundation
 
-/// The little git a file pane needs, through the `git` CLI.
+/// The little git a file pane needs, through the `git` CLI, on this Mac or
+/// on a machine over SSH.
 struct GitClient: Sendable {
     let root: String
+    var runner: CommandRunner = .local
 
     enum Change: Sendable, Equatable {
         case modified, added, deleted, renamed, untracked, conflicted
@@ -27,17 +29,22 @@ struct GitClient: Sendable {
     }
 
     /// The repository containing `path`, or nil outside git.
-    static func repository(containing path: String) -> GitClient? {
-        let dir = isDirectory(path) ? path : (path as NSString).deletingLastPathComponent
-        guard let top = run(["rev-parse", "--show-toplevel"], in: dir)?
+    static func repository(containing path: String, runner: CommandRunner = .local) -> GitClient? {
+        let source = FileSource(runner: runner)
+        let dir = source.isDirectory(path) ? path : (path as NSString).deletingLastPathComponent
+        guard let top = runner.run("git", ["-C", dir, "rev-parse", "--show-toplevel"])?
             .trimmingCharacters(in: .whitespacesAndNewlines), !top.isEmpty
         else { return nil }
-        return GitClient(root: top)
+        return GitClient(root: top, runner: runner)
+    }
+
+    private func git(_ args: [String], okStatuses: Set<Int32> = [0]) -> String? {
+        runner.run("git", ["-C", root] + args, okStatuses: okStatuses)
     }
 
     func status() -> Status {
         var changes: [String: Change] = [:]
-        guard let out = Self.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], in: root) else {
+        guard let out = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else {
             return Status(top: root, changes: [:])
         }
         var entries = out.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)[...]
@@ -66,11 +73,11 @@ struct GitClient: Sendable {
     /// untracked files diff against nothing.
     func diff(_ path: String, untracked: Bool) -> String {
         if untracked {
-            return Self.run(["diff", "--no-color", "--no-index", "--", "/dev/null", path], in: root, okStatuses: [0, 1]) ?? ""
+            return git(["diff", "--no-color", "--no-index", "--", "/dev/null", path], okStatuses: [0, 1]) ?? ""
         }
-        let head = Self.run(["rev-parse", "--verify", "-q", "HEAD"], in: root) != nil
+        let head = git(["rev-parse", "--verify", "-q", "HEAD"]) != nil
         let args = head ? ["diff", "--no-color", "HEAD", "--", path] : ["diff", "--no-color", "--cached", "--", path]
-        return Self.run(args, in: root) ?? ""
+        return git(args) ?? ""
     }
 
     // MARK: -
@@ -78,19 +85,5 @@ struct GitClient: Sendable {
     static func isDirectory(_ path: String) -> Bool {
         var dir: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &dir) && dir.boolValue
-    }
-
-    static func run(_ args: [String], in dir: String, okStatuses: Set<Int32> = [0]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-C", dir] + args
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard okStatuses.contains(process.terminationStatus) else { return nil }
-        return String(decoding: data, as: UTF8.self)
     }
 }

@@ -83,10 +83,12 @@ final class FilesRegistry {
     static let shared = FilesRegistry()
     private var views: [String: FilesPaneView] = [:]
 
-    func view(for hostID: String) -> FilesPaneView {
+    /// The pane's view; `machine` is where its files live (this Mac if nil).
+    func view(for hostID: String, machine: Machine? = nil) -> FilesPaneView {
         if let view = views[hostID] { return view }
         let state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .files)
-        let view = FilesPaneView(hostID: hostID, state: state)
+        let source = machine.map { $0.isLocal ? .local : FileSource(runner: $0.runner) } ?? .local
+        let view = FilesPaneView(hostID: hostID, state: state, source: source)
         view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
         views[hostID] = view
         return view

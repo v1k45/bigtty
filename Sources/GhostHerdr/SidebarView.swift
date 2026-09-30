@@ -270,7 +270,9 @@ private final class SpaceCard: NSView, SidebarRow {
             chip.textColor = .secondaryLabelColor
             chip.wantsLayer = true
             chip.layer?.cornerRadius = 4
-            chip.layer?.backgroundColor = Theme.current?.cardStrong.cgColor
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                chip.layer?.backgroundColor = Theme.sidebarRow.cgColor
+            }
             chip.alignment = .center
             chips.append(chip)
             addSubview(chip)
@@ -300,8 +302,10 @@ private final class SpaceCard: NSView, SidebarRow {
             layer?.borderColor = theme?.accentLine.cgColor
         } else {
             layer?.borderWidth = 0
-            layer?.backgroundColor = space.selected ? theme?.card.cgColor
-                : hovering ? theme?.card.withAlphaComponent(0.5).cgColor : nil
+            let fill = space.selected ? Theme.sidebarSelection : hovering ? Theme.sidebarHover : nil
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer?.backgroundColor = fill?.cgColor
+            }
         }
     }
 
@@ -368,7 +372,9 @@ private final class TabRow: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 5
-        layer?.backgroundColor = tab.selected ? Theme.current?.cardStrong.cgColor : nil
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = tab.selected ? Theme.sidebarRow.cgColor : nil
+        }
         icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 10, weight: .regular)
         icon.contentTintColor = tab.selected ? .labelColor : .secondaryLabelColor

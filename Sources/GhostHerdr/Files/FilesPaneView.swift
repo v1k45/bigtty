@@ -1,7 +1,9 @@
 import AppKit
 
 /// A files pane: a tree of the workspace (or its git changes) on the left,
-/// the selected file or diff on the right. Refreshes live as files change.
+/// the selected file or diff on the right. Works on this Mac or on a remote
+/// machine (through its `FileSource`); all reading happens off the main
+/// thread. Refreshes live: FSEvents locally, polling remotely.
 @MainActor
 final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     enum Mode: String { case files, changes }
@@ -9,6 +11,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     let hostID: String
     /// `.files` or `.diff`, as tagged in herdr; only the starting mode.
     let kind: HostPaneKind
+    let source: FileSource
     private(set) var root: String
     private(set) var mode: Mode
     private(set) var selection: String?
@@ -27,6 +30,10 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     private var status = GitClient.Status(top: "", changes: [:])
     private var git: GitClient?
     private var watcher: FileWatcher?
+    private var poller: Timer?
+    private var shownModified: Double?
+    private var loadToken = 0
+    private var pendingLine: Int?
 
     var onFocus: (() -> Void)?
     var onStateChange: ((HostPaneState) -> Void)?
@@ -34,13 +41,16 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     var onInsertPath: ((String) -> Void)?
 
     static let toolbarHeight: CGFloat = 30
+    nonisolated static let maxFileBytes = 4_000_000
 
-    init(hostID: String, state: HostPaneState) {
+    init(hostID: String, state: HostPaneState, source: FileSource = .local) {
         self.hostID = hostID
+        self.source = source
         kind = state.kind
-        root = state.path.map { GitClient.isDirectory($0) ? $0 : ($0 as NSString).deletingLastPathComponent } ?? NSHomeDirectory()
+        root = state.path ?? (source.isRemote ? "/" : NSHomeDirectory())
         mode = state.kind == .diff || state.mode == Mode.changes.rawValue ? .changes : .files
-        selection = state.selection ?? (state.path.flatMap { GitClient.isDirectory($0) ? nil : $0 })
+        selection = state.selection
+        pendingLine = state.line
         tree = FileNode(path: root, isDirectory: true)
         super.init(frame: .zero)
         clipsToBounds = true
@@ -83,15 +93,45 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             self.treeWidth = min(max(x, 120), self.bounds.width - 160)
             self.needsLayout = true
         }
-
-        git = GitClient.repository(containing: root)
-        watcher = FileWatcher(path: root) { [weak self] paths in self?.filesChanged(paths) }
-        reload()
-        if let selection { select(path: selection, line: state.line) }
+        code.showMessage("Loading…")
+        start()
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
+
+    /// Resolves the root (a file path means its folder), finds git, starts
+    /// watching, and loads.
+    private func start() {
+        let source = source
+        let path = root
+        let wantsRepoRoot = mode == .changes
+        Task.detached {
+            let isDir = source.isDirectory(path)
+            let folder = isDir ? path : (path as NSString).deletingLastPathComponent
+            let git = GitClient.repository(containing: folder, runner: source.runner)
+            await MainActor.run {
+                if !isDir, self.selection == nil { self.selection = path }
+                self.root = wantsRepoRoot ? (git?.root ?? folder) : folder
+                self.git = git
+                self.tree = FileNode(path: self.root, isDirectory: true)
+                self.watch()
+                self.reload()
+                if let selection = self.selection { self.select(path: selection, line: self.pendingLine) }
+            }
+        }
+    }
+
+    private func watch() {
+        if source.isRemote {
+            // No FSEvents over SSH: poll git status and the open file.
+            poller = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.poll() }
+            }
+        } else {
+            watcher = FileWatcher(path: root) { [weak self] paths in self?.filesChanged(paths) }
+        }
+    }
 
     override func layout() {
         super.layout()
@@ -115,16 +155,30 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     // MARK: - Data
 
+    /// Re-reads git status and every listed folder, keeping expansion.
     private func reload() {
-        status = git?.status() ?? GitClient.Status(top: "", changes: [:])
-        titleLabel.stringValue = (root as NSString).abbreviatingWithTildeInPath + (git == nil ? "" : "  ·  \(status.changes.count) changed")
+        let git = git
+        let source = source
+        let expanded = expandedPaths().union([root])
+        Task.detached {
+            let status = git?.status() ?? GitClient.Status(top: "", changes: [:])
+            var listings: [String: [FileSource.Entry]] = [:]
+            for dir in expanded { listings[dir] = source.list(dir) ?? [] }
+            await MainActor.run { self.apply(status: status, listings: listings) }
+        }
+    }
+
+    private func apply(status: GitClient.Status, listings: [String: [FileSource.Entry]]) {
+        self.status = status
+        titleLabel.stringValue = (source.isRemote ? root : (root as NSString).abbreviatingWithTildeInPath)
+            + (git == nil ? "" : "  ·  \(status.changes.count) changed")
+        let expanded = expandedPaths()
         switch mode {
         case .files:
-            tree.invalidate()
+            tree.update(with: listings)
         case .changes:
             changes = status.changes.keys.sorted().map { FileNode(path: $0, isDirectory: false) }
         }
-        let expanded = expandedPaths()
         outline.reloadData()
         restoreExpansion(expanded)
         reselect()
@@ -139,6 +193,29 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         if relevant { reload() }
     }
 
+    /// Remote refresh: a full reload when git status or the open file changed.
+    private var pollCount = 0
+    private func poll() {
+        pollCount += 1
+        let git = git
+        let source = source
+        let selection = selection
+        let previous = status.changes
+        let full = pollCount % 5 == 0
+        Task.detached {
+            let status = git?.status()
+            let modified = selection.flatMap { source.modified($0) }
+            await MainActor.run {
+                let statusChanged = status.map { $0.changes != previous } ?? false
+                if full || statusChanged {
+                    self.reload()
+                } else if let modified, modified != self.shownModified {
+                    self.showSelection()
+                }
+            }
+        }
+    }
+
     private func expandedPaths() -> Set<String> {
         var set = Set<String>()
         for row in 0..<outline.numberOfRows {
@@ -151,7 +228,9 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         guard mode == .files else { return }
         var row = 0
         while row < outline.numberOfRows {
-            if let node = outline.item(atRow: row) as? FileNode, paths.contains(node.path) { outline.expandItem(node) }
+            if let node = outline.item(atRow: row) as? FileNode, paths.contains(node.path), node.children != nil {
+                outline.expandItem(node)
+            }
             row += 1
         }
     }
@@ -164,34 +243,49 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         }
     }
 
-    /// Shows a path: expands the tree down to it (or switches list) and loads it.
+    /// Shows a path: expands the tree down to it (loading folders as
+    /// needed), selects it and loads it.
     func select(path: String, line: Int? = nil) {
         selection = path
-        if mode == .files, path.hasPrefix(root) {
-            var node = tree
-            let parts = String(path.dropFirst(root.count)).split(separator: "/").map(String.init)
-            for part in parts.dropLast() {
-                guard let child = node.children.first(where: { $0.name == part }) else { break }
-                outline.expandItem(child)
-                node = child
+        pendingLine = line
+        showSelection()
+        publish()
+        guard mode == .files, path.hasPrefix(root) else { return reselect() }
+        let parts = String(path.dropFirst(root.count)).split(separator: "/").map(String.init).dropLast()
+        var chain: [String] = []
+        var current = root
+        for part in parts {
+            current = (current as NSString).appendingPathComponent(part)
+            chain.append(current)
+        }
+        let source = source
+        Task.detached {
+            var listings: [String: [FileSource.Entry]] = [:]
+            for dir in chain { listings[dir] = source.list(dir) ?? [] }
+            await MainActor.run {
+                self.tree.update(with: listings, addingMissing: true)
+                self.outline.reloadData()
+                for dir in chain { if let node = self.tree.find(dir) { self.outline.expandItem(node) } }
+                self.reselect()
+                let row = self.outline.selectedRow
+                if row >= 0 { self.outline.scrollRowToVisible(row) }
             }
         }
-        reselect()
-        let row = outline.selectedRow
-        if row >= 0 { outline.scrollRowToVisible(row) }
-        showSelection()
-        if let line { code.reveal(line: line) }
-        publish()
     }
 
     func setMode(_ mode: Mode) {
         guard mode != self.mode else { return }
         self.mode = mode
         modeControl.selectedSegment = mode == .files ? 0 : 1
+        if mode == .changes, let git, root != git.root {
+            root = git.root
+            tree = FileNode(path: root, isDirectory: true)
+        }
         reload()
         publish()
     }
 
+    /// Loads what's selected (file, image or diff) off the main thread.
     private func showSelection() {
         preview.isHidden = true
         guard let selection else {
@@ -200,16 +294,45 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
                 : "Select a file")
             return
         }
-        if mode == .changes, let git {
-            let untracked = status.changes[selection] == .untracked
-            code.showAttributed(DiffRenderer.render(git.diff(selection, untracked: untracked), dark: code.dark), identity: "diff:" + selection)
-        } else if GitClient.isDirectory(selection) {
-            code.showMessage((selection as NSString).lastPathComponent + "/")
-        } else if ImagePreview.canShow(selection) {
-            preview.show(selection)
-            preview.isHidden = false
-        } else {
-            code.showFile(selection)
+        loadToken += 1
+        let token = loadToken
+        let source = source
+        let mode = mode
+        let git = git
+        let untracked = status.changes[selection] == .untracked
+        let isDirectoryHint = tree.find(selection)?.isDirectory
+        Task.detached {
+            if mode == .changes, let git {
+                let diff = git.diff(selection, untracked: untracked)
+                await MainActor.run {
+                    guard token == self.loadToken else { return }
+                    self.code.showAttributed(DiffRenderer.render(diff, dark: self.code.dark), identity: "diff:" + selection)
+                }
+                return
+            }
+            let isDirectory = isDirectoryHint ?? source.isDirectory(selection)
+            let modified = source.modified(selection)
+            let data = isDirectory ? nil : source.read(selection, limit: Self.maxFileBytes + 1)
+            await MainActor.run {
+                guard token == self.loadToken else { return }
+                self.shownModified = modified
+                if isDirectory {
+                    self.code.showMessage((selection as NSString).lastPathComponent + "/")
+                } else if let data {
+                    if ImagePreview.canShow(selection) {
+                        self.preview.show(selection, data: data)
+                        self.preview.isHidden = false
+                    } else {
+                        self.code.showFile(selection, data: data, limit: Self.maxFileBytes)
+                        if let line = self.pendingLine {
+                            self.pendingLine = nil
+                            self.code.reveal(line: line)
+                        }
+                    }
+                } else {
+                    self.code.showMessage("Can’t read \((selection as NSString).lastPathComponent)")
+                }
+            }
         }
     }
 
@@ -229,17 +352,34 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     // MARK: - Outline
 
     func outlineView(_: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let node = item as? FileNode else { return mode == .files ? tree.children.count : changes.count }
-        return node.children.count
+        guard let node = item as? FileNode else { return mode == .files ? (tree.children?.count ?? 0) : changes.count }
+        return node.children?.count ?? 0
     }
 
     func outlineView(_: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let node = item as? FileNode else { return mode == .files ? tree.children[index] : changes[index] }
-        return node.children[index]
+        guard let node = item as? FileNode else { return mode == .files ? tree.children![index] : changes[index] }
+        return node.children![index]
     }
 
     func outlineView(_: NSOutlineView, isItemExpandable item: Any) -> Bool {
         mode == .files && (item as? FileNode)?.isDirectory == true
+    }
+
+    /// Folders load when opened.
+    func outlineViewItemWillExpand(_ note: Notification) {
+        guard let node = note.userInfo?["NSObject"] as? FileNode, node.children == nil else { return }
+        node.children = []
+        let source = source
+        let path = node.path
+        Task.detached {
+            let entries = source.list(path) ?? []
+            await MainActor.run {
+                guard let node = self.tree.find(path) else { return }
+                node.setChildren(entries)
+                self.outline.reloadItem(node, reloadChildren: true)
+                self.outline.expandItem(node)
+            }
+        }
     }
 
     func outlineView(_: NSOutlineView, viewFor _: NSTableColumn?, item: Any) -> NSView? {
@@ -258,13 +398,8 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     func outlineViewSelectionDidChange(_: Notification) {
         guard let node = outline.item(atRow: outline.selectedRow) as? FileNode, node.path != selection else { return }
         onFocus?()
-        if node.isDirectory, mode == .files {
-            selection = node.path
-            publish()
-            return
-        }
         selection = node.path
-        showSelection()
+        if !(node.isDirectory && mode == .files) { showSelection() }
         publish()
     }
 
@@ -272,12 +407,14 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        for (title, action) in [
+        var items: [(String, Selector)] = [
             ("Insert Path in Terminal", #selector(insertPath)),
             ("Copy Path", #selector(copyPath)),
-            ("Open in Default App", #selector(openInDefaultApp)),
-            ("Reveal in Finder", #selector(revealInFinder)),
-        ] {
+        ]
+        if !source.isRemote {
+            items += [("Open in Default App", #selector(openInDefaultApp)), ("Reveal in Finder", #selector(revealInFinder))]
+        }
+        for (title, action) in items {
             menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
         }
         return menu
@@ -297,11 +434,12 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 
     @objc private func openInDefaultApp() {
-        if let path = clickedPath, !GitClient.isDirectory(path) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+        guard !source.isRemote, let path = clickedPath, !source.isDirectory(path) else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     @objc private func revealInFinder() {
-        if let path = clickedPath { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+        if !source.isRemote, let path = clickedPath { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -311,12 +449,12 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 }
 
-/// A lazily listed file or directory.
+/// A file or folder in the tree. A folder's children are nil until listed.
 final class FileNode {
     let path: String
     let isDirectory: Bool
     var name: String { (path as NSString).lastPathComponent }
-    private var cached: [FileNode]?
+    var children: [FileNode]?
 
     private static let hidden: Set<String> = [".git", ".DS_Store", ".build", ".swiftpm", "node_modules", "__pycache__"]
 
@@ -325,32 +463,35 @@ final class FileNode {
         self.isDirectory = isDirectory
     }
 
-    var children: [FileNode] {
-        if let cached { return cached }
-        let fm = FileManager.default
-        let names = (try? fm.contentsOfDirectory(atPath: path)) ?? []
-        let nodes = names.filter { !Self.hidden.contains($0) }.map { name -> FileNode in
-            let full = (path as NSString).appendingPathComponent(name)
-            return FileNode(path: full, isDirectory: GitClient.isDirectory(full))
-        }
-        let sorted = nodes.sorted {
+    /// Replaces the children from a listing, reusing nodes whose names are
+    /// unchanged (so expansion state survives a refresh).
+    func setChildren(_ entries: [FileSource.Entry]) {
+        let old = Dictionary((children ?? []).map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        children = entries.filter { !Self.hidden.contains($0.name) }.map { entry in
+            if let node = old[entry.name], node.isDirectory == entry.isDirectory { return node }
+            return FileNode(path: (path as NSString).appendingPathComponent(entry.name), isDirectory: entry.isDirectory)
+        }.sorted {
             $0.isDirectory != $1.isDirectory ? $0.isDirectory
                 : $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-        cached = sorted
-        return sorted
     }
 
-    /// Drops cached listings (recursively), keeping node identity for
-    /// expansion state where names are unchanged.
-    func invalidate() {
-        guard let cached else { return }
-        let fresh = Set(((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).filter { !Self.hidden.contains($0) })
-        if Set(cached.map(\.name)) != fresh {
-            self.cached = nil
-            return
+    /// Applies fresh listings to this subtree. Folders that were listed
+    /// before get refreshed; with `addingMissing`, new ones get listed too.
+    func update(with listings: [String: [FileSource.Entry]], addingMissing: Bool = false) {
+        if let entries = listings[path], children != nil || addingMissing || listings.count == 1 {
+            setChildren(entries)
         }
-        for child in cached where child.isDirectory { child.invalidate() }
+        for child in children ?? [] where child.isDirectory { child.update(with: listings, addingMissing: addingMissing) }
+    }
+
+    func find(_ target: String) -> FileNode? {
+        if path == target { return self }
+        guard target.hasPrefix(path == "/" ? "/" : path + "/") else { return nil }
+        for child in children ?? [] {
+            if let found = child.find(target) { return found }
+        }
+        return nil
     }
 }
 

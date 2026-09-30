@@ -91,18 +91,15 @@ final class CodeView: NSView {
         gutter.needsDisplay = true
     }
 
-    /// Loads and highlights a file, keeping the scroll position on reloads.
-    func showFile(_ path: String) {
+    /// Highlights a file's contents, keeping the scroll position on reloads.
+    /// Contents longer than `limit` are refused as too large.
+    func showFile(_ path: String, data: Data, limit: Int) {
         let reload = path == self.path
         let visible = scrollView.contentView.bounds.origin
         self.path = path
         message.isHidden = true
-        guard let data = FileManager.default.contents(atPath: path) else {
-            showMessage("Can't read \((path as NSString).lastPathComponent)")
-            return
-        }
-        if data.count > 4_000_000 {
-            showMessage("\((path as NSString).lastPathComponent) is \(data.count / 1_000_000) MB; too large to show")
+        if data.count > limit {
+            showMessage("\((path as NSString).lastPathComponent) is over \(limit / 1_000_000) MB; too large to show")
             return
         }
         if data.prefix(8000).contains(0) {

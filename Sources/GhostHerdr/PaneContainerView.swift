@@ -20,7 +20,12 @@ final class PaneContainerView: NSView {
     var hostKind: HostPaneKind? { browser != nil ? .browser : files?.kind }
 
     /// Unfocused panes dim, unless this is the only pane or dimming is off.
-    var isFocusedPane = false { didSet { updateDimming() } }
+    var isFocusedPane = false {
+        didSet {
+            updateDimming()
+            if !isFocusedPane { terminal?.syncSurfaceFocus() }
+        }
+    }
     var dimsWhenUnfocused = true { didSet { updateDimming() } }
     var isZoomed = false { didSet { zoomPill.isHidden = !isZoomed } }
     private var attention: Attention.Reason?
