@@ -67,9 +67,7 @@ final class SidebarView: NSView {
     var onSelectSpace: ((String) -> Void)?
     var onSelectTab: ((String, String) -> Void)?
     var onSpaceMenu: ((String) -> NSMenu?)?
-    var onNewSpace: (() -> Void)?
     var onMachineClick: ((String) -> Void)?
-    var onConnectMachine: (() -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
     /// A space card dropped at a position among its machine's spaces.
@@ -82,9 +80,6 @@ final class SidebarView: NSView {
 
     private let scroll = NSScrollView()
     private let list = FlippedView()
-    private let connectButton = FooterButton(title: "Connect Machine…", symbol: "server.rack", shortcut: "⌥⌘K")
-    private let newButton = FooterButton(title: "New Space", symbol: "plus", shortcut: "⌘N")
-    private let footerLine = NSView()
     private let brand = BrandMark()
     private var model = SidebarModel()
     private var selectedID: String?
@@ -102,14 +97,6 @@ final class SidebarView: NSView {
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         addSubview(scroll)
-        footerLine.wantsLayer = true
-        addSubview(footerLine)
-        connectButton.target = self
-        connectButton.action = #selector(connectClicked)
-        newButton.target = self
-        newButton.action = #selector(newClicked)
-        addSubview(connectButton)
-        addSubview(newButton)
         addSubview(brand)
         hideButton.target = self
         hideButton.action = #selector(hideClicked)
@@ -157,12 +144,7 @@ final class SidebarView: NSView {
     override func layout() {
         super.layout()
         let b = bounds
-        let footer: CGFloat = 68
-        scroll.frame = NSRect(x: 0, y: footer, width: b.width, height: max(0, b.height - footer - Self.titlebarHeight))
-        footerLine.frame = NSRect(x: 0, y: footer - 0.5, width: b.width, height: 0.5)
-        footerLine.layer?.backgroundColor = Theme.current?.separator.cgColor
-        connectButton.frame = NSRect(x: 8, y: 34, width: b.width - 16, height: 30)
-        newButton.frame = NSRect(x: 8, y: 4, width: b.width - 16, height: 30)
+        scroll.frame = NSRect(x: 0, y: 0, width: b.width, height: max(0, b.height - Self.titlebarHeight))
         // Right of the traffic lights, in the title strip.
         let mark = brand.fittingSize
         brand.frame = NSRect(x: fullScreen ? 18 : b.width - mark.width - 14,
@@ -289,8 +271,6 @@ final class SidebarView: NSView {
         header.pressed = false
     }
 
-    @objc private func connectClicked() { onConnectMachine?() }
-    @objc private func newClicked() { onNewSpace?() }
 }
 
 /// App icon and name, quiet, in the sidebar's title strip.
@@ -794,36 +774,6 @@ private final class TabRow: NSView {
     }
 
     override func mouseDown(with _: NSEvent) { onClick?() }
-}
-
-private final class FooterButton: NSButton {
-    private let keyLabel = NSTextField(labelWithString: "")
-
-    init(title: String, symbol: String, shortcut: String) {
-        super.init(frame: .zero)
-        isBordered = false
-        attributedTitle = NSAttributedString(string: "  " + title, attributes: [
-            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor,
-        ])
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
-        contentTintColor = .secondaryLabelColor
-        imagePosition = .imageLeading
-        alignment = .left
-        keyLabel.stringValue = shortcut
-        keyLabel.font = .systemFont(ofSize: 11)
-        keyLabel.textColor = .tertiaryLabelColor
-        keyLabel.alignment = .right
-        addSubview(keyLabel)
-    }
-
-    @available(*, unavailable)
-    required init?(coder _: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        keyLabel.frame = NSRect(x: bounds.width - 50, y: (bounds.height - 15) / 2, width: 40, height: 15)
-    }
 }
 
 /// A borderless symbol button for the title strip; takes the click

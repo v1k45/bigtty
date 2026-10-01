@@ -228,13 +228,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             guard let self, let machine = self.manager.machine(id) else { return }
             self.onMachineProblem?(machine)
         }
-        sidebar.onNewSpace = { [weak self] in self?.newWorkspace(nil) }
         sidebar.onSessionMenu = { [weak self] in self?.sessionMenu() }
         sidebar.onMoveSpace = { [weak self] key, index in
             guard let self, let ref = SpaceRef(key: key), let machine = self.manager.machine(ref.machine) else { return }
             machine.store?.perform { try await $0.moveWorkspace(ref.workspace, to: index) }
         }
-        sidebar.onConnectMachine = { [weak self] in self?.onConnectMachine?() }
         topBar.onShowSidebar = { [weak self] in self?.sidebarVisible = true }
         topBar.onToggleFiles = { [weak self] in self?.toggleFileViewer(nil) }
         sidebar.onHideSidebar = { [weak self] in self?.sidebarVisible = false }
