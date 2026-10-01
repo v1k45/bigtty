@@ -7,8 +7,7 @@
 <p align="center"><b>A native Mac home for your terminal agents.</b></p>
 
 <p align="center">
-  <a href="https://github.com/v1k45/bigtty/releases/latest"><b>Download for macOS</b></a> ·
-  <a href="#install">Install</a> ·
+  <a href="#install"><b>Install</b></a> ·
   <a href="docs/features.md">Features</a> ·
   <a href="docs/shortcuts.md">Shortcuts</a> ·
   <a href="docs/btty.md">btty</a>
@@ -98,13 +97,9 @@ Needs **macOS 14+** and **[herdr](https://herdr.dev) 0.9.2+**. Universal
 brew install --cask v1k45/tap/bigtty
 ```
 
-That also puts `btty` on your `PATH`. Update later with
-`brew update && brew upgrade --cask bigtty`. Or download the DMG from
-[Releases](https://github.com/v1k45/bigtty/releases/latest) and drag bigtty to
-Applications; it's ad-hoc signed, so after a browser download clear the
-quarantine flag once: `xattr -dr com.apple.quarantine /Applications/bigtty.app`.
-
-Open bigtty and it finds herdr and connects to your default session.
+That also puts `btty` on your `PATH`. Open bigtty and it finds herdr and
+connects to your default session. To update:
+`brew update && brew upgrade --cask bigtty`.
 
 ## Quick start
 
