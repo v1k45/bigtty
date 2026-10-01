@@ -1,7 +1,10 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.png">
-  <img src="docs/banner-light.png" alt="bigtty: a native Mac home for your terminal agents">
-</picture>
+<p align="center">
+  <img src="Resources/AppIcon.png" width="128" alt="bigtty icon">
+</p>
+
+<h1 align="center">bigtty</h1>
+
+<p align="center"><b>A native Mac home for your terminal agents.</b></p>
 
 <p align="center">
   <a href="https://github.com/v1k45/bigtty/releases/latest"><b>Download for macOS</b></a> ·
