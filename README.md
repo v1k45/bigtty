@@ -3,7 +3,6 @@
 </p>
 
 <h1 align="center">bigtty</h1>
-<p align="center"><sub>formerly GhostHerdr</sub></p>
 
 <p align="center">
   <b>A native Mac home for your terminal agents.</b><br>

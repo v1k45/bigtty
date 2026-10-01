@@ -63,8 +63,6 @@ enum AgentSkill {
         }
 
         for base in [home + "/.claude", home + "/.agents"] where fm.fileExists(atPath: base) {
-            // The skill went by the app's old name.
-            try? fm.removeItem(atPath: base + "/skills/ghostherdr-browser")
             let dir = base + "/skills/bigtty-browser"
             try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             if (try? markdown(ghr: link).write(toFile: dir + "/SKILL.md", atomically: true, encoding: .utf8)) != nil {

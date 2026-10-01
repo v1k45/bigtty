@@ -3,14 +3,14 @@ import Testing
 
 @Suite struct FuzzyMatchTests {
     @Test func lettersInOrder() {
-        #expect(FuzzyMatch.match("ghr", in: "ghostherdr") != nil)
-        #expect(FuzzyMatch.match("rhg", in: "ghostherdr") == nil)
+        #expect(FuzzyMatch.match("ghr", in: "goatherder") != nil)
+        #expect(FuzzyMatch.match("rhg", in: "goatherder") == nil)
         #expect(FuzzyMatch.match("", in: "anything")?.score == 0)
-        #expect(FuzzyMatch.match("GHOST", in: "ghostherdr") != nil)
+        #expect(FuzzyMatch.match("GOAT", in: "goatherder") != nil)
     }
 
     @Test func positionsPointAtTheLetters() {
-        let result = FuzzyMatch.match("gh", in: "ghostherdr")
+        let result = FuzzyMatch.match("go", in: "goatherder")
         #expect(result?.positions == [0, 1])
         let words = FuzzyMatch.match("ah", in: "api-handler")
         #expect(words?.positions == [0, 4])
@@ -29,7 +29,7 @@ import Testing
     }
 
     @Test func consecutiveBeatsScattered() throws {
-        let run = try #require(FuzzyMatch.match("herd", in: "ghostherdr"))
+        let run = try #require(FuzzyMatch.match("herd", in: "goatherder"))
         let spread = try #require(FuzzyMatch.match("herd", in: "shxexrxdx"))
         #expect(run.score > spread.score)
     }

@@ -167,8 +167,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
                     let ext = try await WKWebExtension(resourceBaseURL: dir)
                     let context = WKWebExtensionContext(for: ext)
                     // A stable id keeps the extension's storage across launches.
-                    // The app's old name: extensions keep their storage across the rename.
-                    context.uniqueIdentifier = "dev.ghostherdr.ext." + dir.lastPathComponent
+                    context.uniqueIdentifier = "dev.bigtty.ext." + dir.lastPathComponent
                     for permission in ext.requestedPermissions.union(ext.optionalPermissions) {
                         context.setPermissionStatus(.grantedExplicitly, for: permission)
                     }
