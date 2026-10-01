@@ -31,9 +31,10 @@ bigtty is the window onto it.
 ## Why bigtty
 
 - **Know which agent needs you.** Each space shows its branch, folder, open
-  ports and what its agents are doing. When one is waiting on you, its space
-  lights up with the actual question, its pane gets a ring, and a notification
-  finds you. ⇧⌘U jumps straight there.
+  ports, what its agents are doing and how long it's been quiet. A dot breathes
+  while an agent works; when one is waiting on you, its space lights up with
+  the actual question, its pane gets a ring, and a notification (with a sound
+  you pick) finds you. ⇧⌘U jumps straight there.
 - **Real Ghostty terminals.** Rendering by libghostty, your Ghostty config
   (fonts, keybinds, themes) as is, every one of Ghostty's hundreds of themes
   built in, and a frosted, translucent look that matches the Mac around it.
@@ -53,9 +54,11 @@ bigtty is the window onto it.
   sit under yours: terminals, agents, attention, browser panes that reach its
   `localhost`, its files. One app, all your boxes.
 - **Keyboard first, mouse friendly.** ⌘K jumps to any space, agent, pane or
-  action, fuzzy ("blt" finds *backend-load-tests*), and searches what
-  every terminal printed, showing the matching line. Hold ⌘ to see shortcuts on everything; ⌘/ lists them all. Drag panes
-  by their top edge to rearrange a layout any way you like.
+  action, fuzzy ("blt" finds *backend-load-tests*), and searches what every
+  terminal printed, showing the matching line. ⌘1–9 go to the spaces you put
+  there, ⌃⌘⇥ back to the last one. Hold ⌘ to see shortcuts on everything; ⌘/
+  lists them all. Drag panes by their top edge to rearrange a layout any way
+  you like.
 - **Native, not a web view in a trench coat.** Swift and AppKit throughout:
   sidebar material, trackpad scrolling, select-to-copy, Mac shortcuts and
   menus.
@@ -120,18 +123,21 @@ upgrades it and keeps your running panes alive.
 | ⌘K | Jump to any space, agent, pane or action |
 | ⌘/ · hold ⌘ | All shortcuts · shortcut badges in place |
 | ⌘1–9 · ⌃⌘] / ⌃⌘[ | Space by number · next / previous space |
+| ⌃⌘⇥ (hold ⌃⌘, tap ⇥) | Recent spaces |
 | ⌃1–9 · ⌃⇥ / ⌃⇧⇥ | Tab by number · next / previous tab |
 | ⌥1–9 · ⌘] / ⌘[ · ⌥⌘ arrows | Pane by number · next / previous pane · pane in a direction |
 | ⌘D / ⇧⌘D · ⇧⌘↩ | Split right / down · zoom pane |
 | ⌃⌘ arrows | Resize pane |
-| ⌘T · ⌥⌘T · ⌘N | New tab · new browser tab · new space |
+| ⌘T · ⌥⌘T · ⌘N · ⇧⌘N | New tab · new browser tab · new space · new window |
 | ⌥⌘B · ⇧⌥⌘B · ⌘L | Split with browser · browser here · address bar |
 | ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
 | ⌘W · ⌥⌘W | Close pane · close tab |
 | ⇧⌘U | Next pane that needs you |
 | ⇧⌘S · ⌃⌘N | Switch session · new session |
 | ⌥⌘K | Connect a machine |
-| ⌃⌘S · ⌘, | Toggle sidebar · settings |
+| ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |
+| ⌘V | Paste (an image pastes as a file the agent can attach) |
+| ⌘, | Settings |
 
 The pane-number modifier (⌥ or ⌥⌘) is a setting.
 
@@ -152,12 +158,33 @@ Clicks, hover, scrolling and pastes reach apps like Claude Code, vim and htop
 the way they do in Ghostty. ⌘V with a screenshot on the clipboard pastes it as
 a file (uploaded first for a pane on another machine), so Claude Code attaches it.
 
+### Spaces
+
+The sidebar lists every space with its branch, folder, listening ports and
+agents, and its tabs by name: a label you gave it, a title the agent reports,
+the agent's own conversation title (Claude Code, Codex) or the terminal title.
+A space with several tabs shows the first two and "+N more".
+
+⌘1–9 are fixed: space 1 is whatever sits at the top. Drag cards in the
+sidebar, or right-click one and choose Move Up / Move Down, to put the spaces
+you use most on the keys you want. ⌃⌘⇥ goes back to the last space you were
+in; hold ⌃⌘ and keep tapping ⇥ to go further back.
+
+Each card says how long its space has been quiet ("claude · idle · 3h"), and
+spaces with nothing for 12 hours fade until you hover or select them, so the
+ones worth your attention stand out. The window and sidebar remember their
+size; the buttons beside the traffic lights hide the sidebar (⌃⌘S) and the
+file viewer (⇧⌘E).
+
 ### Attention and notifications
 
-herdr reports each agent's state; bigtty turns it into a ring on the pane,
-a highlighted space with the agent's own question, a Dock badge and a
-notification (for panes you aren't looking at). Once you've seen it, it goes
-quiet until the agent needs you again.
+herdr reports each agent's state; bigtty turns it into a breathing dot while
+an agent works, and when one needs you: a ring on the pane, a highlighted
+space with the agent's own question, a Dock badge, and a notification for
+panes you aren't looking at. **Settings ▸ General** picks the sound (or none);
+the Dock icon bounces when an agent needs you while bigtty is in the
+background. Once you've seen it, it goes quiet until the agent needs you
+again.
 
 ### Browser panes
 
@@ -226,7 +253,7 @@ Needs Xcode 26 (Swift 6.2+).
 ```sh
 scripts/bundle.sh                 # dev build → build/bigtty.app
 open build/bigtty.app
-scripts/release.sh 0.2.0          # universal release → build/release/bigtty-0.2.0.{dmg,zip}
+scripts/release.sh 0.3.0          # universal release → build/release/bigtty-0.3.0.{dmg,zip}
 ```
 
 `BIGTTY_SESSION=<name>` connects to a named herdr session.
