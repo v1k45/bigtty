@@ -107,12 +107,13 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             for workspace in store.snapshot.workspaces {
                 if visible { number += 1 }
                 let info = spaceInfo.info[workspace.workspaceID]
+                let name = MainWindowController.spaceName(workspace, store: store, agentTitles: spaceInfo.agentTitles)
                 let detail = ([info?.line, info?.branch].compactMap { $0 }.first ?? "") + suffix
                 items.append(Item(
-                    section: "Spaces", title: workspace.label, detail: detail + (visible && number <= 9 ? "   ⌘\(number)" : ""),
+                    section: "Spaces", title: name, detail: detail + (visible && number <= 9 ? "   ⌘\(number)" : ""),
                     symbol: "square.stack", alert: info?.lineIsAlert == true,
                     target: .space(SpaceRef(machine: machine.id, workspace: workspace.workspaceID)),
-                    haystack: "\(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.isLocal ? machine.sessionName : "")".lowercased()
+                    haystack: "\(name) \(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.isLocal ? machine.sessionName : "")".lowercased()
                 ))
             }
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
@@ -130,7 +131,9 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private static func collectPanes(machine: Machine, store: SessionStore, attention: AttentionCenter, suffix: String) -> [Item] {
         var items: [Item] = []
         for pane in store.snapshot.panes {
-            let space = (store.workspace(pane.workspaceID)?.label ?? "") + suffix
+            let space = (store.workspace(pane.workspaceID).map {
+                MainWindowController.spaceName($0, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
+            } ?? "") + suffix
             let agent = pane.displayAgent ?? pane.agent
             let kind = pane.hostKind
             let title: String
@@ -186,7 +189,11 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             terminal = TerminalIndex.shared.search(query, in: manager.all).map { hit in
                 let machine = manager.machine(hit.machineID)
                 let store = machine?.store
-                let space = store?.workspace(hit.pane.workspaceID)?.label ?? ""
+                let space = store.flatMap { store in
+                    store.workspace(hit.pane.workspaceID).map {
+                        MainWindowController.spaceName($0, store: store, agentTitles: machine?.spaceInfo?.agentTitles ?? [:])
+                    }
+                } ?? ""
                 // The pane by what it's about, else its agent, else its
                 // folder (a shell's title is just user@host:dir).
                 let pane = hit.pane

@@ -22,6 +22,12 @@ agents, and its tabs by name: a label you gave it, a title the agent reports,
 the agent's own conversation title (Claude Code, Codex) or the terminal title.
 A space with several tabs shows the first two and "+N more".
 
+Spaces go by what they're doing, too: one herdr named after its folder shows
+its first tab's title instead ("Fix checkout totals" rather than
+"checkout-api"), with the folder on the line below. A name you gave the space
+(Rename Space…) always wins, a plain shell keeps the folder name, and herdr's
+own name for the space is never changed.
+
 ⌘1–9 are fixed: space 1 is whatever sits at the top. Drag cards in the
 sidebar, or right-click one and choose Move Up / Move Down, to put the spaces
 you use most on the keys you want. ⌃⌘⇥ goes back to the last space you were

@@ -494,7 +494,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 window?.makeFirstResponder(view.content)
             }
         }
-        window?.title = store.workspace(workspaceID)?.label ?? "bigtty"
+        window?.title = store.workspace(workspaceID).map {
+            Self.spaceName($0, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
+        } ?? "bigtty"
     }
 
     /// What to show instead of panes, for this window's machine.
@@ -560,17 +562,52 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// else the title the terminal set, else the agent.
     static func tabTitle(_ tab: Tab, store: SessionStore, agentTitles: [String: String]) -> String {
         if tab.label != String(tab.number), !tab.label.isEmpty { return tab.label }
-        // Named after its terminal or agent: a browser or files pane beside
-        // it only names a tab that has nothing else.
-        let panes = store.panes(in: tab.tabID)
-        let terminals = panes.filter { $0.hostKind == nil }
-        let lead = terminals.first { $0.focused } ?? terminals.first { $0.agent != nil } ?? terminals.first ?? panes.first
-        if let label = lead?.label, !label.isEmpty { return label }
-        if let title = lead?.title.map(Pane.cleanTitle), !title.isEmpty { return title }
-        if let lead, let title = agentTitles[lead.paneID] { return title }
+        let lead = leadPane(of: tab, store: store)
+        if let title = paneTitle(lead, agentTitles: agentTitles) { return title }
         if let title = lead?.shownTitle { return title }
         if let agent = lead?.displayAgent ?? lead?.agent { return agent }
         return "tab \(tab.number)"
+    }
+
+    /// The pane a tab is named after: its terminal or agent; a browser or
+    /// files pane beside it only names a tab that has nothing else.
+    private static func leadPane(of tab: Tab, store: SessionStore) -> Pane? {
+        let panes = store.panes(in: tab.tabID)
+        let terminals = panes.filter { $0.hostKind == nil }
+        return terminals.first { $0.focused } ?? terminals.first { $0.agent != nil } ?? terminals.first ?? panes.first
+    }
+
+    /// A name for the pane from what it says it's doing: a label, a title
+    /// reported to herdr, the agent's conversation title.
+    private static func paneTitle(_ pane: Pane?, agentTitles: [String: String]) -> String? {
+        guard let pane else { return nil }
+        if let label = pane.label, !label.isEmpty { return label }
+        if let title = pane.title.map(Pane.cleanTitle), !title.isEmpty { return title }
+        return agentTitles[pane.paneID]
+    }
+
+    /// A space is shown under its first tab's title (an agent's
+    /// conversation, a title it reports, a terminal title that says what's
+    /// going on), unless you named it yourself. herdr names a space after
+    /// its folder, so a name that is a folder's counts as unnamed. herdr's
+    /// own name is never changed.
+    static func spaceName(_ workspace: Workspace, store: SessionStore, agentTitles: [String: String]) -> String {
+        let panes = store.snapshot.panes.filter { $0.workspaceID == workspace.workspaceID }
+        let folders = Set(panes.flatMap { [$0.cwd, $0.foregroundCwd] }.compactMap { $0 }.map { ($0 as NSString).lastPathComponent })
+        guard workspace.label.isEmpty || folders.contains(workspace.label),
+              let first = store.tabs(in: workspace.workspaceID).min(by: { $0.number < $1.number })
+        else { return workspace.label }
+        if first.label != String(first.number), !first.label.isEmpty { return first.label }
+        let lead = leadPane(of: first, store: store)
+        let candidates = [paneTitle(lead, agentTitles: agentTitles), lead?.shownTitle]
+        let title = candidates.compactMap { $0 }.first { title in
+            // Not a shell's own title ("me@host: ~/code/api", "~/api", "zsh")
+            // or just the folder again.
+            !(title.contains("@") && title.contains(":")) && !title.hasPrefix("~") && !title.hasPrefix("/")
+                && !folders.contains(title) && !HostPaneStore.shells.contains(title)
+                && title != lead?.agent && title != lead?.displayAgent
+        }
+        return title ?? (workspace.label.isEmpty ? "space \(workspace.number)" : workspace.label)
     }
 
     /// The sidebar: every machine with its spaces; the selected one lists its tabs.
@@ -640,7 +677,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                     $0.workspaceID == workspace.workspaceID && attention.reason(for: $0.paneID) == .done
                 }
                 return .init(
-                    id: ref.key, name: workspace.label,
+                    id: ref.key, name: Self.spaceName(workspace, store: store, agentTitles: spaceInfo.agentTitles),
                     shortcut: number <= 9 ? "⌘\(number)" : "",
                     meta: meta, ports: info.ports, line: info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
