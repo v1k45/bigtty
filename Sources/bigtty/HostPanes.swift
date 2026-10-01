@@ -33,6 +33,28 @@ struct HostPaneState: Codable, Equatable {
     var machine: String?
 }
 
+extension HostPaneState {
+    /// herdr tags for the pane: what it is and what it shows, so any bigtty
+    /// that connects (another Mac, a fresh install) can show it too.
+    func tokens(id: String) -> [String: String] {
+        var tokens = ["btty_kind": kind.rawValue, "btty_id": id]
+        tokens["btty_url"] = kind == .browser ? url : nil
+        tokens["btty_path"] = kind == .browser ? nil : path
+        tokens["btty_selection"] = kind == .browser ? nil : selection
+        tokens["btty_mode"] = kind == .browser ? nil : mode
+        return tokens
+    }
+
+    /// A pane this Mac has no record of, from its herdr tags.
+    init(kind: HostPaneKind, tokens: [String: String]?) {
+        self.init(kind: kind)
+        url = tokens?["btty_url"]
+        path = tokens?["btty_path"]
+        selection = tokens?["btty_selection"]
+        mode = tokens?["btty_mode"]
+    }
+}
+
 extension Pane {
     var hostKind: HostPaneKind? { tokens?["btty_kind"].flatMap(HostPaneKind.init(rawValue:)) }
     var hostID: String? { tokens?["btty_id"] }
@@ -150,9 +172,8 @@ final class HostPaneStore {
     static let shells: Set<String> = ["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "-zsh", "-bash", "-fish", "-sh"]
 
     static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient, remote: Bool = false) async throws {
-        try await client.reportMetadata(
-            paneID: pane, title: title, tokens: ["btty_kind": kind.rawValue, "btty_id": id]
-        )
+        let state = await MainActor.run { shared[id] } ?? HostPaneState(kind: kind)
+        try await client.reportMetadata(paneID: pane, title: title, tokens: state.tokens(id: id))
         let command: String
         if remote {
             // No btty on the other machine: a plain sh placeholder does the same job.
@@ -194,7 +215,7 @@ final class HostPaneStore {
                     guard let tag else { continue }
                     let state = await MainActor.run { shared[tag.id] } ?? HostPaneState(kind: tag.kind)
                     try await client.reportMetadata(paneID: pane.paneID, title: hostTitle(state),
-                                                    tokens: ["btty_kind": tag.kind.rawValue, "btty_id": tag.id])
+                                                    tokens: state.tokens(id: tag.id))
                     break
                 }
             }

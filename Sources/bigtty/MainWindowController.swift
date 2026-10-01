@@ -1070,7 +1070,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     private func makeBrowser(pane: Pane, hostID: String) -> BrowserPaneView {
-        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
+        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser, tokens: pane.tokens)
         state.paneID = pane.paneID
         HostPaneStore.shared[hostID] = state
         // The registry owns the web view so agents can drive it while no
@@ -1086,12 +1086,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self?.paneGainedFocus(id)
         }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        // Tag panes made before addresses were shared with herdr, too.
+        if state.url != nil, pane.tokens?["btty_url"] != state.url { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         browser.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return browser
     }
 
     private func makeFiles(pane: Pane, hostID: String) -> FilesPaneView {
-        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: pane.hostKind ?? .files, path: pane.cwd)
+        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: pane.hostKind ?? .files, tokens: pane.tokens)
+        if state.path == nil { state.path = pane.cwd }
         state.paneID = pane.paneID
         if state.machine == nil, let tag = machine.hostTag { state.machine = tag }
         HostPaneStore.shared[hostID] = state
@@ -1099,6 +1102,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let id = pane.paneID
         files.onFocus = { [weak self] in self?.paneGainedFocus(id) }
         files.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        if state.path != nil, pane.tokens?["btty_path"] != state.path { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         files.onInsertPath = { [weak self] path in self?.insertPath(path, near: id) }
         files.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return files
@@ -1154,7 +1158,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let work = DispatchWorkItem { [weak self] in
             self?.store.perform { client in
                 try await client.reportMetadata(
-                    paneID: paneID, title: title, tokens: ["btty_kind": state.kind.rawValue, "btty_id": hostID]
+                    paneID: paneID, title: title, tokens: state.tokens(id: hostID)
                 )
             }
         }
