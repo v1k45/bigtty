@@ -51,7 +51,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
       const report = () => {
         const playing = Array.from(document.querySelectorAll('video, audio')).some(m =>
           !m.paused && !m.ended && !m.muted && m.volume > 0);
-        try { window.webkit.messageHandlers.ghrMedia.postMessage(playing); } catch (_) {}
+        try { window.webkit.messageHandlers.bttyMedia.postMessage(playing); } catch (_) {}
       };
       for (const type of ['play', 'playing', 'pause', 'ended', 'volumechange', 'emptied'])
         document.addEventListener(type, report, true);
@@ -64,10 +64,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// Esc to leave), and a frame asks its parent to fill with the frame.
     static let paneFullscreen = """
     (() => {
-      if (window.__ghrPaneFullscreen) return;
-      window.__ghrPaneFullscreen = true;
+      if (window.__bttyPaneFullscreen) return;
+      window.__bttyPaneFullscreen = true;
       let current = null;
-      const cls = '__ghr_fs';
+      const cls = '__btty_fs';
       const style = document.createElement('style');
       style.textContent = `.${cls}{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;transform:none!important;z-index:2147483647!important;background-color:#000!important;object-fit:contain}`;
       const fire = (el) => {
@@ -75,8 +75,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
           (el || document).dispatchEvent(new Event(type, { bubbles: true }));
       };
       const tellApp = (on) => {
-        if (window !== window.top) { window.parent.postMessage({ __ghrFullscreen: on }, '*'); return; }
-        try { window.webkit.messageHandlers.ghrFullscreen.postMessage(on); } catch (_) {}
+        if (window !== window.top) { window.parent.postMessage({ __bttyFullscreen: on }, '*'); return; }
+        try { window.webkit.messageHandlers.bttyFullscreen.postMessage(on); } catch (_) {}
       };
       function enter() {
         const el = this;
@@ -113,10 +113,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && current) exit(); }, true);
       // A frame going full screen: fill with the frame itself.
       window.addEventListener('message', (e) => {
-        if (!e.data || typeof e.data.__ghrFullscreen !== 'boolean') return;
+        if (!e.data || typeof e.data.__bttyFullscreen !== 'boolean') return;
         const frame = Array.from(document.querySelectorAll('iframe')).find(f => f.contentWindow === e.source);
         if (!frame) return;
-        if (e.data.__ghrFullscreen) enter.call(frame); else if (current === frame) exit();
+        if (e.data.__bttyFullscreen) enter.call(frame); else if (current === frame) exit();
       });
     })();
     """
@@ -184,9 +184,9 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrConsole")
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrMedia")
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "ghrFullscreen")
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyConsole")
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyMedia")
+        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyFullscreen")
         webView.allowsBackForwardNavigationGestures = true
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -501,11 +501,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     // MARK: - Console and load state
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.name == "ghrFullscreen" {
+        if message.name == "bttyFullscreen" {
             pageFullscreen = (message.body as? Bool) == true
             return
         }
-        if message.name == "ghrMedia" {
+        if message.name == "bttyMedia" {
             let frame = message.frameInfo.isMainFrame ? "main" : message.frameInfo.request.url?.absoluteString ?? "frame"
             audibleFrames[frame] = (message.body as? Bool) == true ? true : nil
             isAudible = !audibleFrames.isEmpty

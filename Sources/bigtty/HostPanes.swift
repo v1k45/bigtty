@@ -3,8 +3,8 @@ import HerdrKit
 
 /// Browser and file panes are real herdr panes, so herdr's layout stays the
 /// single source of truth: split, move, zoom and resize work on them like
-/// on any terminal. Each one runs `ghr pane-host` and is tagged with
-/// `tokens.ghr_kind` / `tokens.ghr_id`; what it shows lives here, keyed by
+/// on any terminal. Each one runs `btty pane-host` and is tagged with
+/// `tokens.btty_kind` / `tokens.btty_id`; what it shows lives here, keyed by
 /// that id.
 enum HostPaneKind: String, Codable {
     case browser, files, diff
@@ -24,7 +24,7 @@ struct HostPaneState: Codable, Equatable {
     var showsTree: Bool?
     /// A browser pane is playing sound (shown on the tab and pane title).
     var audible: Bool?
-    /// A line to reveal once (from `ghr open file:line`); not persisted meaningfully.
+    /// A line to reveal once (from `btty open file:line`); not persisted meaningfully.
     var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.
     var paneID: String?
@@ -34,8 +34,8 @@ struct HostPaneState: Codable, Equatable {
 }
 
 extension Pane {
-    var hostKind: HostPaneKind? { tokens?["ghr_kind"].flatMap(HostPaneKind.init(rawValue:)) }
-    var hostID: String? { tokens?["ghr_id"] }
+    var hostKind: HostPaneKind? { tokens?["btty_kind"].flatMap(HostPaneKind.init(rawValue:)) }
+    var hostID: String? { tokens?["btty_id"] }
 }
 
 @MainActor
@@ -94,9 +94,9 @@ final class HostPaneStore {
         "\(kind.rawValue.prefix(1))\(UUID().uuidString.prefix(8).lowercased())"
     }
 
-    /// The `ghr` binary shipped next to the app's executable.
-    static var ghrPath: String {
-        Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("ghr").path
+    /// The `btty` binary shipped next to the app's executable.
+    static var bttyPath: String {
+        Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("btty").path
     }
 
     /// Splits `target` and turns the new pane into a host pane. Returns
@@ -151,22 +151,22 @@ final class HostPaneStore {
 
     static func tag(pane: String, id: String, kind: HostPaneKind, title: String, client: HerdrClient, remote: Bool = false) async throws {
         try await client.reportMetadata(
-            paneID: pane, title: title, tokens: ["ghr_kind": kind.rawValue, "ghr_id": id]
+            paneID: pane, title: title, tokens: ["btty_kind": kind.rawValue, "btty_id": id]
         )
         let command: String
         if remote {
-            // No ghr on the other machine: a plain sh placeholder does the same job.
+            // No btty on the other machine: a plain sh placeholder does the same job.
             let banner = "\\033[2J\\033[H\\n  bigtty \(kind.rawValue) pane\\n  \(title.replacingOccurrences(of: "'", with: ""))\\n\\n  Open this workspace in bigtty to see it.\\n"
             command = "sh -c " + shellQuote("printf '\(banner)'; stty -echo -icanon 2>/dev/null; exec cat >/dev/null")
         } else {
-            command = [ghrPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")
+            command = [bttyPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")
         }
         try await client.sendText(paneID: pane, text: "exec \(command)\r")
     }
 
     /// herdr drops pane tags on a restart or live handoff while the pane's
     /// placeholder keeps running. Untagged panes are checked once: one
-    /// running `ghr pane-host <kind> <id>` (or, remotely, our placeholder in
+    /// running `btty pane-host <kind> <id>` (or, remotely, our placeholder in
     /// a pane we recorded) gets its tags back.
     private static var checkedPanes: Set<String> = []
 
@@ -194,7 +194,7 @@ final class HostPaneStore {
                     guard let tag else { continue }
                     let state = await MainActor.run { shared[tag.id] } ?? HostPaneState(kind: tag.kind)
                     try await client.reportMetadata(paneID: pane.paneID, title: hostTitle(state),
-                                                    tokens: ["ghr_kind": tag.kind.rawValue, "ghr_id": tag.id])
+                                                    tokens: ["btty_kind": tag.kind.rawValue, "btty_id": tag.id])
                     break
                 }
             }

@@ -1061,7 +1061,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard parts.count == 3, let x = Double(parts[1]), let y = Double(parts[2]), let height = window?.contentView?.bounds.height else { return }
         let point = NSPoint(x: x, y: height - y)
         let target = dropTarget(PaneDragPayload(machineID: machine.id, paneID: parts[0]), at: point)
-        NSLog("ghr-droptarget \(parts[1]),\(parts[2]) -> \(target.map { "\($0.0)" } ?? "none")")
+        NSLog("btty-droptarget \(parts[1]),\(parts[2]) -> \(target.map { "\($0.0)" } ?? "none")")
     }
 
     /// Debug hook: "source target zone" (target "tab" for the outer edge).
@@ -1156,7 +1156,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let work = DispatchWorkItem { [weak self] in
             self?.store.perform { client in
                 try await client.reportMetadata(
-                    paneID: paneID, title: title, tokens: ["ghr_kind": state.kind.rawValue, "ghr_id": hostID]
+                    paneID: paneID, title: title, tokens: ["btty_kind": state.kind.rawValue, "btty_id": hostID]
                 )
             }
         }

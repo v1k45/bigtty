@@ -62,7 +62,7 @@ final class ControlAPI {
                 "selector": params["selector"] ?? .null,
                 "maxLines": params["max_lines"] ?? .null,
             ]
-            let tree = try await automation(web, "return __ghr.snapshot(options)", ["options": options])
+            let tree = try await automation(web, "return __btty.snapshot(options)", ["options": options])
             var info = pageInfo(id, browser)
             if case var .object(o) = info {
                 o["snapshot"] = tree
@@ -71,41 +71,41 @@ final class ControlAPI {
             return info
         case "click", "dblclick":
             let count = method.hasSuffix("dblclick") ? 2 : (params["count"]?.intValue ?? 1)
-            _ = try await automation(web, "return __ghr.click(target, {count})", ["target": .string(try require(target)), "count": .number(Double(count))])
+            _ = try await automation(web, "return __btty.click(target, {count})", ["target": .string(try require(target)), "count": .number(Double(count))])
             return await settle(id, browser)
         case "fill":
-            _ = try await automation(web, "return __ghr.fill(target, text)", ["target": .string(try require(target)), "text": params["text"] ?? ""])
+            _ = try await automation(web, "return __btty.fill(target, text)", ["target": .string(try require(target)), "text": params["text"] ?? ""])
             return true
         case "type":
-            _ = try await automation(web, "return __ghr.type(target, text)", ["target": target.map(JSONValue.string) ?? .null, "text": params["text"] ?? ""])
+            _ = try await automation(web, "return __btty.type(target, text)", ["target": target.map(JSONValue.string) ?? .null, "text": params["text"] ?? ""])
             return true
         case "press":
             guard let key = params["key"]?.stringValue else { throw Failure(code: "invalid_params", message: "key required") }
-            _ = try await automation(web, "return __ghr.press(key, target)", ["key": .string(key), "target": target.map(JSONValue.string) ?? .null])
+            _ = try await automation(web, "return __btty.press(key, target)", ["key": .string(key), "target": target.map(JSONValue.string) ?? .null])
             return await settle(id, browser)
         case "hover":
-            return try await automation(web, "return __ghr.hover(target)", ["target": .string(try require(target))])
+            return try await automation(web, "return __btty.hover(target)", ["target": .string(try require(target))])
         case "highlight":
-            return try await automation(web, "return __ghr.highlight(target)", ["target": .string(try require(target))])
+            return try await automation(web, "return __btty.highlight(target)", ["target": .string(try require(target))])
         case "select":
-            return try await automation(web, "return __ghr.select(target, values)", ["target": .string(try require(target)), "values": params["values"] ?? []])
+            return try await automation(web, "return __btty.select(target, values)", ["target": .string(try require(target)), "values": params["values"] ?? []])
         case "check", "uncheck":
             let on = method.hasSuffix(".check")
-            return try await automation(web, "return __ghr.check(target, on)", ["target": .string(try require(target)), "on": .bool(on)])
+            return try await automation(web, "return __btty.check(target, on)", ["target": .string(try require(target)), "on": .bool(on)])
         case "scroll":
             let options: JSONValue = [
                 "target": target.map(JSONValue.string) ?? .null,
                 "direction": params["direction"] ?? .null,
                 "amount": params["amount"] ?? .null,
             ]
-            return try await automation(web, "return __ghr.scroll(options)", ["options": options])
+            return try await automation(web, "return __btty.scroll(options)", ["options": options])
         case "get":
             let what = params["what"]?.stringValue ?? "text"
             switch what {
             case "url": return .string(web.url?.absoluteString ?? "")
             case "title": return .string(web.title ?? "")
             default:
-                return try await automation(web, "return __ghr.get(what, target, name)", [
+                return try await automation(web, "return __btty.get(what, target, name)", [
                     "what": .string(what), "target": target.map(JSONValue.string) ?? .null, "name": params["name"] ?? .null,
                 ])
             }
@@ -124,7 +124,7 @@ final class ControlAPI {
                 "gone": params["gone"] ?? false,
                 "timeout": .number((params["timeout"]?.doubleValue ?? 10) * 1000),
             ]
-            return try await automation(web, "return await __ghr.waitFor(options)", ["options": options])
+            return try await automation(web, "return await __btty.waitFor(options)", ["options": options])
         case "screenshot":
             return try await screenshot(id, web, path: params["path"]?.stringValue)
         case "console":
@@ -178,7 +178,7 @@ final class ControlAPI {
             if HostPaneStore.shared[wanted] != nil || BrowserRegistry.shared.existing(wanted) != nil {
                 return (wanted, BrowserRegistry.shared.view(for: wanted))
             }
-            throw Failure(code: "not_found", message: "no browser \(wanted); see `ghr browser list`")
+            throw Failure(code: "not_found", message: "no browser \(wanted); see `btty browser list`")
         }
         if let id = callerTabBrowser(params) { return (id, BrowserRegistry.shared.view(for: id)) }
         if let id = BrowserRegistry.shared.lastFocused { return (id, BrowserRegistry.shared.view(for: id)) }
@@ -186,8 +186,8 @@ final class ControlAPI {
         if all.count == 1, let id = all[0].hostID { return (id, BrowserRegistry.shared.view(for: id)) }
         throw Failure(
             code: "no_browser",
-            message: all.isEmpty ? "no browser pane; open one with `ghr browser open <url>`"
-                : "several browser panes; pick one with --browser (see `ghr browser list`)"
+            message: all.isEmpty ? "no browser pane; open one with `btty browser open <url>`"
+                : "several browser panes; pick one with --browser (see `btty browser list`)"
         )
     }
 
@@ -342,7 +342,7 @@ final class ControlAPI {
         guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:])
         else { throw Failure(code: "screenshot_failed", message: "could not encode PNG") }
-        let file = path ?? (NSTemporaryDirectory() + "ghr-\(id)-\(Int(Date().timeIntervalSince1970)).png")
+        let file = path ?? (NSTemporaryDirectory() + "btty-\(id)-\(Int(Date().timeIntervalSince1970)).png")
         do {
             try png.write(to: URL(fileURLWithPath: file))
         } catch {

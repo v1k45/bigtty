@@ -3,11 +3,11 @@ import Foundation
 import Testing
 
 /// Talks to a real herdr server in an isolated named session. Enabled with
-/// `GHR_TEST_SESSION=<name>`; start it with `herdr --session <name> server`.
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["GHR_TEST_SESSION"] != nil))
+/// `BTTY_TEST_SESSION=<name>`; start it with `herdr --session <name> server`.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["BTTY_TEST_SESSION"] != nil))
 struct LiveServerTests {
     let client = HerdrClient(endpoint: HerdrEndpoint(
-        session: ProcessInfo.processInfo.environment["GHR_TEST_SESSION"]
+        session: ProcessInfo.processInfo.environment["BTTY_TEST_SESSION"]
     ))
 
     @Test func pingAndSnapshot() async throws {
@@ -17,7 +17,7 @@ struct LiveServerTests {
     }
 
     @Test func splitShowsUpInLayout() async throws {
-        let root = try await client.createWorkspace(cwd: "/tmp", label: "ghr-test", focus: false)
+        let root = try await client.createWorkspace(cwd: "/tmp", label: "btty-test", focus: false)
         let pane = try await client.split(paneID: root.paneID, direction: .right)
         let layout = try await client.layout(tabID: root.tabID)
         #expect(layout.root.paneIDs == [root.paneID, pane.paneID])
@@ -25,7 +25,7 @@ struct LiveServerTests {
     }
 
     @Test func terminalChannelEchoes() async throws {
-        let pane = try await client.createWorkspace(cwd: "/tmp", label: "ghr-echo", focus: false)
+        let pane = try await client.createWorkspace(cwd: "/tmp", label: "btty-echo", focus: false)
 
         let channel = TerminalChannel(endpoint: client.endpoint, terminalID: pane.terminalID)
         let received = Received()
@@ -34,11 +34,11 @@ struct LiveServerTests {
         // Wait for the shell to draw something, then for our output.
         try await waitUntil { !received.text.isEmpty }
         try await Task.sleep(nanoseconds: 500_000_000)
-        channel.sendInput(Data("echo ghr-marker-$((20+22))\r".utf8))
-        try await waitUntil { received.text.contains("ghr-marker-42") }
+        channel.sendInput(Data("echo btty-marker-$((20+22))\r".utf8))
+        try await waitUntil { received.text.contains("btty-marker-42") }
         channel.close()
         try await client.closeWorkspace(pane.workspaceID)
-        #expect(received.text.contains("ghr-marker-42"))
+        #expect(received.text.contains("btty-marker-42"))
     }
 }
 

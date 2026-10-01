@@ -2,14 +2,14 @@ import Foundation
 import HerdrKit
 
 let usageText = """
-ghr — drive bigtty from a shell or an agent
+btty — drive bigtty from a shell or an agent
 
 usage:
-  ghr open <path>[:line]                show a file or folder in a files pane beside you
-  ghr diff [path]                       show the repository's changes (git diff vs HEAD)
-  ghr browser <command> [args] [--browser <id|pane>] [--json]
-  ghr pane-host <kind> <id> [title]     placeholder process for a bigtty pane
-  ghr version
+  btty open <path>[:line]                show a file or folder in a files pane beside you
+  btty diff [path]                       show the repository's changes (git diff vs HEAD)
+  btty browser <command> [args] [--browser <id|pane>] [--json]
+  btty pane-host <kind> <id> [title]     placeholder process for a bigtty pane
+  btty version
 
 browser commands (targets are refs from `snapshot`, like @e3, or CSS selectors):
   open [url] [--new] [--down]   open in this tab's browser pane, or split a new one
@@ -33,7 +33,7 @@ Inside a herdr pane, commands go to the browser in the same tab.
 """
 
 func fail(_ message: String, code: Int32 = 1) -> Never {
-    FileHandle.standardError.write(Data("ghr: \(message)\n".utf8))
+    FileHandle.standardError.write(Data("btty: \(message)\n".utf8))
     exit(code)
 }
 
@@ -98,7 +98,7 @@ struct Arguments {
     }
 
     func arg(_ index: Int, _ name: String) -> String {
-        guard index < positional.count else { fail("missing <\(name)>; see `ghr browser --help`", code: 64) }
+        guard index < positional.count else { fail("missing <\(name)>; see `btty browser --help`", code: 64) }
         return positional[index]
     }
 
@@ -237,7 +237,7 @@ func browser(_ args: [String]) {
         method = "browser.console"
         if parsed.switches.contains("clear") { params["clear"] = true }
     default:
-        fail("unknown browser command \(command); see `ghr browser --help`", code: 64)
+        fail("unknown browser command \(command); see `btty browser --help`", code: 64)
     }
 
     do {
@@ -299,9 +299,9 @@ func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "version", "--version":
-    print("ghr 0.1.0")
+    print("btty 0.1.0")
 case "pane-host":
-    guard args.count >= 3 else { fail("usage: ghr pane-host <kind> <id> [title]", code: 64) }
+    guard args.count >= 3 else { fail("usage: btty pane-host <kind> <id> [title]", code: 64) }
     paneHost(kind: args[1], id: args[2], title: args.count > 3 ? args[3] : nil)
 case "browser":
     browser(Array(args.dropFirst()))
@@ -310,5 +310,5 @@ case "open", "diff":
 case "help", "--help", "-h", nil:
     print(usageText)
 default:
-    fail("unknown command \(args[0]); see `ghr help`", code: 64)
+    fail("unknown command \(args[0]); see `btty help`", code: 64)
 }

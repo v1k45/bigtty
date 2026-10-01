@@ -1,7 +1,7 @@
 import Foundation
 import HerdrKit
 
-/// The app's Unix socket for `ghr`: NDJSON requests, any number per
+/// The app's Unix socket for `btty`: NDJSON requests, any number per
 /// connection. Only the current user can connect (mode 0600).
 final class ControlServer: @unchecked Sendable {
     typealias Handler = @MainActor (_ method: String, _ params: JSONValue) async throws -> JSONValue
@@ -25,7 +25,7 @@ final class ControlServer: @unchecked Sendable {
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true
         )
         // Another bigtty already answers here: leave it be (agents'
-        // `ghr` keeps reaching it) rather than stealing the socket.
+        // `btty` keeps reaching it) rather than stealing the socket.
         if Self.isLive(path) {
             throw Failure(code: "in_use", message: "\(path) is served by another bigtty")
         }

@@ -57,7 +57,7 @@ enum MainMenu {
         appMenu.addItem(withTitle: "About bigtty", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         item(appMenu, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
-        appMenu.addItem(withTitle: "Install ghr and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Install btty and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         let services = NSMenu(title: "Services")
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")

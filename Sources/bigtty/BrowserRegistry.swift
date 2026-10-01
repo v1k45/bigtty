@@ -80,7 +80,7 @@ final class BrowserRegistry {
     }
 }
 
-/// Files panes, owned here for the same reasons as browsers: `ghr open`
+/// Files panes, owned here for the same reasons as browsers: `btty open`
 /// reaches a pane that isn't on screen, and windows only borrow the view.
 @MainActor
 final class FilesRegistry {

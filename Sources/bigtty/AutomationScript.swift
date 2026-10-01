@@ -1,12 +1,12 @@
 // The in-page half of browser automation. It is installed in its own
 // content world ("bigtty"), so pages can neither see nor tamper with it,
-// and exposes `__ghr` for `BrowserAutomation` to call. The command
+// and exposes `__btty` for `BrowserAutomation` to call. The command
 // vocabulary follows vercel-labs/agent-browser; the code is our own.
 
 enum AutomationScript {
     static let source = #"""
     (() => {
-      if (globalThis.__ghr) return;
+      if (globalThis.__btty) return;
 
       let refs = new Map();
       let nextRef = 1;
@@ -355,22 +355,22 @@ enum AutomationScript {
         return true;
       }
 
-      globalThis.__ghr = { snapshot, resolve, click, fill, type, press, hover, select, check, scroll, get, waitFor, highlight };
+      globalThis.__btty = { snapshot, resolve, click, fill, type, press, hover, select, check, scroll, get, waitFor, highlight };
     })();
     """#
 
     /// Page-world script that forwards console output and errors to the app.
     static let consoleHook = #"""
     (() => {
-      if (window.__ghrConsole) return;
-      window.__ghrConsole = true;
+      if (window.__bttyConsole) return;
+      window.__bttyConsole = true;
       const post = (level, args) => {
         try {
           const text = args.map(a => {
             if (typeof a === "string") return a;
             try { return JSON.stringify(a); } catch { return String(a); }
           }).join(" ");
-          window.webkit.messageHandlers.ghrConsole.postMessage({ level, text });
+          window.webkit.messageHandlers.bttyConsole.postMessage({ level, text });
         } catch {}
       };
       for (const level of ["log", "info", "warn", "error", "debug"]) {

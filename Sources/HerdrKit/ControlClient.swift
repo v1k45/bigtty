@@ -1,6 +1,6 @@
 import Foundation
 
-/// bigtty's own control socket, which `ghr` (and agents) use to drive
+/// bigtty's own control socket, which `btty` (and agents) use to drive
 /// the app: browser panes, file views, notifications. Same framing as
 /// herdr's API: one NDJSON request, one NDJSON response.
 public enum BigttyControl {

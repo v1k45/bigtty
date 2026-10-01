@@ -41,7 +41,7 @@ bigtty is the window onto it.
 - **A browser beside the agent.** Browser panes live in the same split layout
   as your terminals. Open `localhost` next to the dev server, watch the page
   change, go full screen inside the pane, block ads with uBlock Origin Lite. Agents can drive it too:
-  `ghr browser click @e5`.
+  `btty browser click @e5`.
 - **Code and diffs without leaving.** ⌘-click any path an agent prints (even a
   bare `Cart.tsx` in a table) and it opens right there: syntax highlighted,
   at the line, images and PDFs previewed. The Changes pane shows the git diff
@@ -200,9 +200,9 @@ unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.
 
 ### Files and changes
 
-⌘-click a path, `ghr open path:line`, or **⌥⌘F**: the file opens at the line,
+⌘-click a path, `btty open path:line`, or **⌥⌘F**: the file opens at the line,
 highlighted, with images and PDFs previewed; the tree is a click away. The
-Changes pane (**⌥⌘G**, `ghr diff`) lists what git sees as changed with each
+Changes pane (**⌥⌘G**, `btty diff`) lists what git sees as changed with each
 diff, refreshed live. Right-click a file to insert its path into the terminal.
 
 ### Sessions
@@ -212,7 +212,7 @@ herdr sessions are independent servers, each with its own spaces. The
 switch, start a stopped session, create one, or stop and delete them. ⌘K
 lists sessions too, and finds spaces in all of them. Every running session
 stays connected in the background: its agents' questions badge the
-switcher, notify you and count in the Dock badge. `ghr` commands from an
+switcher, notify you and count in the Dock badge. `btty` commands from an
 agent act in the agent's own session.
 
 ### Remote machines
@@ -225,20 +225,20 @@ reach the machine's `localhost` (the address bar still says `localhost:3000`).
 It uses your SSH keys and agent; machines saved with `herdr machine add`
 appear on their own.
 
-### Agents driving the browser: `ghr`
+### Agents driving the browser: `btty`
 
-**bigtty ▸ Install ghr and Agent Skill…** puts `ghr` on your `PATH` and
+**bigtty ▸ Install btty and Agent Skill…** puts `btty` on your `PATH` and
 teaches your agents to use it:
 
 ```sh
-ghr browser open localhost:3000     # beside the agent, or this tab's browser
-ghr browser snapshot -i             # - textbox "Email" [ref=e3] …
-ghr browser fill @e3 me@example.com
-ghr browser click @e5
-ghr browser wait --text "Welcome"
-ghr browser screenshot out.png --open
-ghr open src/app.py:42              # show a file beside the agent
-ghr diff                            # show the repo's changes
+btty browser open localhost:3000     # beside the agent, or this tab's browser
+btty browser snapshot -i             # - textbox "Email" [ref=e3] …
+btty browser fill @e3 me@example.com
+btty browser click @e5
+btty browser wait --text "Welcome"
+btty browser screenshot out.png --open
+btty open src/app.py:42              # show a file beside the agent
+btty diff                            # show the repo's changes
 ```
 
 Also `type`, `press`, `select`, `check`, `scroll`, `hover`, `get`, `eval`,
@@ -266,7 +266,7 @@ scripts/release.sh 0.3.0          # universal release → build/release/bigtty-0
 - Each visible pane runs `herdr terminal session control` and feeds its frames
   into a Ghostty surface with a host-managed backend; keys, clicks, scrolls and
   pastes go back as herdr terminal commands.
-- Browser and files panes are herdr panes tagged `ghr_kind`, so herdr's layout
+- Browser and files panes are herdr panes tagged `btty_kind`, so herdr's layout
   stays the single source of truth for every pane.
 - Remote machines are herdr sockets forwarded over SSH; the rest of the app
   doesn't know the difference.
@@ -275,8 +275,8 @@ scripts/release.sh 0.3.0          # universal release → build/release/bigtty-0
 
 ```sh
 swift test                                  # unit tests
-herdr --session ghrtest server &            # isolated server for live tests
-GHR_TEST_SESSION=ghrtest swift test         # + live socket/terminal tests
+herdr --session bttytest server &            # isolated server for live tests
+BTTY_TEST_SESSION=bttytest swift test         # + live socket/terminal tests
 ```
 
 Debug hooks on a running app: `kill -USR1 <pid>` writes window, pane and

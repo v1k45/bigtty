@@ -2,9 +2,9 @@ import AppKit
 
 extension NSAttributedString.Key {
     /// Fills the whole line width behind a paragraph (diff added/removed).
-    static let lineBackground = NSAttributedString.Key("ghrLineBackground")
+    static let lineBackground = NSAttributedString.Key("bttyLineBackground")
     /// The number to show in the gutter for this line (diffs use old/new).
-    static let gutterLabel = NSAttributedString.Key("ghrGutterLabel")
+    static let gutterLabel = NSAttributedString.Key("bttyGutterLabel")
 }
 
 /// A read-only, selectable monospaced text view with a line-number gutter.

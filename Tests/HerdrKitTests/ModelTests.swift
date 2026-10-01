@@ -13,13 +13,13 @@ import Testing
            "pane_count":2,"agent_status":"blocked"}],
          "panes":[{"pane_id":"w1:p1","terminal_id":"term_1","workspace_id":"w1","tab_id":"w1:t1",
            "focused":true,"cwd":"/tmp","agent_status":"working","revision":0,
-           "tokens":{"ghr_kind":"browser"}, "future_field": 1}],
+           "tokens":{"btty_kind":"browser"}, "future_field": 1}],
          "layouts":[],"agents":[]}
         """#
         let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(json.utf8))
         #expect(snapshot.workspaces.first?.label == "demo")
         #expect(snapshot.tabs.first?.agentStatus == .blocked)
-        #expect(snapshot.panes.first?.tokens?["ghr_kind"] == "browser")
+        #expect(snapshot.panes.first?.tokens?["btty_kind"] == "browser")
         #expect(snapshot.panes.first?.displayName == "tmp")
     }
 

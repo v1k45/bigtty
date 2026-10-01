@@ -8,14 +8,14 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 swift build -c "$config" --product bigtty
-swift build -c "$config" --product ghr
+swift build -c "$config" --product btty
 bin="$(swift build -c "$config" --show-bin-path)"
 
 app="build/bigtty.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/bigtty" "$app/Contents/MacOS/bigtty"
-cp "$bin/ghr" "$app/Contents/MacOS/ghr"
+cp "$bin/btty" "$app/Contents/MacOS/btty"
 # SwiftPM resource bundles: its generated Bundle.module looks at the app
 # root, which code signing forbids, then at the absolute .build path. Dev
 # bundles rely on the latter so they can be signed; scripts/release.sh
@@ -45,7 +45,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 # Ad-hoc signing gives the app a stable identity, which notifications need.
-codesign --force --sign - --identifier dev.bigtty.bigtty "$app/Contents/MacOS/ghr"
+codesign --force --sign - --identifier dev.bigtty.bigtty "$app/Contents/MacOS/btty"
 codesign --force --sign - --identifier dev.bigtty.bigtty "$app"
 
 echo "$app"

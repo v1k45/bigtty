@@ -15,7 +15,7 @@ cd "$root"
 derived="build/xc"
 out="build/release"
 
-for scheme in bigtty ghr; do
+for scheme in bigtty btty; do
     xcodebuild -scheme "$scheme" -configuration Release -destination 'generic/platform=macOS' \
         -derivedDataPath "$derived" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build -quiet
 done
@@ -25,7 +25,7 @@ app="$out/bigtty.app"
 rm -rf "$out"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$products/bigtty" "$app/Contents/MacOS/bigtty"
-cp "$products/ghr" "$app/Contents/MacOS/ghr"
+cp "$products/btty" "$app/Contents/MacOS/btty"
 for bundle in "$products"/*.bundle; do
     cp -R "$bundle" "$app/Contents/Resources/"
 done
@@ -53,7 +53,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 # Ad-hoc signed (no Developer ID): a stable identity for notifications.
-codesign --force --sign - --identifier dev.bigtty.ghr "$app/Contents/MacOS/ghr"
+codesign --force --sign - --identifier dev.bigtty.btty "$app/Contents/MacOS/btty"
 codesign --force --sign - --identifier dev.bigtty.bigtty "$app"
 codesign --verify --strict "$app"
 

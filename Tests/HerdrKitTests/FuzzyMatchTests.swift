@@ -3,7 +3,7 @@ import Testing
 
 @Suite struct FuzzyMatchTests {
     @Test func lettersInOrder() {
-        #expect(FuzzyMatch.match("ghr", in: "goatherder") != nil)
+        #expect(FuzzyMatch.match("gtr", in: "goatherder") != nil)
         #expect(FuzzyMatch.match("rhg", in: "goatherder") == nil)
         #expect(FuzzyMatch.match("", in: "anything")?.score == 0)
         #expect(FuzzyMatch.match("GOAT", in: "goatherder") != nil)

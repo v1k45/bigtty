@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "bigtty", targets: ["bigtty"]),
-        .executable(name: "ghr", targets: ["ghr"]),
+        .executable(name: "btty", targets: ["btty"]),
         .library(name: "HerdrKit", targets: ["HerdrKit"]),
     ],
     dependencies: [
@@ -24,7 +24,7 @@ let package = Package(
             // `theme = <name>` in the user's Ghostty config.
             resources: [.copy("Resources/ghostty-themes")]
         ),
-        .executableTarget(name: "ghr", dependencies: ["HerdrKit"]),
+        .executableTarget(name: "btty", dependencies: ["HerdrKit"]),
         .testTarget(name: "HerdrKitTests", dependencies: ["HerdrKit"]),
     ]
 )

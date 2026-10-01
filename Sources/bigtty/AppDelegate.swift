@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// The API for the caller's herdr session (`ghr` sends the socket from
+    /// The API for the caller's herdr session (`btty` sends the socket from
     /// HERDR_SOCKET_PATH), else the session on screen.
     private func controlAPI(for params: JSONValue) -> ControlAPI? {
         let socket = params["caller_socket"]?.stringValue
@@ -665,10 +665,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func installAgentSkill(_: Any?) {
         let done = AgentSkill.install()
         let alert = NSAlert()
-        alert.messageText = done.isEmpty ? "Nothing was installed" : "Agents can now use ghr"
+        alert.messageText = done.isEmpty ? "Nothing was installed" : "Agents can now use btty"
         alert.informativeText = done.isEmpty
-            ? "Could not write ~/.local/bin/ghr or any skills folder."
-            : done.joined(separator: "\n") + "\n\nAgents in herdr panes can run `ghr browser …`."
+            ? "Could not write ~/.local/bin/btty or any skills folder."
+            : done.joined(separator: "\n") + "\n\nAgents in herdr panes can run `btty browser …`."
         alert.runModal()
     }
 
