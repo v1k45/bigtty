@@ -199,7 +199,7 @@ public struct HerdrClient: Sendable {
     public func reportMetadata(paneID: String, title: String?, tokens: [String: String]) async throws {
         var params: [String: JSONValue] = [
             "pane_id": .string(paneID),
-            "source": "ghostherdr",
+            "source": "ghostherdr", // the app's old name, kept so panes it tagged stay tagged
             "tokens": .object(tokens.mapValues(JSONValue.string)),
         ]
         if let title { params["title"] = .string(title) }

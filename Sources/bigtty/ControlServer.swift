@@ -15,7 +15,7 @@ final class ControlServer: @unchecked Sendable {
     private let handler: Handler
     private var listenFD: Int32 = -1
 
-    init(path: String = GhostHerdrControl.socketPath, handler: @escaping Handler) {
+    init(path: String = BigttyControl.socketPath, handler: @escaping Handler) {
         self.path = path
         self.handler = handler
     }
@@ -24,10 +24,10 @@ final class ControlServer: @unchecked Sendable {
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true
         )
-        // Another GhostHerdr already answers here: leave it be (agents'
+        // Another bigtty already answers here: leave it be (agents'
         // `ghr` keeps reaching it) rather than stealing the socket.
         if Self.isLive(path) {
-            throw Failure(code: "in_use", message: "\(path) is served by another GhostHerdr")
+            throw Failure(code: "in_use", message: "\(path) is served by another bigtty")
         }
         unlink(path)
         // sun_path holds 104 bytes; a longer path must fail, not crash.

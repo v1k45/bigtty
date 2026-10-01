@@ -57,7 +57,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     var pinnedWorkspaceID: String? { pinnedSpace?.workspace }
     var onShowSpace: ((SpaceRef) -> Void)?
     /// Autosave name of the main (sidebar) window's frame.
-    static let frameName = "GhostHerdrMain"
+    static let frameName = "BigttyMain"
     private var fullScreenObservers: [NSObjectProtocol] = []
     /// Switch this Mac's session (the app delegate handles space windows).
     var onShowSession: ((Machine) -> Void)?
@@ -136,10 +136,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self.render()
         }
         observers = [(a, { manager.removeObserver($0) })]
-        audioObserver = NotificationCenter.default.addObserver(forName: .ghostherdrAudioChanged, object: nil, queue: .main) { [weak self] _ in
+        audioObserver = NotificationCenter.default.addObserver(forName: .bigttyAudioChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.render() }
         }
-        settingsObserver = NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+        settingsObserver = NotificationCenter.default.addObserver(forName: .bigttySettingsChanged, object: nil, queue: .main) { [weak self] _ in
             // The terminal theme may have changed; the chrome follows.
             MainActor.assumeIsolated {
                 self?.applyTheme()
@@ -370,7 +370,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// A pane move is in flight; see `drop(_:on:)`.
     private var rearranging = false
 
-    /// The oldest herdr GhostHerdr works with: terminal.mouse (clicks and
+    /// The oldest herdr bigtty works with: terminal.mouse (clicks and
     /// hover for pane apps) and paste re-bracketing arrived in 0.9.2.
     static let minimumHerdr = [0, 9, 2]
 
@@ -385,12 +385,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard serverOld || cliOld else { return nil }
         let update = "Update with  herdr update --handoff  (run it outside herdr); --handoff keeps running panes."
         if machine.isLocal {
-            return ("GhostHerdr needs herdr \(need) or newer",
+            return ("bigtty needs herdr \(need) or newer",
                     "This Mac has herdr \(cliOld ? cli : server)\(cliOld && serverOld && cli != server ? " (server \(server))" : "").\n\(update)")
         }
         if serverOld {
             return ("herdr on \(machine.name) is too old",
-                    "\(machine.name) runs herdr \(server); GhostHerdr needs \(need) or newer. \(update) Run it on \(machine.name).")
+                    "\(machine.name) runs herdr \(server); bigtty needs \(need) or newer. \(update) Run it on \(machine.name).")
         }
         return ("This Mac’s herdr is too old for \(machine.name)",
                 "This Mac has herdr \(cli); it carries the terminal streams, so it needs \(need) or newer too. \(update)")
@@ -496,7 +496,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 window?.makeFirstResponder(view.content)
             }
         }
-        window?.title = store.workspace(workspaceID)?.label ?? "GhostHerdr"
+        window?.title = store.workspace(workspaceID)?.label ?? "bigtty"
     }
 
     /// What to show instead of panes, for this window's machine.
@@ -519,7 +519,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         case .herdrMissing: return .remote(title: "herdr isn’t installed on \(name)", detail: "Install herdr on the machine (herdr.dev), or set it up from a terminal with herdr machine add.", action: nil)
         case let .signIn(message): return .remote(title: "Sign in to \(name)", detail: message, action: "Try Again")
         case .approval: return .remote(title: "Approve the login to \(name)",
-                                       detail: "Tailscale SSH asks you to confirm this login in the browser. GhostHerdr connects on its own once you do.",
+                                       detail: "Tailscale SSH asks you to confirm this login in the browser. bigtty connects on its own once you do.",
                                        action: "Open Approval Page")
         case let .failed(message): return .remote(title: "Can’t reach \(name)", detail: message, action: "Try Again")
         case .disabled: return .remote(title: "\(name) is off", detail: "", action: "Connect")
@@ -738,7 +738,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 return [line] + (item.submenu.map { describe($0, indent + "  ") } ?? [])
             }
         }
-        NSLog("ghostherdr: session menu:\n%@", describe(sessionMenu(), "").joined(separator: "\n"))
+        NSLog("bigtty: session menu:\n%@", describe(sessionMenu(), "").joined(separator: "\n"))
     }
 
     /// ⇧⌘S: the switcher, under this Mac's header (or the window's corner).
@@ -1045,7 +1045,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 }
                 try? await client.focusPane(source)
             } catch {
-                NSLog("ghostherdr: moving pane failed: \(error)")
+                NSLog("bigtty: moving pane failed: \(error)")
             }
             guard let self else { return }
             self.rearranging = false
@@ -1268,10 +1268,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// clipboard, through a private pasteboard.
     @objc func debugPasteImage(_ sender: Any?) {
         guard let path = sender as? String, let image = NSImage(contentsOfFile: path) else { return }
-        let board = NSPasteboard(name: .init("dev.ghostherdr.debug-paste"))
+        let board = NSPasteboard(name: .init("dev.bigtty.debug-paste"))
         board.clearContents()
         board.writeObjects([image])
-        NSLog("ghostherdr: debugPasteImage handled=\(pasteImage(from: board))")
+        NSLog("bigtty: debugPasteImage handled=\(pasteImage(from: board))")
     }
 
     /// Debug hook: `[pane-id] word` ⌘-clicks the word in that terminal.
@@ -1764,7 +1764,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 }
 
 extension Notification.Name {
-    static let ghostherdrSettingsChanged = Notification.Name("GhostHerdrSettingsChanged")
+    static let bigttySettingsChanged = Notification.Name("BigttySettingsChanged")
 }
 
 /// A menu item that runs a closure.
@@ -2158,7 +2158,7 @@ final class PlaceholderView: NSView {
         case let .notRunning(socket, binary):
             notRunning = true
             title.stringValue = "herdr isn’t running"
-            detail.stringValue = "GhostHerdr shows the spaces, agents and terminals of a herdr server. Start one here, or connect to a machine that already runs herdr."
+            detail.stringValue = "bigtty shows the spaces, agents and terminals of a herdr server. Start one here, or connect to a machine that already runs herdr."
             footnote.stringValue = "looked for \((socket as NSString).abbreviatingWithTildeInPath) · herdr at \((binary as NSString).abbreviatingWithTildeInPath)"
             spinner.stopAnimation(nil)
         case .empty:

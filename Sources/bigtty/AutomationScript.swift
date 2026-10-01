@@ -1,5 +1,5 @@
 // The in-page half of browser automation. It is installed in its own
-// content world ("ghostherdr"), so pages can neither see nor tamper with it,
+// content world ("bigtty"), so pages can neither see nor tamper with it,
 // and exposes `__ghr` for `BrowserAutomation` to call. The command
 // vocabulary follows vercel-labs/agent-browser; the code is our own.
 

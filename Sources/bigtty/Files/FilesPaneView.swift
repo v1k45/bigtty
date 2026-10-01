@@ -368,7 +368,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
                 if isDirectory {
                     self.code.showMessage((selection as NSString).lastPathComponent + "/")
                 } else if let problem {
-                    NSLog("ghostherdr: preview failed: \(problem)")
+                    NSLog("bigtty: preview failed: \(problem)")
                     self.code.showMessage(problem)
                 } else if let data {
                     if ImagePreview.canShow(selection) {

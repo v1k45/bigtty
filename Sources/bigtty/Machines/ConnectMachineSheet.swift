@@ -36,7 +36,7 @@ final class ConnectMachineSheet: NSObject, NSTextFieldDelegate {
     private func build() {
         let title = NSTextField(labelWithString: "Connect a machine")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
-        let intro = NSTextField(wrappingLabelWithString: "GhostHerdr connects over SSH with your keys and agent, and shows the spaces of the herdr running there.")
+        let intro = NSTextField(wrappingLabelWithString: "bigtty connects over SSH with your keys and agent, and shows the spaces of the herdr running there.")
         intro.font = .systemFont(ofSize: 12)
         intro.textColor = .secondaryLabelColor
         intro.preferredMaxLayoutWidth = 420
@@ -130,12 +130,12 @@ final class ConnectMachineSheet: NSObject, NSTextFieldDelegate {
         checkTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard !Task.isCancelled else { return }
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ghostherdr-probe-\(abs(value.hashValue) % 100_000)").path
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bigtty-probe-\(abs(value.hashValue) % 100_000)").path
             let tunnel = SSHTunnel(config: .init(target: value, session: sessionName.isEmpty ? nil : sessionName, directory: dir))
             let start = Date()
             // Tailscale SSH (check mode) may ask to approve the login in the
             // browser first: the person is connecting right now, so open it.
-            let approval = NotificationCenter.default.addObserver(forName: .ghostherdrLoginApproval, object: nil, queue: .main) { note in
+            let approval = NotificationCenter.default.addObserver(forName: .bigttyLoginApproval, object: nil, queue: .main) { note in
                 guard let parts = note.object as? [String], parts.count == 2, parts[0] == value, let url = URL(string: parts[1]) else { return }
                 MainActor.assumeIsolated {
                     self?.show(nil, "Approve this login in your browser (Tailscale SSH asks to confirm it). Waiting…", spinning: true)

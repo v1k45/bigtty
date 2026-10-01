@@ -132,11 +132,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         didSet {
             guard isAudible != oldValue else { return }
             pageChanged()
-            NotificationCenter.default.post(name: .ghostherdrAudioChanged, object: self)
+            NotificationCenter.default.post(name: .bigttyAudioChanged, object: self)
         }
     }
     /// Automation runs here, out of the page's reach.
-    static let automationWorld = WKContentWorld.world(name: "ghostherdr")
+    static let automationWorld = WKContentWorld.world(name: "bigtty")
 
     struct ConsoleEntry {
         let level: String
@@ -248,7 +248,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             navigate(to: url)
         }
         updateButtons()
-        extensionObserver = NotificationCenter.default.addObserver(forName: .ghostherdrExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
+        extensionObserver = NotificationCenter.default.addObserver(forName: .bigttyExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshExtensionButtons() }
         }
         WebExtensions.tabOpened(self)
@@ -493,8 +493,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        if ProcessInfo.processInfo.environment["GHOSTHERDR_TRACE_BROWSER"] != nil {
-            NSLog("ghostherdr-trace: browser \(hostID) superview=\(String(describing: superview)) \(Thread.callStackSymbols.prefix(8).joined(separator: " | "))")
+        if ProcessInfo.processInfo.environment["BIGTTY_TRACE_BROWSER"] != nil {
+            NSLog("bigtty-trace: browser \(hostID) superview=\(String(describing: superview)) \(Thread.callStackSymbols.prefix(8).joined(separator: " | "))")
         }
     }
 
@@ -716,5 +716,5 @@ private final class BrowserErrorPage: NSView {
 
 extension Notification.Name {
     /// A browser pane started or stopped playing sound.
-    static let ghostherdrAudioChanged = Notification.Name("GhostHerdrAudioChanged")
+    static let bigttyAudioChanged = Notification.Name("BigttyAudioChanged")
 }

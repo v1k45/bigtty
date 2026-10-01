@@ -53,8 +53,8 @@ enum MainMenu {
     static func build() -> NSMenu {
         let main = NSMenu()
 
-        let appMenu = submenu(main, "GhostHerdr")
-        appMenu.addItem(withTitle: "About GhostHerdr", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
+        let appMenu = submenu(main, "bigtty")
+        appMenu.addItem(withTitle: "About bigtty", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         item(appMenu, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
         appMenu.addItem(withTitle: "Install ghr and Agent Skill…", action: #selector(AppDelegate.installAgentSkill(_:)), keyEquivalent: "")
@@ -65,11 +65,11 @@ enum MainMenu {
         appMenu.addItem(servicesItem)
         NSApp.servicesMenu = services
         appMenu.addItem(.separator())
-        item(appMenu, "Hide GhostHerdr", #selector(NSApplication.hide(_:)), "h")
+        item(appMenu, "Hide bigtty", #selector(NSApplication.hide(_:)), "h")
         item(appMenu, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
         item(appMenu, "Show All", #selector(NSApplication.unhideAllApplications(_:)), "")
         appMenu.addItem(.separator())
-        item(appMenu, "Quit GhostHerdr", #selector(NSApplication.terminate(_:)), "q")
+        item(appMenu, "Quit bigtty", #selector(NSApplication.terminate(_:)), "q")
 
         let file = submenu(main, "File")
         item(file, "New Space", #selector(PaneActions.newSpaceHere(_:)), "n")
@@ -197,8 +197,8 @@ enum MainMenu {
         item(help, "Keyboard Shortcuts", #selector(PaneActions.toggleShortcutSheet(_:)), "/")
         help.addItem(.separator())
         for (title, url) in [
-            ("GhostHerdr on GitHub", "https://github.com/v1k45/ghostherdr"),
-            ("Report an Issue…", "https://github.com/v1k45/ghostherdr/issues/new"),
+            ("bigtty on GitHub", "https://github.com/v1k45/bigtty"),
+            ("Report an Issue…", "https://github.com/v1k45/bigtty/issues/new"),
             ("herdr Documentation", "https://herdr.dev"),
         ] {
             help.addItem(ClosureMenuItem(title: title, keyEquivalent: "") { NSWorkspace.shared.open(URL(string: url)!) })

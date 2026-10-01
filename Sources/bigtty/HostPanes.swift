@@ -48,7 +48,7 @@ final class HostPaneStore {
 
     private init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("GhostHerdr", isDirectory: true)
+            .appendingPathComponent("bigtty", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("panes.json")
         if let data = try? Data(contentsOf: fileURL),
@@ -156,7 +156,7 @@ final class HostPaneStore {
         let command: String
         if remote {
             // No ghr on the other machine: a plain sh placeholder does the same job.
-            let banner = "\\033[2J\\033[H\\n  GhostHerdr \(kind.rawValue) pane\\n  \(title.replacingOccurrences(of: "'", with: ""))\\n\\n  Open this workspace in GhostHerdr to see it.\\n"
+            let banner = "\\033[2J\\033[H\\n  bigtty \(kind.rawValue) pane\\n  \(title.replacingOccurrences(of: "'", with: ""))\\n\\n  Open this workspace in bigtty to see it.\\n"
             command = "sh -c " + shellQuote("printf '\(banner)'; stty -echo -icanon 2>/dev/null; exec cat >/dev/null")
         } else {
             command = [ghrPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")

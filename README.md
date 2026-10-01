@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="Resources/AppIcon.png" width="128" alt="GhostHerdr icon">
+  <img src="Resources/AppIcon.png" width="128" alt="bigtty icon">
 </p>
 
-<h1 align="center">GhostHerdr</h1>
+<h1 align="center">bigtty</h1>
+<p align="center"><sub>formerly GhostHerdr</sub></p>
 
 <p align="center">
   <b>A native Mac home for your terminal agents.</b><br>
@@ -11,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/v1k45/ghostherdr/releases/latest"><b>Download for macOS</b></a> ·
+  <a href="https://github.com/v1k45/bigtty/releases/latest"><b>Download for macOS</b></a> ·
   <a href="#install">Install</a> ·
   <a href="#keyboard-shortcuts">Shortcuts</a> ·
   <a href="#build-from-source">Build</a>
@@ -20,15 +21,15 @@
 ![Tests, a live dashboard in a browser pane, server logs and code side by side; the sidebar lists each space's tabs by what its agents are doing](docs/screenshots/workspace.png)
 
 You run Claude Code, Codex and friends in herdr because it keeps them alive:
-sessions survive, panes persist, agents report what they're doing. GhostHerdr
+sessions survive, panes persist, agents report what they're doing. bigtty
 gives that herd a proper Mac app. Every space in a sidebar, every agent's state
 at a glance, real Ghostty terminals, and the tools you keep switching windows
 for (a browser, your code, the diff) right next to the agent that needs them.
 
 Close the app and nothing stops: herdr owns every session, tab, pane and agent.
-GhostHerdr is the window onto it.
+bigtty is the window onto it.
 
-## Why GhostHerdr
+## Why bigtty
 
 - **Know which agent needs you.** Each space shows its branch, folder, open
   ports and what its agents are doing. When one is waiting on you, its space
@@ -75,26 +76,26 @@ GhostHerdr is the window onto it.
 
 ## Install
 
-GhostHerdr needs **macOS 14 or later** and **herdr 0.9.2 or later**
+bigtty needs **macOS 14 or later** and **herdr 0.9.2 or later**
 ([install herdr](https://herdr.dev)). It's a universal app (Apple Silicon and
 Intel).
 
-1. Download the disk image from [Releases](https://github.com/v1k45/ghostherdr/releases/latest)
-   and drag GhostHerdr into Applications. With the GitHub CLI:
+1. Download the disk image from [Releases](https://github.com/v1k45/bigtty/releases/latest)
+   and drag bigtty into Applications. With the GitHub CLI:
    ```sh
-   gh release download -R v1k45/ghostherdr -p 'GhostHerdr-*.dmg'
-   open GhostHerdr-*.dmg
+   gh release download -R v1k45/bigtty -p 'bigtty-*.dmg'
+   open bigtty-*.dmg
    ```
-2. Open GhostHerdr. It finds herdr on your `PATH` or in `~/.local/bin` and
+2. Open bigtty. It finds herdr on your `PATH` or in `~/.local/bin` and
    connects to your default session; start herdr from the app if it isn't
    running.
 
 > The app is ad-hoc signed, not notarized. Downloads via `gh` open directly;
 > if you downloaded it in a browser, clear the quarantine flag once:
-> `xattr -dr com.apple.quarantine /Applications/GhostHerdr.app`
+> `xattr -dr com.apple.quarantine /Applications/bigtty.app`
 
 If herdr is older than 0.9.2 (here, or on a machine you connect to),
-GhostHerdr says so and shows the update command: `herdr update --handoff`
+bigtty says so and shows the update command: `herdr update --handoff`
 upgrades it and keeps your running panes alive.
 
 ## A two-minute tour
@@ -146,7 +147,7 @@ picks a theme (curated light/dark pairs or any of Ghostty's collection,
 bundled from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)),
 font, size, background translucency, contrast boost and copy on select.
 `theme = Name` and `theme = light:A,dark:B` in your config just work.
-`GHOSTHERDR_GHOSTTY_CONFIG=/path` keeps a separate config for GhostHerdr.
+`BIGTTY_GHOSTTY_CONFIG=/path` keeps a separate config for bigtty.
 
 Clicks, hover, scrolling and pastes reach apps like Claude Code, vim and htop
 the way they do in Ghostty. ⌘V with a screenshot on the clipboard pastes it as
@@ -154,7 +155,7 @@ a file (uploaded first for a pane on another machine), so Claude Code attaches i
 
 ### Attention and notifications
 
-herdr reports each agent's state; GhostHerdr turns it into a ring on the pane,
+herdr reports each agent's state; bigtty turns it into a ring on the pane,
 a highlighted space with the agent's own question, a Dock badge and a
 notification (for panes you aren't looking at). Once you've seen it, it goes
 quiet until the agent needs you again.
@@ -169,7 +170,7 @@ links open in the tab's browser pane or in your default browser (a setting).
 
 **Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
 15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
-unpacked extension goes in `~/Library/Application Support/GhostHerdr/Extensions`.
+unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.
 
 ### Files and changes
 
@@ -191,7 +192,7 @@ agent act in the agent's own session.
 ### Remote machines
 
 **File ▸ Connect Machine…** takes any SSH target (`user@host`, `host:port`, an
-`~/.ssh/config` alias). GhostHerdr checks it, can start herdr there, and keeps
+`~/.ssh/config` alias). bigtty checks it, can start herdr there, and keeps
 one SSH connection forwarding herdr's sockets, so everything works as it does
 locally: terminals, agents, attention, ⌘K, files panes, and browser panes that
 reach the machine's `localhost` (the address bar still says `localhost:3000`).
@@ -200,7 +201,7 @@ appear on their own.
 
 ### Agents driving the browser: `ghr`
 
-**GhostHerdr ▸ Install ghr and Agent Skill…** puts `ghr` on your `PATH` and
+**bigtty ▸ Install ghr and Agent Skill…** puts `ghr` on your `PATH` and
 teaches your agents to use it:
 
 ```sh
@@ -224,12 +225,12 @@ isolated JavaScript world.
 Needs Xcode 26 (Swift 6.2+).
 
 ```sh
-scripts/bundle.sh                 # dev build → build/GhostHerdr.app
-open build/GhostHerdr.app
-scripts/release.sh 0.2.0          # universal release → build/release/GhostHerdr-0.2.0.{dmg,zip}
+scripts/bundle.sh                 # dev build → build/bigtty.app
+open build/bigtty.app
+scripts/release.sh 0.2.0          # universal release → build/release/bigtty-0.2.0.{dmg,zip}
 ```
 
-`GHOSTHERDR_SESSION=<name>` connects to a named herdr session.
+`BIGTTY_SESSION=<name>` connects to a named herdr session.
 
 ## How it works
 
@@ -253,15 +254,15 @@ GHR_TEST_SESSION=ghrtest swift test         # + live socket/terminal tests
 ```
 
 Debug hooks on a running app: `kill -USR1 <pid>` writes window, pane and
-on-screen terminal text to `$TMPDIR/ghostherdr-debug.txt` (plus a window
-render); `kill -USR2 <pid>` pastes `$TMPDIR/ghostherdr-type.txt` into the
+on-screen terminal text to `$TMPDIR/bigtty-debug.txt` (plus a window
+render); `kill -USR2 <pid>` pastes `$TMPDIR/bigtty-type.txt` into the
 focused pane, or, starting with `!`, sends a menu action
-(`!@<space> newBrowserPane:`). Quit the app with `pkill -x GhostHerdr`
-(`pkill -f GhostHerdr.app` also kills the placeholders inside herdr panes).
+(`!@<space> newBrowserPane:`). Quit the app with `pkill -x bigtty`
+(`pkill -f bigtty.app` also kills the placeholders inside herdr panes).
 
 ## Credits
 
 Built on [herdr](https://herdr.dev), [Ghostty](https://ghostty.org) via
 [libghostty-spm](https://github.com/Lakr233/libghostty-spm), and themes from
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes).
-GhostHerdr is MIT licensed.
+bigtty is MIT licensed.

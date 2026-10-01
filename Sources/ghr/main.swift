@@ -2,13 +2,13 @@ import Foundation
 import HerdrKit
 
 let usageText = """
-ghr — drive GhostHerdr from a shell or an agent
+ghr — drive bigtty from a shell or an agent
 
 usage:
   ghr open <path>[:line]                show a file or folder in a files pane beside you
   ghr diff [path]                       show the repository's changes (git diff vs HEAD)
   ghr browser <command> [args] [--browser <id|pane>] [--json]
-  ghr pane-host <kind> <id> [title]     placeholder process for a GhostHerdr pane
+  ghr pane-host <kind> <id> [title]     placeholder process for a bigtty pane
   ghr version
 
 browser commands (targets are refs from `snapshot`, like @e3, or CSS selectors):
@@ -39,7 +39,7 @@ func fail(_ message: String, code: Int32 = 1) -> Never {
 
 // MARK: - pane-host
 
-/// Runs in a herdr pane that GhostHerdr draws as a browser or file view.
+/// Runs in a herdr pane that bigtty draws as a browser or file view.
 /// Other herdr clients (the TUI, remote viewers) see this text instead.
 func paneHost(kind: String, id: String, title: String?) -> Never {
     let icon = switch kind {
@@ -48,9 +48,9 @@ func paneHost(kind: String, id: String, title: String?) -> Never {
     case "diff": "±"
     default: "▢"
     }
-    var banner = "\u{1b}[2J\u{1b}[H\n  \(icon)  GhostHerdr \(kind) pane"
+    var banner = "\u{1b}[2J\u{1b}[H\n  \(icon)  bigtty \(kind) pane"
     if let title, !title.isEmpty { banner += "\n     \(title)" }
-    banner += "\n\n  \u{1b}[2mOpen this workspace in GhostHerdr to see it. (\(id))\u{1b}[0m\n"
+    banner += "\n\n  \u{1b}[2mOpen this workspace in bigtty to see it. (\(id))\u{1b}[0m\n"
     FileHandle.standardOutput.write(Data(banner.utf8))
 
     // Swallow keystrokes quietly: turn off echo and canonical mode.
@@ -161,7 +161,7 @@ func browser(_ args: [String]) {
     }
     var params: [String: JSONValue] = [:]
     if let pane = ProcessInfo.processInfo.environment["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
-    // Which herdr session the caller runs in, for GhostHerdr to pick its store.
+    // Which herdr session the caller runs in, for bigtty to pick its store.
     if let socket = ProcessInfo.processInfo.environment["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
     if let browser = parsed.flags["browser"] { params["browser"] = .string(browser) }
     if let timeout = parsed.flags["timeout"].flatMap(Double.init) { params["timeout"] = .number(timeout) }
@@ -251,7 +251,7 @@ func browser(_ args: [String]) {
             _ = try ControlClient().call("files.open", open)
         }
     } catch HerdrError.connect {
-        fail("GhostHerdr is not running (no socket at \(GhostHerdrControl.socketPath))", code: 3)
+        fail("bigtty is not running (no socket at \(BigttyControl.socketPath))", code: 3)
     } catch let HerdrError.server(code, message) {
         fail("\(message) [\(code)]")
     } catch {
@@ -277,13 +277,13 @@ func files(command: String, _ args: [String]) {
     var params: [String: JSONValue] = ["path": .string(absolute)]
     if let line { params["line"] = .number(Double(line)) }
     if let pane = ProcessInfo.processInfo.environment["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
-    // Which herdr session the caller runs in, for GhostHerdr to pick its store.
+    // Which herdr session the caller runs in, for bigtty to pick its store.
     if let socket = ProcessInfo.processInfo.environment["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
     do {
         let result = try ControlClient().call(command == "diff" ? "files.diff" : "files.open", params)
         if parsed.switches.contains("json") { print(result.jsonString) }
     } catch HerdrError.connect {
-        fail("GhostHerdr is not running (no socket at \(GhostHerdrControl.socketPath))", code: 3)
+        fail("bigtty is not running (no socket at \(BigttyControl.socketPath))", code: 3)
     } catch let HerdrError.server(code, message) {
         fail("\(message) [\(code)]")
     } catch {

@@ -3,14 +3,14 @@ import WebKit
 
 /// Web extensions (Safari/Chrome MV3, e.g. uBlock Origin Lite) for browser
 /// panes, through WebKit's extension support (macOS 15.4+). Extensions are
-/// unpacked folders in ~/Library/Application Support/GhostHerdr/Extensions;
+/// unpacked folders in ~/Library/Application Support/bigtty/Extensions;
 /// every browser pane is a tab of one extension "window".
 @MainActor
 enum WebExtensions {
     /// Where unpacked extensions live, one folder each.
     static var folder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("GhostHerdr/Extensions", isDirectory: true)
+            .appendingPathComponent("bigtty/Extensions", isDirectory: true)
     }
 
     /// The shared controller, for web view configurations; nil before macOS 15.4.
@@ -132,7 +132,7 @@ enum WebExtensions {
 
 extension Notification.Name {
     /// Extensions were loaded or unloaded: toolbars refresh their buttons.
-    static let ghostherdrExtensionsChanged = Notification.Name("GhostHerdrExtensionsChanged")
+    static let bigttyExtensionsChanged = Notification.Name("BigttyExtensionsChanged")
 }
 
 // MARK: - Host
@@ -167,6 +167,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
                     let ext = try await WKWebExtension(resourceBaseURL: dir)
                     let context = WKWebExtensionContext(for: ext)
                     // A stable id keeps the extension's storage across launches.
+                    // The app's old name: extensions keep their storage across the rename.
                     context.uniqueIdentifier = "dev.ghostherdr.ext." + dir.lastPathComponent
                     for permission in ext.requestedPermissions.union(ext.optionalPermissions) {
                         context.setPermissionStatus(.grantedExplicitly, for: permission)
@@ -181,16 +182,16 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
                     status.append("\(ext.displayName ?? dir.lastPathComponent) \(ext.version ?? "")")
                     for pane in BrowserRegistry.shared.all.map(\.view) { controller.didOpenTab(pane) }
                     if !ext.errors.isEmpty {
-                        NSLog("ghostherdr: extension \(dir.lastPathComponent) warnings: \(ext.errors)")
+                        NSLog("bigtty: extension \(dir.lastPathComponent) warnings: \(ext.errors)")
                     }
                 } catch {
                     status.append("\(dir.lastPathComponent): \(error.localizedDescription)")
-                    NSLog("ghostherdr: extension \(dir.lastPathComponent) failed: \(error)")
+                    NSLog("bigtty: extension \(dir.lastPathComponent) failed: \(error)")
                 }
-                NotificationCenter.default.post(name: .ghostherdrExtensionsChanged, object: nil)
+                NotificationCenter.default.post(name: .bigttyExtensionsChanged, object: nil)
             }
         }
-        NotificationCenter.default.post(name: .ghostherdrExtensionsChanged, object: nil)
+        NotificationCenter.default.post(name: .bigttyExtensionsChanged, object: nil)
     }
 
     // MARK: Tabs
@@ -287,7 +288,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
         // The dashboard (settings) and similar pages: in the default browser
         // can't load extension URLs, so a browser pane beside the active one.
         if let url = configuration.url {
-            NotificationCenter.default.post(name: .ghostherdrExtensionOpenURL, object: url.absoluteString)
+            NotificationCenter.default.post(name: .bigttyExtensionOpenURL, object: url.absoluteString)
         }
         completionHandler(nil, nil)
     }
@@ -297,7 +298,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
         completionHandler: @escaping ((any Error)?) -> Void
     ) {
         if let url = context.optionsPageURL {
-            NotificationCenter.default.post(name: .ghostherdrExtensionOpenURL, object: url.absoluteString)
+            NotificationCenter.default.post(name: .bigttyExtensionOpenURL, object: url.absoluteString)
         }
         completionHandler(nil)
     }
@@ -305,7 +306,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
 
 extension Notification.Name {
     /// An extension asked to open a page (its settings): object is the URL.
-    static let ghostherdrExtensionOpenURL = Notification.Name("GhostHerdrExtensionOpenURL")
+    static let bigttyExtensionOpenURL = Notification.Name("BigttyExtensionOpenURL")
 }
 
 /// Every browser pane, as one window of tabs.

@@ -29,13 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationDidFinishLaunching(_: Notification) {
         let env = ProcessInfo.processInfo.environment
-        // Debug: GHOSTHERDR_APPEARANCE=light|dark overrides the system setting.
-        if let look = env["GHOSTHERDR_APPEARANCE"] {
+        // Debug: BIGTTY_APPEARANCE=light|dark overrides the system setting.
+        if let look = env["BIGTTY_APPEARANCE"] {
             NSApp.appearance = NSAppearance(named: look == "light" ? .aqua : .darkAqua)
         }
         terminalController = Self.makeTerminalController()
         watchGhosttyConfig()
-        let endpoint = HerdrEndpoint(session: env["GHOSTHERDR_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
+        let endpoint = HerdrEndpoint(session: env["BIGTTY_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
         manager = MachineManager(localEndpoint: endpoint)
         // View ▸ Enter Full Screen is ours; don't let AppKit add a second one.
         UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         startControlServer()
         WebExtensions.start()
         // An extension's own pages (uBlock's dashboard) open in a browser pane.
-        NotificationCenter.default.addObserver(forName: .ghostherdrExtensionOpenURL, object: nil, queue: .main) { [weak self] note in
+        NotificationCenter.default.addObserver(forName: .bigttyExtensionOpenURL, object: nil, queue: .main) { [weak self] note in
             let url = note.object as? String
             MainActor.assumeIsolated {
                 if let url { self?.keyWindow?.openBrowserPane(url: url) }
@@ -54,11 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         DebugDump.install { [weak self] in self?.debugDescription ?? "" }
         DebugDump.installTyping { NSApp.keyWindow?.firstResponder as? HerdrTerminalView
-            ?? (ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_TYPE_BACK"] == nil ? Array(NSApp.orderedWindows) : NSApp.orderedWindows.reversed()).lazy.compactMap { $0.firstResponder as? HerdrTerminalView }.first }
+            ?? (ProcessInfo.processInfo.environment["BIGTTY_DEBUG_TYPE_BACK"] == nil ? Array(NSApp.orderedWindows) : NSApp.orderedWindows.reversed()).lazy.compactMap { $0.firstResponder as? HerdrTerminalView }.first }
         // Until herdr answers, one unpinned window shows the connection state;
         // in space mode it is then adopted by the first space.
         openWindow(pinnedTo: nil)
-        if !windowPerSpace, let extra = env["GHOSTHERDR_DEBUG_WINDOWS"].flatMap(Int.init), extra > 1 {
+        if !windowPerSpace, let extra = env["BIGTTY_DEBUG_WINDOWS"].flatMap(Int.init), extra > 1 {
             for _ in 1..<extra { openWindow(pinnedTo: nil) }
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func startControlServer() {
         let server = ControlServer { [weak self] method, params in
             guard let api = await self?.controlAPI(for: params) else {
-                throw ControlServer.Failure(code: "unavailable", message: "GhostHerdr is quitting")
+                throw ControlServer.Failure(code: "unavailable", message: "bigtty is quitting")
             }
             return try await api.handle(method, params)
         }
@@ -145,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             try server.start()
             controlServer = server
         } catch {
-            NSLog("ghostherdr: control socket unavailable: \(error)")
+            NSLog("bigtty: control socket unavailable: \(error)")
         }
     }
 
@@ -210,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if Settings.remembersLayout, let window = controller.window, let space,
            let label = manager.machine(space.machine)?.store?.workspace(space.workspace)?.label
         {
-            let name = "GhostHerdr.space.\(space.machine).\(label)"
+            let name = "bigtty.space.\(space.machine).\(label)"
             if window.frameAutosaveName == MainWindowController.frameName { window.setFrameAutosaveName("") }
             window.setFrameUsingName(name)
             window.setFrameAutosaveName(name)
@@ -366,7 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch machine.status {
         case let .signIn(message), let .failed(message):
             alert.messageText = machine.status == .signIn(message) ? "Sign in to \(machine.name)" : "Can’t reach \(machine.name)"
-            alert.informativeText = "SSH to \(machine.target ?? machine.name) failed: \(message)\n\nGhostHerdr connects with your SSH keys and agent (no passwords). Its spaces keep running on the machine."
+            alert.informativeText = "SSH to \(machine.target ?? machine.name) failed: \(message)\n\nbigtty connects with your SSH keys and agent (no passwords). Its spaces keep running on the machine."
             actions = [("Try Again", { machine.connect() }), ("Open in Terminal", { [weak self] in self?.openSSHInTerminal(machine) })]
         case .notRunning:
             alert.messageText = machine.isLocal ? "herdr isn’t running" : "herdr isn’t running on \(machine.name)"
@@ -380,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             actions = [("Open in Terminal", { [weak self] in self?.openSSHInTerminal(machine) })]
         case let .approval(url):
             alert.messageText = "Approve the login to \(machine.name)"
-            alert.informativeText = "\(machine.target ?? machine.name) uses Tailscale SSH, which asks you to confirm this login in the browser. GhostHerdr connects on its own once you do."
+            alert.informativeText = "\(machine.target ?? machine.name) uses Tailscale SSH, which asks you to confirm this login in the browser. bigtty connects on its own once you do."
             actions = [("Open Approval Page", { NSWorkspace.shared.open(url) })]
         case .disabled:
             alert.messageText = "\(machine.name) is off"
@@ -535,7 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reconcileSpaceWindows()
     }
 
-    /// The About panel: what GhostHerdr is, the herdr it talks to, where to
+    /// The About panel: what bigtty is, the herdr it talks to, where to
     /// go next, and whose work it stands on.
     @objc func showAbout(_: Any?) {
         let body = NSFont.systemFont(ofSize: 11)
@@ -557,9 +557,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let others = manager.all.count - 1
         add("\(herdr) · session \(session)" + (others > 0 ? " · \(others) more connected" : "") + "\n", font: small, color: .tertiaryLabelColor)
         add((endpoint.herdrBinary as NSString).abbreviatingWithTildeInPath + "\n\n", font: small, color: .tertiaryLabelColor)
-        add("GitHub", link: "https://github.com/v1k45/ghostherdr")
+        add("GitHub", link: "https://github.com/v1k45/bigtty")
         add("  ·  ")
-        add("Report an Issue", link: "https://github.com/v1k45/ghostherdr/issues/new")
+        add("Report an Issue", link: "https://github.com/v1k45/bigtty/issues/new")
         add("  ·  ")
         add("herdr", link: "https://herdr.dev")
         add("\n\nBuilt on ", font: small, color: .secondaryLabelColor)
@@ -573,11 +573,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         add(".", font: small, color: .secondaryLabelColor)
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "GhostHerdr",
+            .applicationName: "bigtty",
             .applicationVersion: version,
             .version: "",
             .credits: text,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "MIT licensed · © 2026 the GhostHerdr authors",
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "MIT licensed · © 2026 the bigtty authors",
         ])
         NSApp.activate()
     }
@@ -641,7 +641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 spacesToActivate.insert(SpaceRef(machine: machine.id, workspace: pane.workspaceID))
                 store.scheduleRefresh()
             } catch {
-                NSLog("ghostherdr: could not create space: \(error)")
+                NSLog("bigtty: could not create space: \(error)")
             }
         }
     }

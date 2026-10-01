@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "ghostherdr",
+    name: "bigtty",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "GhostHerdr", targets: ["GhostHerdr"]),
+        .executable(name: "bigtty", targets: ["bigtty"]),
         .executable(name: "ghr", targets: ["ghr"]),
         .library(name: "HerdrKit", targets: ["HerdrKit"]),
     ],
@@ -15,7 +15,7 @@ let package = Package(
     targets: [
         .target(name: "HerdrKit"),
         .executableTarget(
-            name: "GhostHerdr",
+            name: "bigtty",
             dependencies: [
                 "HerdrKit",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),

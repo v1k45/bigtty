@@ -1,14 +1,14 @@
 import Foundation
 
-/// GhostHerdr's own control socket, which `ghr` (and agents) use to drive
+/// bigtty's own control socket, which `ghr` (and agents) use to drive
 /// the app: browser panes, file views, notifications. Same framing as
 /// herdr's API: one NDJSON request, one NDJSON response.
-public enum GhostHerdrControl {
-    /// `GHOSTHERDR_SOCKET`, else `~/Library/Application Support/GhostHerdr/control.sock`.
+public enum BigttyControl {
+    /// `BIGTTY_SOCKET`, else `~/Library/Application Support/bigtty/control.sock`.
     public static var socketPath: String {
-        if let path = ProcessInfo.processInfo.environment["GHOSTHERDR_SOCKET"], !path.isEmpty { return path }
+        if let path = ProcessInfo.processInfo.environment["BIGTTY_SOCKET"], !path.isEmpty { return path }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("GhostHerdr/control.sock").path
+        return support.appendingPathComponent("bigtty/control.sock").path
     }
 }
 
@@ -16,7 +16,7 @@ public struct ControlClient: Sendable {
     public let socketPath: String
     public var timeout: TimeInterval
 
-    public init(socketPath: String = GhostHerdrControl.socketPath, timeout: TimeInterval = 60) {
+    public init(socketPath: String = BigttyControl.socketPath, timeout: TimeInterval = 60) {
         self.socketPath = socketPath
         self.timeout = timeout
     }
@@ -27,7 +27,7 @@ public struct ControlClient: Sendable {
         defer { socket.close() }
         let request: JSONValue = ["id": "1", "method": .string(method), "params": .object(params)]
         try socket.writeLine(JSONEncoder().encode(request))
-        guard let line = try socket.readLine() else { throw HerdrError.io("GhostHerdr closed the connection") }
+        guard let line = try socket.readLine() else { throw HerdrError.io("bigtty closed the connection") }
         let reply = try JSONDecoder().decode(JSONValue.self, from: line)
         if let error = reply["error"] {
             throw HerdrError.server(

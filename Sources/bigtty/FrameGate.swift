@@ -9,7 +9,7 @@ import Foundation
 /// quiet for `quiet` seconds, or after `limit` at the latest.
 final class FrameGate: @unchecked Sendable {
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "dev.ghostherdr.frame-gate")
+    private let queue = DispatchQueue(label: "dev.bigtty.frame-gate")
     private let sink: @Sendable (Data) -> Void
     private var holding = false
     private var buffer = Data()

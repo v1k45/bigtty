@@ -191,7 +191,7 @@ public final class SessionStore {
             do {
                 try await action(client)
             } catch {
-                NSLog("ghostherdr: herdr call failed: \(error)")
+                NSLog("bigtty: herdr call failed: \(error)")
             }
             scheduleRefresh()
         }

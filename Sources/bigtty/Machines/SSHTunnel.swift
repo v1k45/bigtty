@@ -368,7 +368,7 @@ private final class ErrorBox: @unchecked Sendable {
 ///   # Tailscale SSH requires an additional check.
 ///   # To authenticate, visit: https://login.tailscale.com/a/…
 /// and holds the connection until it's approved in a browser. The link
-/// is posted (`.ghostherdrLoginApproval`, object: [target, URL]) so the
+/// is posted (`.bigttyLoginApproval`, object: [target, URL]) so the
 /// machine can show it; the connection carries on by itself afterwards.
 enum LoginApproval {
     nonisolated(unsafe) private static var seen: Set<String> = []
@@ -386,11 +386,11 @@ enum LoginApproval {
         let fresh = lock.withLock { seen.insert(url.absoluteString).inserted }
         guard fresh else { return }
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .ghostherdrLoginApproval, object: [target, url.absoluteString])
+            NotificationCenter.default.post(name: .bigttyLoginApproval, object: [target, url.absoluteString])
         }
     }
 }
 
 extension Notification.Name {
-    static let ghostherdrLoginApproval = Notification.Name("GhostHerdrLoginApproval")
+    static let bigttyLoginApproval = Notification.Name("BigttyLoginApproval")
 }

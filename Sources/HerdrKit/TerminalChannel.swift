@@ -58,7 +58,7 @@ public final class TerminalChannel: @unchecked Sendable {
         let output = Pipe()
         process.standardInput = input
         process.standardOutput = output
-        if let log = ProcessInfo.processInfo.environment["GHOSTHERDR_CHANNEL_LOG"],
+        if let log = ProcessInfo.processInfo.environment["BIGTTY_CHANNEL_LOG"],
            FileManager.default.createFile(atPath: log, contents: nil),
            let handle = FileHandle(forWritingAtPath: log)
         {

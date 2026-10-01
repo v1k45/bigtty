@@ -117,7 +117,7 @@ final class SidebarView: NSView {
         filesButton.action = #selector(filesClicked)
         addSubview(hideButton)
         addSubview(filesButton)
-        list.registerForDraggedTypes([.ghostherdrSpace])
+        list.registerForDraggedTypes([.bigttySpace])
         list.onDrag = { [weak self] key, point, done in self?.dragSpace(key, at: point, drop: done) ?? false }
         list.onDragEnd = { [weak self] in self?.dropLine.isHidden = true }
         dropLine.wantsLayer = true
@@ -296,7 +296,7 @@ final class SidebarView: NSView {
 /// App icon and name, quiet, in the sidebar's title strip.
 private final class BrandMark: NSView {
     private let icon = NSImageView()
-    private let name = NSTextField(labelWithString: "GhostHerdr")
+    private let name = NSTextField(labelWithString: "bigtty")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -343,12 +343,12 @@ final class FlippedView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let key = sender.draggingPasteboard.string(forType: .ghostherdrSpace) else { return [] }
+        guard let key = sender.draggingPasteboard.string(forType: .bigttySpace) else { return [] }
         return onDrag?(key, convert(sender.draggingLocation, from: nil), false) == true ? .move : []
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let key = sender.draggingPasteboard.string(forType: .ghostherdrSpace) else { return false }
+        guard let key = sender.draggingPasteboard.string(forType: .bigttySpace) else { return false }
         return onDrag?(key, convert(sender.draggingLocation, from: nil), true) ?? false
     }
 
@@ -504,7 +504,7 @@ private final class MachineHeader: NSView, SidebarRow {
 /// the selected space also lists its tabs.
 extension NSPasteboard.PasteboardType {
     /// A space card being dragged to a new place: its "machine|workspace" key.
-    static let ghostherdrSpace = NSPasteboard.PasteboardType("dev.ghostherdr.space")
+    static let bigttySpace = NSPasteboard.PasteboardType("dev.bigtty.space")
 }
 
 private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
@@ -708,7 +708,7 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
         guard hypot(now.x - start.x, now.y - start.y) > 4 else { return }
         pressEvent = nil
         let item = NSPasteboardItem()
-        item.setString(space.id, forType: .ghostherdrSpace)
+        item.setString(space.id, forType: .bigttySpace)
         let dragging = NSDraggingItem(pasteboardWriter: item)
         let image = NSImage(size: bounds.size)
         if let rep = bitmapImageRepForCachingDisplay(in: bounds) {

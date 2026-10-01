@@ -1,31 +1,30 @@
-// Draws the GhostHerdr app icon and writes an .icns.
+// Draws the bigtty app icon and writes an .icns.
 //   swift scripts/make-icon.swift <out.icns>
-// A ghost with a terminal prompt for a face, two smaller ghosts behind it
-// (the herd), on a dark indigo squircle.
+// One big terminal window in front of two smaller ones (the herd), on a
+// dark indigo squircle.
 import AppKit
 
-func ghost(in rect: CGRect) -> CGPath {
-    let path = CGMutablePath()
-    let w = rect.width, h = rect.height, x = rect.minX, y = rect.minY
-    let r = w / 2
-    // Rounded head, straight sides, three scallops along the bottom.
-    let base = y + h * 0.13
-    path.move(to: CGPoint(x: x, y: base))
-    path.addLine(to: CGPoint(x: x, y: y + h - r))
-    path.addArc(center: CGPoint(x: x + r, y: y + h - r), radius: r, startAngle: .pi, endAngle: 0, clockwise: true)
-    path.addLine(to: CGPoint(x: x + w, y: base))
-    // Rounded scallops hanging down, meeting in small upward notches.
-    let bumps = 3
-    let step = w / CGFloat(bumps)
-    for i in 0..<bumps {
-        let right = x + w - CGFloat(i) * step
-        let left = right - step
-        path.addCurve(to: CGPoint(x: left, y: base),
-                      control1: CGPoint(x: right - step * 0.05, y: y - h * 0.02),
-                      control2: CGPoint(x: left + step * 0.05, y: y - h * 0.02))
+func hex(_ h: UInt32) -> CGColor {
+    NSColor(srgbRed: CGFloat((h >> 16) & 255) / 255, green: CGFloat((h >> 8) & 255) / 255, blue: CGFloat(h & 255) / 255, alpha: 1).cgColor
+}
+
+/// A terminal window: rounded body, title bar, traffic lights.
+func window(_ ctx: CGContext, _ r: CGRect, fill: CGColor, bar: CGColor) {
+    let path = CGPath(roundedRect: r, cornerWidth: r.width * 0.09, cornerHeight: r.width * 0.09, transform: nil)
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 40, color: NSColor.black.withAlphaComponent(0.45).cgColor)
+    ctx.addPath(path); ctx.setFillColor(fill); ctx.fillPath()
+    ctx.restoreGState()
+    ctx.saveGState()
+    ctx.addPath(path); ctx.clip()
+    let barHeight = r.height * 0.16
+    ctx.setFillColor(bar); ctx.fill(CGRect(x: r.minX, y: r.maxY - barHeight, width: r.width, height: barHeight))
+    let d = barHeight * 0.36
+    for (i, color) in [hex(0xFF5F57), hex(0xFEBC2E), hex(0x28C840)].enumerated() {
+        ctx.setFillColor(color)
+        ctx.fillEllipse(in: CGRect(x: r.minX + barHeight * 0.5 + CGFloat(i) * d * 1.6, y: r.maxY - barHeight / 2 - d / 2, width: d, height: d))
     }
-    path.closeSubpath()
-    return path
+    ctx.restoreGState()
 }
 
 func draw(size: CGFloat) -> NSBitmapImageRep {
@@ -42,73 +41,37 @@ func draw(size: CGFloat) -> NSBitmapImageRep {
     let shape = CGPath(roundedRect: body, cornerWidth: 185, cornerHeight: 185, transform: nil)
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: NSColor.black.withAlphaComponent(0.45).cgColor)
-    ctx.addPath(shape)
-    ctx.setFillColor(NSColor(srgbRed: 0.08, green: 0.08, blue: 0.14, alpha: 1).cgColor)
-    ctx.fillPath()
+    ctx.addPath(shape); ctx.setFillColor(hex(0x0E1020)); ctx.fillPath()
     ctx.restoreGState()
-
-    ctx.saveGState()
     ctx.addPath(shape)
     ctx.clip()
-    let space = CGColorSpaceCreateDeviceRGB()
-    let background = CGGradient(colorsSpace: space, colors: [
-        NSColor(srgbRed: 0.20, green: 0.19, blue: 0.40, alpha: 1).cgColor,
-        NSColor(srgbRed: 0.07, green: 0.07, blue: 0.14, alpha: 1).cgColor,
-    ] as CFArray, locations: [0, 1])!
+    let background = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [hex(0x2B2F4A), hex(0x0E1020)] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(background, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
-    // A faint glow behind the lead ghost.
-    let glow = CGGradient(colorsSpace: space, colors: [
-        NSColor(srgbRed: 0.48, green: 0.55, blue: 1.0, alpha: 0.35).cgColor,
-        NSColor(srgbRed: 0.48, green: 0.55, blue: 1.0, alpha: 0).cgColor,
-    ] as CFArray, locations: [0, 1])!
-    ctx.drawRadialGradient(glow, startCenter: CGPoint(x: 540, y: 500), startRadius: 0, endCenter: CGPoint(x: 540, y: 500), endRadius: 420, options: [])
 
-    // The herd: two smaller ghosts behind.
-    for (rect, alpha) in [(CGRect(x: 210, y: 300, width: 220, height: 280), 0.28), (CGRect(x: 640, y: 330, width: 190, height: 240), 0.22)] {
-        ctx.addPath(ghost(in: rect))
-        ctx.setFillColor(NSColor(srgbRed: 0.72, green: 0.76, blue: 1.0, alpha: alpha).cgColor)
-        ctx.fillPath()
-    }
+    // The herd behind, the big one in front.
+    window(ctx, CGRect(x: 560, y: 600, width: 290, height: 220), fill: hex(0x3A3F66), bar: hex(0x4A5080))
+    window(ctx, CGRect(x: 175, y: 640, width: 290, height: 200), fill: hex(0x3A3F66), bar: hex(0x4A5080))
+    window(ctx, CGRect(x: 205, y: 190, width: 614, height: 520), fill: hex(0x11131F), bar: hex(0x262A40))
 
-    // The lead ghost.
-    let lead = CGRect(x: 330, y: 250, width: 360, height: 470)
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 30, color: NSColor.black.withAlphaComponent(0.4).cgColor)
-    ctx.addPath(ghost(in: lead))
-    ctx.setFillColor(NSColor.white.cgColor)
-    ctx.fillPath()
-    ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addPath(ghost(in: lead))
-    ctx.clip()
-    let sheen = CGGradient(colorsSpace: space, colors: [
-        NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1).cgColor,
-        NSColor(srgbRed: 0.84, green: 0.87, blue: 1.0, alpha: 1).cgColor,
-    ] as CFArray, locations: [0, 1])!
-    ctx.drawLinearGradient(sheen, start: CGPoint(x: 512, y: 720), end: CGPoint(x: 512, y: 250), options: [])
-    ctx.restoreGState()
-
-    // Its face: a prompt, "›_".
-    let accent = NSColor(srgbRed: 0.33, green: 0.40, blue: 0.95, alpha: 1).cgColor
-    ctx.setStrokeColor(accent)
-    ctx.setLineWidth(34)
+    // A prompt, "›_".
+    ctx.setStrokeColor(hex(0x5CF29A))
+    ctx.setLineWidth(50)
     ctx.setLineCap(.round)
     ctx.setLineJoin(.round)
-    ctx.move(to: CGPoint(x: 420, y: 555))
-    ctx.addLine(to: CGPoint(x: 485, y: 505))
-    ctx.addLine(to: CGPoint(x: 420, y: 455))
+    ctx.move(to: CGPoint(x: 300, y: 510))
+    ctx.addLine(to: CGPoint(x: 408, y: 429))
+    ctx.addLine(to: CGPoint(x: 300, y: 348))
     ctx.strokePath()
-    ctx.move(to: CGPoint(x: 520, y: 450))
-    ctx.addLine(to: CGPoint(x: 600, y: 450))
+    ctx.move(to: CGPoint(x: 457.5, y: 348))
+    ctx.addLine(to: CGPoint(x: 597, y: 348))
     ctx.strokePath()
-    ctx.restoreGState()
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
 }
 
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.icns"
-let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("GhostHerdr.iconset")
+let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bigtty.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 for base in [16, 32, 128, 256, 512] {

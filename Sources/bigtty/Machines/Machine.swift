@@ -1,7 +1,7 @@
 import AppKit
 import HerdrKit
 
-/// One herdr server GhostHerdr shows: this Mac's, or one reached over SSH.
+/// One herdr server bigtty shows: this Mac's, or one reached over SSH.
 /// Owns that server's session store, attention tracking and sidebar info.
 @MainActor
 final class Machine {
@@ -65,7 +65,7 @@ final class Machine {
     private var attempts = 0
 
     /// This Mac's server for one herdr session: the default one (or the
-    /// one GHOSTHERDR_SESSION names) is "local", other named sessions
+    /// one BIGTTY_SESSION names) is "local", other named sessions
     /// "session:<name>".
     init(local endpoint: HerdrEndpoint, id: String = "local") {
         self.id = id
@@ -94,10 +94,10 @@ final class Machine {
         // No spaces allowed: ssh splits ControlPath on them. Short, too, for
         // the 104-byte Unix socket path limit.
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("dev.ghostherdr/m/\(id.prefix(8))").path
+            .appendingPathComponent("dev.bigtty/m/\(id.prefix(8))").path
         tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir))
         // A login waiting for approval in the browser: say so, with the link.
-        approvalObserver = NotificationCenter.default.addObserver(forName: .ghostherdrLoginApproval, object: nil, queue: .main) { [weak self] note in
+        approvalObserver = NotificationCenter.default.addObserver(forName: .bigttyLoginApproval, object: nil, queue: .main) { [weak self] note in
             guard let parts = note.object as? [String], parts.count == 2, let url = URL(string: parts[1]) else { return }
             MainActor.assumeIsolated {
                 guard let self, parts[0] == target, self.status != .connected else { return }

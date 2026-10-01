@@ -89,7 +89,7 @@ final class AttentionCenter: NSObject {
         Self.all.append(WeakAttention(self))
         center.delegate = NotificationRouter.shared
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error { NSLog("ghostherdr: notifications unavailable: \(error)") }
+            if let error { NSLog("bigtty: notifications unavailable: \(error)") }
             Task { @MainActor [weak self] in self?.notificationsAvailable = granted }
         }
     }

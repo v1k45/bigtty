@@ -1,6 +1,6 @@
 # Upstream notes
 
-Changes GhostHerdr would like from herdr. Not filed yet: we're finishing the
+Changes bigtty would like from herdr. Not filed yet: we're finishing the
 app first.
 
 ## Inline images in terminal panes (kitty graphics)
@@ -8,7 +8,7 @@ app first.
 herdr already sends kitty-graphics images to terminal clients as raw bytes
 (`ServerMessage::Graphics { bytes }`, "to write directly to the host
 terminal"), and Ghostty draws them natively. Two things stop them reaching
-GhostHerdr:
+bigtty:
 
 1. `herdr terminal session control` drops them:
    `src/client/terminal_sessions.rs`, `write_terminal_session_output`:
@@ -17,10 +17,10 @@ GhostHerdr:
    with `terminal.frame` records.
 2. The session client says hello with a 0×0 cell size, so herdr can't place
    images. Proposed: take cell pixels from `terminal.resize`
-   (`cell_width_px` / `cell_height_px`, which GhostHerdr already sends) or a
+   (`cell_width_px` / `cell_height_px`, which bigtty already sends) or a
    `--cell-size WxH` flag.
 
-GhostHerdr side, once available: feed `terminal.graphics` bytes into the
+bigtty side, once available: feed `terminal.graphics` bytes into the
 surface (`InMemoryTerminalSession.receive`) in stream order.
 
 ## Other gaps noticed

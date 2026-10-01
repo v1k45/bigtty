@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Builds GhostHerdr.app from the SwiftPM products.
-#   scripts/bundle.sh [debug|release]   → build/GhostHerdr.app
+# Builds bigtty.app from the SwiftPM products.
+#   scripts/bundle.sh [debug|release]   → build/bigtty.app
 set -euo pipefail
 
 config="${1:-debug}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-swift build -c "$config" --product GhostHerdr
+swift build -c "$config" --product bigtty
 swift build -c "$config" --product ghr
 bin="$(swift build -c "$config" --show-bin-path)"
 
-app="build/GhostHerdr.app"
+app="build/bigtty.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$bin/GhostHerdr" "$app/Contents/MacOS/GhostHerdr"
+cp "$bin/bigtty" "$app/Contents/MacOS/bigtty"
 cp "$bin/ghr" "$app/Contents/MacOS/ghr"
 # SwiftPM resource bundles: its generated Bundle.module looks at the app
 # root, which code signing forbids, then at the absolute .build path. Dev
@@ -30,9 +30,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>dev.ghostherdr.GhostHerdr</string>
-    <key>CFBundleName</key><string>GhostHerdr</string>
-    <key>CFBundleExecutable</key><string>GhostHerdr</string>
+    <key>CFBundleIdentifier</key><string>dev.bigtty.bigtty</string>
+    <key>CFBundleName</key><string>bigtty</string>
+    <key>CFBundleExecutable</key><string>bigtty</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>dev</string>
@@ -45,7 +45,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 # Ad-hoc signing gives the app a stable identity, which notifications need.
-codesign --force --sign - --identifier dev.ghostherdr.GhostHerdr "$app/Contents/MacOS/ghr"
-codesign --force --sign - --identifier dev.ghostherdr.GhostHerdr "$app"
+codesign --force --sign - --identifier dev.bigtty.bigtty "$app/Contents/MacOS/ghr"
+codesign --force --sign - --identifier dev.bigtty.bigtty "$app"
 
 echo "$app"

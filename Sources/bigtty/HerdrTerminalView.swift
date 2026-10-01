@@ -558,13 +558,13 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         guard let window, let text = session.readViewportText(), let grid, grid.columns > 0 else { return }
         let lines = text.components(separatedBy: "\n")
         guard let row = lines.firstIndex(where: { $0.contains(word) }),
-              let range = lines[row].range(of: word) else { return NSLog("ghostherdr: debugCommandClick: \(word) not on screen") }
+              let range = lines[row].range(of: word) else { return NSLog("bigtty: debugCommandClick: \(word) not on screen") }
         let column = lines[row].distance(from: lines[row].startIndex, to: range.lowerBound) + word.count / 2
         let scale = window.backingScaleFactor
         let cellWidth = CGFloat(grid.cellWidthPixels) / scale, cellHeight = CGFloat(grid.cellHeightPixels) / scale
         let local = NSPoint(x: 2 + (CGFloat(column) + 0.5) * cellWidth, y: bounds.height - 2 - (CGFloat(row) + 0.5) * cellHeight)
         let point = convert(local, to: nil)
-        NSLog("ghostherdr: debugCommandClick \(word) at column \(column) row \(row)")
+        NSLog("bigtty: debugCommandClick \(word) at column \(column) row \(row)")
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }

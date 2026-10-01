@@ -3,7 +3,7 @@ import HerdrKit
 
 extension NSPasteboard.PasteboardType {
     /// A pane being dragged: "machineID|paneID".
-    static let ghostherdrPane = NSPasteboard.PasteboardType("dev.ghostherdr.pane")
+    static let bigttyPane = NSPasteboard.PasteboardType("dev.bigtty.pane")
 }
 
 /// What a pane drag carries.
@@ -19,7 +19,7 @@ struct PaneDragPayload: Equatable {
     }
 
     init?(_ pasteboard: NSPasteboard) {
-        guard let text = pasteboard.string(forType: .ghostherdrPane) else { return nil }
+        guard let text = pasteboard.string(forType: .bigttyPane) else { return nil }
         let parts = text.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
         self.init(machineID: parts[0], paneID: parts[1])
@@ -121,7 +121,7 @@ final class PaneGrip: NSView, NSDraggingSource {
         guard let down = downEvent, let payload = payload?() else { return }
         downEvent = nil
         let item = NSPasteboardItem()
-        item.setString(payload.string, forType: .ghostherdrPane)
+        item.setString(payload.string, forType: .bigttyPane)
         let dragging = NSDraggingItem(pasteboardWriter: item)
         let image = Self.dragImage(title: title?() ?? "Pane")
         let origin = convert(down.locationInWindow, from: nil)
@@ -129,14 +129,14 @@ final class PaneGrip: NSView, NSDraggingSource {
                                          width: image.size.width, height: image.size.height), contents: image)
         beginDraggingSession(with: [dragging], event: down, source: self)
         onDragChange?(true)
-        NotificationCenter.default.post(name: .ghostherdrPaneDrag, object: true)
+        NotificationCenter.default.post(name: .bigttyPaneDrag, object: true)
     }
 
     func draggingSession(_: NSDraggingSession, sourceOperationMaskFor _: NSDraggingContext) -> NSDragOperation { .move }
 
     func draggingSession(_: NSDraggingSession, endedAt _: NSPoint, operation _: NSDragOperation) {
         onDragChange?(false)
-        NotificationCenter.default.post(name: .ghostherdrPaneDrag, object: false)
+        NotificationCenter.default.post(name: .bigttyPaneDrag, object: false)
     }
 
     /// A small card with the pane's name, what the pointer carries.
@@ -159,7 +159,7 @@ final class PaneGrip: NSView, NSDraggingSource {
 
 extension Notification.Name {
     /// A pane drag began (object true) or ended (false).
-    static let ghostherdrPaneDrag = Notification.Name("GhostHerdrPaneDrag")
+    static let bigttyPaneDrag = Notification.Name("BigttyPaneDrag")
 }
 
 /// Covers the whole pane area (gaps and margins too) while a pane is
@@ -173,9 +173,9 @@ final class DropSurface: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        registerForDraggedTypes([.ghostherdrPane])
+        registerForDraggedTypes([.bigttyPane])
         isHidden = true
-        observer = NotificationCenter.default.addObserver(forName: .ghostherdrPaneDrag, object: nil, queue: .main) { [weak self] note in
+        observer = NotificationCenter.default.addObserver(forName: .bigttyPaneDrag, object: nil, queue: .main) { [weak self] note in
             let active = note.object as? Bool ?? false
             MainActor.assumeIsolated {
                 self?.isHidden = !active

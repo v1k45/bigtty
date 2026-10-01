@@ -3,23 +3,23 @@ import HerdrKit
 import WebKit
 
 /// `kill -USR1 <pid>` writes the app's state to
-/// `$TMPDIR/ghostherdr-debug.txt` (or `GHOSTHERDR_DEBUG_DUMP`), including
+/// `$TMPDIR/bigtty-debug.txt` (or `BIGTTY_DEBUG_DUMP`), including
 /// the text each terminal surface is showing.
 @MainActor
 enum DebugDump {
     private static var source: DispatchSourceSignal?
     private static var typeSource: DispatchSourceSignal?
 
-    /// `kill -USR2 <pid>` pastes `$TMPDIR/ghostherdr-type.txt` (or
-    /// `GHOSTHERDR_DEBUG_TYPE`) into the focused terminal, exercising the
+    /// `kill -USR2 <pid>` pastes `$TMPDIR/bigtty-type.txt` (or
+    /// `BIGTTY_DEBUG_TYPE`) into the focused terminal, exercising the
     /// same input path as the keyboard.
     static func installTyping(target: @escaping @MainActor () -> HerdrTerminalView?) {
         signal(SIGUSR2, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                let path = ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_TYPE"]
-                    ?? NSTemporaryDirectory() + "ghostherdr-type.txt"
+                let path = ProcessInfo.processInfo.environment["BIGTTY_DEBUG_TYPE"]
+                    ?? NSTemporaryDirectory() + "bigtty-type.txt"
                 guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
                 // `!selector [argument]` sends a menu action to the key window
                 // instead, e.g. `!newBrowserPane:` or `!openURL: https://…`.
@@ -38,7 +38,7 @@ enum DebugDump {
                     let selector = Selector(parts[0])
                     let controller = window?.windowController
                     let target: AnyObject? = controller?.responds(to: selector) == true ? controller : NSApp.delegate
-                    guard target?.responds(to: selector) == true else { return NSLog("ghostherdr: no debug action \(parts[0])") }
+                    guard target?.responds(to: selector) == true else { return NSLog("bigtty: no debug action \(parts[0])") }
                     NSApp.sendAction(selector, to: target, from: argument)
                     return
                 }
@@ -215,8 +215,8 @@ enum DebugDump {
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                let path = ProcessInfo.processInfo.environment["GHOSTHERDR_DEBUG_DUMP"]
-                    ?? NSTemporaryDirectory() + "ghostherdr-debug.txt"
+                let path = ProcessInfo.processInfo.environment["BIGTTY_DEBUG_DUMP"]
+                    ?? NSTemporaryDirectory() + "bigtty-debug.txt"
                 try? describe().write(toFile: path, atomically: true, encoding: .utf8)
                 let base = (path as NSString).deletingPathExtension
                 writeWindowSnapshot(of: NSApp.keyWindow ?? NSApp.orderedWindows.first, to: base + ".png")

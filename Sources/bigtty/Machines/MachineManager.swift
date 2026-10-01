@@ -22,7 +22,7 @@ struct SpaceRef: Hashable {
     }
 }
 
-/// The machines GhostHerdr shows: this Mac first, then remotes saved here
+/// The machines bigtty shows: this Mac first, then remotes saved here
 /// or in herdr's own machine list (`herdr machine add`).
 @MainActor
 final class MachineManager {
@@ -41,7 +41,7 @@ final class MachineManager {
         var title: String { name ?? "default" }
     }
 
-    /// This Mac's default session (or the one GHOSTHERDR_SESSION names).
+    /// This Mac's default session (or the one BIGTTY_SESSION names).
     let local: Machine
     /// This Mac's other herdr sessions that are running (or were opened):
     /// connected in the background so their agents still reach you.
@@ -69,11 +69,11 @@ final class MachineManager {
     }
     private var activeLocalID = "local"
 
-    /// GHOSTHERDR_SESSION pins the app to one session (test copies).
-    private static let sessionsPinned = !(ProcessInfo.processInfo.environment["GHOSTHERDR_SESSION"] ?? "").isEmpty
+    /// BIGTTY_SESSION pins the app to one session (test copies).
+    private static let sessionsPinned = !(ProcessInfo.processInfo.environment["BIGTTY_SESSION"] ?? "").isEmpty
     /// Test copies may still find other named sessions (never the default
-    /// one, which is the user's) with GHOSTHERDR_TEST_SESSIONS=1.
-    private static let discovers = !sessionsPinned || ProcessInfo.processInfo.environment["GHOSTHERDR_TEST_SESSIONS"] == "1"
+    /// one, which is the user's) with BIGTTY_TEST_SESSIONS=1.
+    private static let discovers = !sessionsPinned || ProcessInfo.processInfo.environment["BIGTTY_TEST_SESSIONS"] == "1"
 
     init(localEndpoint: HerdrEndpoint) {
         local = Machine(local: localEndpoint)
@@ -146,7 +146,7 @@ final class MachineManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "cd ~ && nohup \(args) >/dev/null 2>&1 &"]
-        do { try process.run() } catch { NSLog("ghostherdr: could not start herdr: \(error)") }
+        do { try process.run() } catch { NSLog("bigtty: could not start herdr: \(error)") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.refreshSessions() }
         return machine
     }
@@ -267,9 +267,9 @@ final class MachineManager {
 
     private static let key = "machines"
 
-    /// `GHOSTHERDR_NO_REMOTES=1` runs with this Mac only, e.g. a test copy
+    /// `BIGTTY_NO_REMOTES=1` runs with this Mac only, e.g. a test copy
     /// that must not take panes from the instance you're using.
-    private static let remotesDisabled = ProcessInfo.processInfo.environment["GHOSTHERDR_NO_REMOTES"] == "1"
+    private static let remotesDisabled = ProcessInfo.processInfo.environment["BIGTTY_NO_REMOTES"] == "1"
 
     private static func load() -> [Saved] {
         if remotesDisabled { return [] }

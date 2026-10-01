@@ -35,14 +35,14 @@ enum ImagePaste {
     static func stage(_ image: Image, runner: CommandRunner) -> String? {
         let name = image.name.replacingOccurrences(of: "/", with: "-")
         guard let ssh = runner.ssh else {
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("GhostHerdr Pastes", isDirectory: true)
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bigtty Pastes", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let url = dir.appendingPathComponent(name)
             do { try image.data.write(to: url) } catch { return nil }
             return url.path
         }
         // A private folder under the remote /tmp, then the file itself.
-        let script = "umask 077; d=\"${TMPDIR:-/tmp}/ghostherdr-pastes-$(id -u)\"; mkdir -p \"$d\" && cat > \"$d/$1\" && printf %s \"$d/$1\""
+        let script = "umask 077; d=\"${TMPDIR:-/tmp}/bigtty-pastes-$(id -u)\"; mkdir -p \"$d\" && cat > \"$d/$1\" && printf %s \"$d/$1\""
         let command = ["sh", "-c", script, "sh", name].map(SSHTunnel.shellQuote).joined(separator: " ")
         guard let result = SSHTunnel.runSSH(ssh, remoteCommand: command, input: image.data, okStatuses: [0]) else { return nil }
         let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)

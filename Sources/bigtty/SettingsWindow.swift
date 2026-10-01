@@ -98,9 +98,9 @@ enum Settings {
     }
 
     /// Where a page's full screen (a video's button) goes.
-    /// Test copies (GHOSTHERDR_NO_REMOTES) don't save window frames or the
+    /// Test copies (BIGTTY_NO_REMOTES) don't save window frames or the
     /// sidebar width, so they can't overwrite the real app's layout.
-    static let remembersLayout = ProcessInfo.processInfo.environment["GHOSTHERDR_NO_REMOTES"] != "1"
+    static let remembersLayout = ProcessInfo.processInfo.environment["BIGTTY_NO_REMOTES"] != "1"
 
     static var sidebarWidth: CGFloat {
         get { let w = UserDefaults.standard.double(forKey: "sidebarWidth"); return w >= 200 ? min(w, 420) : 256 }
@@ -138,7 +138,7 @@ enum Settings {
     }
 
     static func changed() {
-        NotificationCenter.default.post(name: .ghostherdrSettingsChanged, object: nil)
+        NotificationCenter.default.post(name: .bigttySettingsChanged, object: nil)
     }
 }
 
@@ -190,7 +190,7 @@ final class SettingsWindowController: NSWindowController {
         window.contentViewController = tabs
         window.toolbarStyle = .preference
         // Reflect reloads that happen while open (config edited elsewhere).
-        NotificationCenter.default.addObserver(forName: .ghostherdrSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .bigttySettingsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.window?.isVisible == true else { return }
                 self.refresh()
@@ -303,7 +303,7 @@ final class SettingsWindowController: NSWindowController {
     private func buildBrowser() -> NSView {
         form([
             [label("Open terminal links:"), stack(links, "⌘-click on a web link in a terminal.")],
-            [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of GhostHerdr on screen; Esc leaves. Applies to pages opened after a change.")],
+            [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of bigtty on screen; Esc leaves. Applies to pages opened after a change.")],
             [label("Extensions:"), extensionsRow()],
         ])
     }
@@ -326,7 +326,7 @@ final class SettingsWindowController: NSWindowController {
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 4
-        NotificationCenter.default.addObserver(forName: .ghostherdrExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .bigttyExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateExtensionsStatus() }
         }
         updateExtensionsStatus()

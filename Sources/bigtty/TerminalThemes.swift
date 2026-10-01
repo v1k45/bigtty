@@ -12,11 +12,11 @@ struct TerminalThemeChoice: Sendable {
     let light: [String]?
 
     static let ghosttyConfig = "ghostty-config"
-    static let defaultID = "ghostherdr"
+    static let defaultID = "bigtty"
 
     static let all: [TerminalThemeChoice] = [
         .init(
-            id: "ghostherdr", name: "GhostHerdr",
+            id: "bigtty", name: "bigtty",
             // Neutral macOS grays, palette tuned so every color reads on the background.
             dark: ["1c1c1f", "e8e8ed", "e8e8ed", "3a4a66",
                    "48484e", "ff6b63", "4fd66a", "ffd43b", "5aa9ff", "d68bff", "5ad4e6", "d1d1d6",
@@ -159,8 +159,8 @@ extension Settings {
 @MainActor
 enum TerminalAppearance {
     static func configPath() -> String? {
-        // A separate config (testing, or keeping GhostHerdr apart from Ghostty).
-        if let path = ProcessInfo.processInfo.environment["GHOSTHERDR_GHOSTTY_CONFIG"] { return path }
+        // A separate config (testing, or keeping bigtty apart from Ghostty).
+        if let path = ProcessInfo.processInfo.environment["BIGTTY_GHOSTTY_CONFIG"] { return path }
         return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
@@ -183,7 +183,7 @@ enum TerminalAppearance {
 
     /// Whether the config picks a theme or background itself.
     nonisolated static func configSetsColors() -> Bool {
-        let env = ProcessInfo.processInfo.environment["GHOSTHERDR_GHOSTTY_CONFIG"]
+        let env = ProcessInfo.processInfo.environment["BIGTTY_GHOSTTY_CONFIG"]
         let home = NSHomeDirectory()
         let paths = [env, home + "/.config/ghostty/config.ghostty", home + "/.config/ghostty/config",
                      home + "/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
@@ -283,9 +283,9 @@ enum TerminalAppearance {
         if !FileManager.default.fileExists(atPath: path) {
             try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
             let starter = """
-            # Ghostty config, shared by Ghostty and GhostHerdr.
+            # Ghostty config, shared by Ghostty and bigtty.
             # Every option: https://ghostty.org/docs/config/reference
-            # GhostHerdr's Settings ▸ Terminal (theme, font, contrast) apply on top.
+            # bigtty's Settings ▸ Terminal (theme, font, contrast) apply on top.
             #
             # font-family = JetBrains Mono
             # font-size = 13
@@ -333,7 +333,7 @@ enum GhosttyThemes {
     /// `theme = Dracula` or `theme = light:A,dark:B`, resolved to one
     /// theme file: the side matching `dark`, from ~/.config/ghostty/themes
     /// or the bundled collection. The embedded runtime doesn't switch
-    /// Ghostty's light/dark themes itself, so GhostHerdr picks the side.
+    /// Ghostty's light/dark themes itself, so bigtty picks the side.
     /// Nil when the line needs no change.
     static func rewriteThemeLine(_ line: String, dark: Bool) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)

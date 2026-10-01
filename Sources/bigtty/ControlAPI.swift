@@ -21,7 +21,7 @@ final class ControlAPI {
     func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
         switch method {
         case "system.ping":
-            return ["app": "GhostHerdr", "herdr": .string("\(store.state)")]
+            return ["app": "bigtty", "herdr": .string("\(store.state)")]
         case "browser.list":
             return .array(browserList())
         case "browser.open":
@@ -227,7 +227,7 @@ final class ControlAPI {
             return pageInfo(id, browser)
         }
         guard let beside = params["caller_pane"]?.stringValue.flatMap({ store.pane($0)?.paneID }) ?? focusedPane() else {
-            throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in GhostHerdr")
+            throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in bigtty")
         }
         let direction: SplitDirection = params["direction"]?.stringValue == "down" ? .down : .right
         let normalized = BrowserPaneView.normalize(url)?.absoluteString
@@ -268,7 +268,7 @@ final class ControlAPI {
             }
         }
         guard let beside = params["caller_pane"]?.stringValue.flatMap({ store.pane($0)?.paneID }) ?? focusedPane() else {
-            throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in GhostHerdr")
+            throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in bigtty")
         }
         let state = HostPaneState(kind: changes ? .diff : .files, path: root, selection: selection, mode: mode.rawValue, line: line)
         let id = HostPaneStore.open(state, beside: beside, direction: .right, store: store)
