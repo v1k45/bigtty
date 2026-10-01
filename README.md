@@ -1,294 +1,127 @@
-<p align="center">
-  <img src="Resources/AppIcon.png" width="128" alt="bigtty icon">
-</p>
-
-<h1 align="center">bigtty</h1>
-
-<p align="center">
-  <b>A native Mac home for your terminal agents.</b><br>
-  <a href="https://herdr.dev">herdr</a>'s sessions, spaces and agents, in Ghostty-rendered terminals,<br>
-  with a browser, a code viewer and every machine you work on, one keystroke away.
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.png">
+  <img src="docs/banner-light.png" alt="bigtty: a native Mac home for your terminal agents">
+</picture>
 
 <p align="center">
   <a href="https://github.com/v1k45/bigtty/releases/latest"><b>Download for macOS</b></a> ·
   <a href="#install">Install</a> ·
-  <a href="#keyboard-shortcuts">Shortcuts</a> ·
-  <a href="#build-from-source">Build</a>
+  <a href="docs/features.md">Features</a> ·
+  <a href="docs/shortcuts.md">Shortcuts</a> ·
+  <a href="docs/btty.md">btty</a>
 </p>
 
-![Tests, a live dashboard in a browser pane, server logs and code side by side; the sidebar lists each space's tabs by what its agents are doing](docs/screenshots/workspace.png)
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14%2B-111?logo=apple&logoColor=white" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/herdr-0.9.2%2B-5CF29A?labelColor=111" alt="herdr 0.9.2+">
+  <img src="https://img.shields.io/badge/Swift-AppKit-F05138?logo=swift&logoColor=white" alt="Swift and AppKit">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
+</p>
 
-You run Claude Code, Codex and friends in herdr because it keeps them alive:
-sessions survive, panes persist, agents report what they're doing. bigtty
-gives that herd a proper Mac app. Every space in a sidebar, every agent's state
-at a glance, real Ghostty terminals, and the tools you keep switching windows
-for (a browser, your code, the diff) right next to the agent that needs them.
+![bigtty: spaces in the sidebar, tests, a live dashboard, server logs and code side by side](docs/screenshots/workspace.png)
 
-Close the app and nothing stops: herdr owns every session, tab, pane and agent.
-bigtty is the window onto it.
+Claude Code, Codex and friends run in [herdr](https://herdr.dev) because it
+keeps them alive. **bigtty** gives that herd a proper Mac app: every space in a
+sidebar, every agent's state at a glance, real Ghostty terminals, and a
+browser and your code right next to the agent that needs them. Quit it and
+nothing stops; herdr keeps running everything.
 
-## Why bigtty
+<br>
 
-- **Know which agent needs you.** Each space shows its branch, folder, open
-  ports, what its agents are doing and how long it's been quiet. A dot breathes
-  while an agent works; when one is waiting on you, its space lights up with
-  the actual question, its pane gets a ring, and a notification (with a sound
-  you pick) finds you. ⇧⌘U jumps straight there.
-- **Real Ghostty terminals.** Rendering by libghostty, your Ghostty config
-  (fonts, keybinds, themes) as is, every one of Ghostty's hundreds of themes
-  built in, and a frosted, translucent look that matches the Mac around it.
-- **A browser beside the agent.** Browser panes live in the same split layout
-  as your terminals. Open `localhost` next to the dev server, watch the page
-  change, go full screen inside the pane, block ads with uBlock Origin Lite. Agents can drive it too:
-  `btty browser click @e5`.
-- **Code and diffs without leaving.** ⌘-click any path an agent prints (even a
-  bare `Cart.tsx` in a table) and it opens right there: syntax highlighted,
-  at the line, images and PDFs previewed. The Changes pane shows the git diff
-  as it happens.
-- **Sessions for separate worlds.** Keep work, side projects or a client in
-  their own herdr sessions and flip between them from the sidebar (⇧⌘S).
-  Sessions you're not looking at stay connected, so an agent waiting there
-  still badges the switcher and notifies you.
-- **Every machine in one sidebar.** Connect a server over SSH and its spaces
-  sit under yours: terminals, agents, attention, browser panes that reach its
-  `localhost`, its files. One app, all your boxes.
-- **Keyboard first, mouse friendly.** ⌘K jumps to any space, agent, pane or
-  action, fuzzy ("blt" finds *backend-load-tests*), and searches what every
-  terminal printed, showing the matching line. ⌘1–9 go to the spaces you put
-  there, ⌃⌘⇥ back to the last one. Hold ⌘ to see shortcuts on everything; ⌘/
-  lists them all. Drag panes by their top edge to rearrange a layout any way
-  you like.
-- **Native, not a web view in a trench coat.** Swift and AppKit throughout:
-  sidebar material, trackpad scrolling, select-to-copy, Mac shortcuts and
-  menus.
+## Know which agent needs you
 
-## Screenshots
+Each space shows its branch, ports, what its agents are doing and how long
+it's been quiet. When one stops to ask something, its space quotes the
+question, its pane gets a ring and a notification finds you. **⇧⌘U** jumps
+there.
 
-| | |
-|---|---|
-| ![An agent waiting on a question in another space](docs/screenshots/attention.png) | ![A diff next to an agent's question](docs/screenshots/changes-and-agents.png) |
-| **Attention that finds you.** The storefront agent is asking a question: its pane is ringed, its space quotes it, its tab says "needs you". | **The diff next to the decision.** The agent's question on the left, exactly what it changed on the right. |
-| ![⌘K jump palette](docs/screenshots/jump-palette.png) | ![Hold ⌘ for shortcut badges](docs/screenshots/shortcut-hints.png) |
-| **⌘K to anywhere.** Fuzzy over spaces, agents and panes, and through what every terminal printed. | **Hold ⌘.** Every space, tab and pane shows its shortcut. |
-| ![⌘/ keyboard shortcuts](docs/screenshots/shortcuts-sheet.png) | ![Terminal settings](docs/screenshots/settings-terminal.png) |
-| **⌘/** lists every shortcut, always in sync with the menus. | **Make it yours.** Themes, fonts, translucency, contrast, Ghostty config. |
-| ![Browser settings](docs/screenshots/settings-browser.png) | ![Agents working beside a YouTube Short filling a tall browser pane](docs/screenshots/brainrot.png) |
-| **Browser panes, your way.** Where links open, video full screen, uBlock Origin Lite. | **Brainrot mode.** Two agents grind away while a Short plays full screen in a pane sized for it. |
+![An agent's question shown on its space, its pane ringed](docs/screenshots/attention.png)
+
+## The diff next to the decision
+
+**⌘-click** any path an agent prints and it opens right there, at the line.
+**⌥⌘G** shows what changed, live, beside the agent asking whether to keep it.
+
+![A git diff beside an agent waiting on an answer](docs/screenshots/changes-and-agents.png)
+
+## ⌘K to anywhere
+
+Fuzzy search over spaces, agents, panes and actions, and through everything
+your terminals printed.
+
+![The ⌘K palette finding "coupon" in spaces and terminal output](docs/screenshots/jump-palette.png)
+
+## A browser in the layout
+
+Browser panes split, zoom and move like terminals. Open `localhost` beside the
+dev server, block ads with uBlock Origin Lite, let agents drive it with
+[`btty browser`](docs/btty.md), or keep a Short playing while the agents grind.
+
+![Two agents working beside a YouTube Short filling a tall browser pane](docs/screenshots/brainrot.png)
+
+## Keyboard first
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/shortcut-hints.png" alt="Shortcut badges on spaces, tabs and panes while ⌘ is held"></td>
+    <td width="50%"><img src="docs/screenshots/shortcuts-sheet.png" alt="The ⌘/ shortcuts sheet"></td>
+  </tr>
+  <tr>
+    <td align="center">Hold <b>⌘</b>: every space, tab and pane shows its key.</td>
+    <td align="center"><b>⌘/</b> lists them all.</td>
+  </tr>
+</table>
+
+## Made to fit your Mac
+
+Your Ghostty config as is, hundreds of themes built in, translucency, fonts,
+notification sounds, and SSH machines whose spaces sit right under yours.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/settings-terminal.png" alt="Terminal settings"></td>
+    <td width="50%"><img src="docs/screenshots/settings-browser.png" alt="Browser settings"></td>
+  </tr>
+</table>
+
+<br>
 
 ## Install
 
-bigtty needs **macOS 14 or later** and **herdr 0.9.2 or later**
-([install herdr](https://herdr.dev)). It's a universal app (Apple Silicon and
-Intel).
+Needs **macOS 14+** and **[herdr](https://herdr.dev) 0.9.2+**. Universal
+(Apple Silicon and Intel).
 
-1. Download the disk image from [Releases](https://github.com/v1k45/bigtty/releases/latest)
-   and drag bigtty into Applications. With the GitHub CLI:
-   ```sh
-   gh release download -R v1k45/bigtty -p 'bigtty-*.dmg'
-   open bigtty-*.dmg
-   ```
-2. Open bigtty. It finds herdr on your `PATH` or in `~/.local/bin` and
-   connects to your default session; start herdr from the app if it isn't
-   running.
+```sh
+gh release download -R v1k45/bigtty -p 'bigtty-*.dmg' && open bigtty-*.dmg
+```
 
-> The app is ad-hoc signed, not notarized. Downloads via `gh` open directly;
-> if you downloaded it in a browser, clear the quarantine flag once:
-> `xattr -dr com.apple.quarantine /Applications/bigtty.app`
+Drag bigtty to Applications and open it; it finds herdr and connects to your
+default session. Downloaded in a browser instead? The app is ad-hoc signed, so
+clear the quarantine flag once:
+`xattr -dr com.apple.quarantine /Applications/bigtty.app`.
 
-If herdr is older than 0.9.2 (here, or on a machine you connect to),
-bigtty says so and shows the update command: `herdr update --handoff`
-upgrades it and keeps your running panes alive.
+## Quick start
 
-## A two-minute tour
-
-1. **⌘N** starts a space in the current folder; **⌘T** a tab; **⌘D** / **⇧⌘D**
-   split right / down.
-2. Run an agent in a pane. Its state shows on the space card; if it stops to
-   ask something, the question appears there too.
-3. **⌥⌘B** splits in a browser (**⇧⌥⌘B** turns the current pane into one,
-   **⌥⌘T** opens a browser tab). **⌘L** focuses the address bar.
-4. **⌘-click** a path in the terminal to open it in a files pane; **⌥⌘G** shows
-   the git changes.
-5. Grab a pane's top edge and drop it on another pane's edge to rearrange, or
-   on the window's outer edge to make it span the whole width.
-6. **⌥⌘K** connects another machine over SSH; **⌃⌘N** starts a separate
-   session, and the switcher on the sidebar's *This Mac* row moves between them.
-7. Hold **⌘** to see what else is a keystroke away.
-
-## Keyboard shortcuts
-
-| Keys | Action |
+| | |
 |---|---|
-| ⌘K | Jump to any space, agent, pane or action |
-| ⌘/ · hold ⌘ | All shortcuts · shortcut badges in place |
-| ⌘1–9 · ⌃⌘] / ⌃⌘[ | Space by number · next / previous space |
-| ⌃⌘⇥ (hold ⌃⌘, tap ⇥) | Recent spaces |
-| ⌃1–9 · ⌃⇥ / ⌃⇧⇥ | Tab by number · next / previous tab |
-| ⌥1–9 · ⌘] / ⌘[ · ⌥⌘ arrows | Pane by number · next / previous pane · pane in a direction |
-| ⌘D / ⇧⌘D · ⇧⌘↩ | Split right / down · zoom pane |
-| ⌃⌘ arrows | Resize pane |
-| ⌘T · ⌥⌘T · ⌘N · ⇧⌘N | New tab · new browser tab · new space · new window |
-| ⌥⌘B · ⇧⌥⌘B · ⌘L | Split with browser · browser here · address bar |
-| ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
-| ⌘W · ⌥⌘W | Close pane · close tab |
-| ⇧⌘U | Next pane that needs you |
-| ⇧⌘S · ⌃⌘N | Switch session · new session |
-| ⌥⌘K | Connect a machine |
-| ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |
-| ⌘V | Paste (an image pastes as a file the agent can attach) |
-| ⌘, | Settings |
+| **⌘N** · **⌘T** · **⌘D** | New space · tab · split |
+| **⌥⌘B** · **⌥⌘F** · **⌥⌘G** | Browser · files · git changes beside you |
+| **⌘K** · **⇧⌘U** | Jump anywhere · next agent that needs you |
+| **⌘1–9** · **⌃⌘⇥** | Your spaces · back to the last one |
+| **⌥⌘K** · **⇧⌘S** | Connect a machine · switch session |
 
-The pane-number modifier (⌥ or ⌥⌘) is a setting.
+Drag a pane by its top edge to rearrange. Everything else:
+[shortcuts](docs/shortcuts.md).
 
-## Features in depth
+## Learn more
 
-### Terminals
-
-Every pane is a Ghostty surface. Your Ghostty config
-(`~/.config/ghostty/config.ghostty` or Ghostty's other usual places) applies
-as is, and saved edits take effect immediately. On top, **Settings ▸ Terminal**
-picks a theme (curated light/dark pairs or any of Ghostty's collection,
-bundled from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)),
-font, size, background translucency, contrast boost and copy on select.
-`theme = Name` and `theme = light:A,dark:B` in your config just work.
-`BIGTTY_GHOSTTY_CONFIG=/path` keeps a separate config for bigtty.
-
-Clicks, hover, scrolling and pastes reach apps like Claude Code, vim and htop
-the way they do in Ghostty. ⌘V with a screenshot on the clipboard pastes it as
-a file (uploaded first for a pane on another machine), so Claude Code attaches it.
-
-### Spaces
-
-The sidebar lists every space with its branch, folder, listening ports and
-agents, and its tabs by name: a label you gave it, a title the agent reports,
-the agent's own conversation title (Claude Code, Codex) or the terminal title.
-A space with several tabs shows the first two and "+N more".
-
-⌘1–9 are fixed: space 1 is whatever sits at the top. Drag cards in the
-sidebar, or right-click one and choose Move Up / Move Down, to put the spaces
-you use most on the keys you want. ⌃⌘⇥ goes back to the last space you were
-in; hold ⌃⌘ and keep tapping ⇥ to go further back.
-
-Each card says how long its space has been quiet ("claude · idle · 3h"), and
-spaces with nothing for 12 hours fade until you hover or select them, so the
-ones worth your attention stand out. The window and sidebar remember their
-size; the buttons beside the traffic lights hide the sidebar (⌃⌘S) and the
-file viewer (⇧⌘E).
-
-### Attention and notifications
-
-herdr reports each agent's state; bigtty turns it into a breathing dot while
-an agent works, and when one needs you: a ring on the pane, a highlighted
-space with the agent's own question, a Dock badge, and a notification for
-panes you aren't looking at. **Settings ▸ General** picks the sound (or none);
-the Dock icon bounces when an agent needs you while bigtty is in the
-background. Once you've seen it, it goes quiet until the agent needs you
-again.
-
-### Browser panes
-
-A browser pane is a real herdr pane (tagged, running a small placeholder), so
-splitting, zooming, moving and closing work like any pane, and layouts survive
-restarts. It identifies as Safari, plays media with a speaker on its tab, and
-video full screen fills the pane (or the display, if you prefer). Terminal
-links open in the tab's browser pane or in your default browser (a setting).
-
-**Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
-15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
-unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.
-
-### Files and changes
-
-⌘-click a path, `btty open path:line`, or **⌥⌘F**: the file opens at the line,
-highlighted, with images and PDFs previewed; the tree is a click away. The
-Changes pane (**⌥⌘G**, `btty diff`) lists what git sees as changed with each
-diff, refreshed live. Right-click a file to insert its path into the terminal.
-
-### Sessions
-
-herdr sessions are independent servers, each with its own spaces. The
-*This Mac* row in the sidebar shows the current one; click it (or ⇧⌘S) to
-switch, start a stopped session, create one, or stop and delete them. ⌘K
-lists sessions too, and finds spaces in all of them. Every running session
-stays connected in the background: its agents' questions badge the
-switcher, notify you and count in the Dock badge. `btty` commands from an
-agent act in the agent's own session.
-
-### Remote machines
-
-**File ▸ Connect Machine…** takes any SSH target (`user@host`, `host:port`, an
-`~/.ssh/config` alias). bigtty checks it, can start herdr there, and keeps
-one SSH connection forwarding herdr's sockets, so everything works as it does
-locally: terminals, agents, attention, ⌘K, files panes, and browser panes that
-reach the machine's `localhost` (the address bar still says `localhost:3000`).
-It uses your SSH keys and agent; machines saved with `herdr machine add`
-appear on their own.
-
-### Agents driving the browser: `btty`
-
-**bigtty ▸ Install btty and Agent Skill…** puts `btty` on your `PATH` and
-teaches your agents to use it:
-
-```sh
-btty browser open localhost:3000     # beside the agent, or this tab's browser
-btty browser snapshot -i             # - textbox "Email" [ref=e3] …
-btty browser fill @e3 me@example.com
-btty browser click @e5
-btty browser wait --text "Welcome"
-btty browser screenshot out.png --open
-btty open src/app.py:42              # show a file beside the agent
-btty diff                            # show the repo's changes
-```
-
-Also `type`, `press`, `select`, `check`, `scroll`, `hover`, `get`, `eval`,
-`console`, `navigate`, `back`, `forward`, `reload`, `list`, `close`, and
-`--json`. Commands go over a user-only socket; the page script runs in an
-isolated JavaScript world.
-
-## Build from source
-
-Needs Xcode 26 (Swift 6.2+).
-
-```sh
-scripts/bundle.sh                 # dev build → build/bigtty.app
-open build/bigtty.app
-scripts/release.sh 0.3.0          # universal release → build/release/bigtty-0.3.0.{dmg,zip}
-```
-
-`BIGTTY_SESSION=<name>` connects to a named herdr session.
-
-## How it works
-
-- **HerdrKit** speaks herdr's NDJSON socket API (`session.snapshot`,
-  `layout.export`, `events.subscribe`, `pane.*`). Events trigger a re-read,
-  never a delta.
-- Each visible pane runs `herdr terminal session control` and feeds its frames
-  into a Ghostty surface with a host-managed backend; keys, clicks, scrolls and
-  pastes go back as herdr terminal commands.
-- Browser and files panes are herdr panes tagged `btty_kind`, so herdr's layout
-  stays the single source of truth for every pane.
-- Remote machines are herdr sockets forwarded over SSH; the rest of the app
-  doesn't know the difference.
-
-## Development
-
-```sh
-swift test                                  # unit tests
-herdr --session bttytest server &            # isolated server for live tests
-BTTY_TEST_SESSION=bttytest swift test         # + live socket/terminal tests
-```
-
-Debug hooks on a running app: `kill -USR1 <pid>` writes window, pane and
-on-screen terminal text to `$TMPDIR/bigtty-debug.txt` (plus a window
-render); `kill -USR2 <pid>` pastes `$TMPDIR/bigtty-type.txt` into the
-focused pane, or, starting with `!`, sends a menu action
-(`!@<space> newBrowserPane:`). Quit the app with `pkill -x bigtty`
-(`pkill -f bigtty.app` also kills the placeholders inside herdr panes).
-
-## Credits
+- [Features in depth](docs/features.md): terminals, spaces, attention, browser
+  panes and extensions, files, sessions, remote machines, how it works
+- [btty](docs/btty.md): the command agents use to drive bigtty's browser and
+  open files
+- [Building and development](docs/development.md)
 
 Built on [herdr](https://herdr.dev), [Ghostty](https://ghostty.org) via
 [libghostty-spm](https://github.com/Lakr233/libghostty-spm), and themes from
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes).
-bigtty is MIT licensed.
+MIT licensed.
