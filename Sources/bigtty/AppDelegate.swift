@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var knownSpaces: Set<SpaceRef> = []
 
     func applicationDidFinishLaunching(_: Notification) {
+        NetworkWarmup.run()
         let env = ProcessInfo.processInfo.environment
         // Debug: BIGTTY_APPEARANCE=light|dark overrides the system setting.
         if let look = env["BIGTTY_APPEARANCE"] {
