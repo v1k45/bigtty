@@ -2097,6 +2097,10 @@ final class PlaceholderView: NSView {
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let start = NSButton(title: "Start herdr", target: nil, action: nil)
+    private let copyInstall = NSButton(title: "Copy Install Command", target: nil, action: nil)
+    static let installCommand = "curl -fsSL https://herdr.dev/install.sh | sh"
+    /// No herdr binary anywhere bigtty looks: offer to install it first.
+    private var herdrMissing = false
     private let connect = NSButton(title: "Connect Machine…", target: nil, action: nil)
     private let footnote = NSTextField(labelWithString: "")
 
@@ -2121,6 +2125,9 @@ final class PlaceholderView: NSView {
         connect.bezelStyle = .rounded
         connect.target = self
         connect.action = #selector(connectClicked)
+        copyInstall.bezelStyle = .rounded
+        copyInstall.target = self
+        copyInstall.action = #selector(copyInstallClicked)
         footnote.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         footnote.textColor = .tertiaryLabelColor
         footnote.alignment = .center
@@ -2128,7 +2135,8 @@ final class PlaceholderView: NSView {
         action.keyEquivalent = "\r"
         action.target = self
         action.action = #selector(actionClicked)
-        for view in [spinner, icon, title, detail, start, connect, footnote, action] { addSubview(view) }
+        footnote.isSelectable = true
+        for view in [spinner, icon, title, detail, start, copyInstall, connect, footnote, action] { addSubview(view) }
         apply()
     }
 
@@ -2155,9 +2163,16 @@ final class PlaceholderView: NSView {
             spinner.stopAnimation(nil)
         case let .notRunning(socket, binary):
             notRunning = true
-            title.stringValue = "herdr isn’t running"
-            detail.stringValue = "bigtty shows the spaces, agents and terminals of a herdr server. Start one here, or connect to a machine that already runs herdr."
-            footnote.stringValue = "looked for \((socket as NSString).abbreviatingWithTildeInPath) · herdr at \((binary as NSString).abbreviatingWithTildeInPath)"
+            herdrMissing = !FileManager.default.isExecutableFile(atPath: binary)
+            if herdrMissing {
+                title.stringValue = "herdr isn’t installed"
+                detail.stringValue = "bigtty shows the spaces, agents and terminals of herdr (herdr.dev), which keeps them running. Install it in a terminal with the command below, then click Start herdr. Or connect to a machine that already runs herdr."
+                footnote.stringValue = Self.installCommand
+            } else {
+                title.stringValue = "herdr isn’t running"
+                detail.stringValue = "bigtty shows the spaces, agents and terminals of a herdr server. Start one here, or connect to a machine that already runs herdr."
+                footnote.stringValue = "looked for \((socket as NSString).abbreviatingWithTildeInPath) · herdr at \((binary as NSString).abbreviatingWithTildeInPath)"
+            }
             spinner.stopAnimation(nil)
         case .empty:
             notRunning = false
@@ -2170,6 +2185,10 @@ final class PlaceholderView: NSView {
         }
         if case .connecting = state { spinner.isHidden = false } else { spinner.isHidden = true }
         for view in [start, connect, footnote] { view.isHidden = !notRunning }
+        copyInstall.isHidden = !(notRunning && herdrMissing)
+        // Return copies the install command until herdr is there to start.
+        start.keyEquivalent = copyInstall.isHidden ? "\r" : ""
+        copyInstall.keyEquivalent = copyInstall.isHidden ? "" : "\r"
         icon.isHidden = !(notRunning || remote)
         icon.image = NSImage(systemSymbolName: remote ? "server.rack" : "terminal", accessibilityDescription: nil)
         title.isHidden = !(notRunning || remote)
@@ -2200,16 +2219,38 @@ final class PlaceholderView: NSView {
         }
         action.sizeToFit()
         action.frame.origin = NSPoint(x: midX - action.frame.width / 2, y: y - 44)
-        start.sizeToFit()
-        connect.sizeToFit()
-        let total = start.frame.width + connect.frame.width + 10
+        let buttons = [copyInstall, start, connect].filter { !$0.isHidden }
+        buttons.forEach { $0.sizeToFit() }
+        var x = midX - (buttons.reduce(0) { $0 + $1.frame.width } + CGFloat(max(0, buttons.count - 1)) * 10) / 2
         y -= 44
-        start.frame.origin = NSPoint(x: midX - total / 2, y: y)
-        connect.frame.origin = NSPoint(x: midX - total / 2 + start.frame.width + 10, y: y)
+        for button in buttons {
+            button.frame.origin = NSPoint(x: x, y: y)
+            x += button.frame.width + 10
+        }
         footnote.frame = NSRect(x: 0, y: y - 34, width: bounds.width, height: 16)
     }
 
-    @objc private func startClicked() { onStart?() }
+    @objc private func startClicked() {
+        // Installed since this screen came up? Then start it; else say so.
+        guard !herdrMissing || HerdrEndpoint.locateHerdr() != nil else {
+            NSSound.beep()
+            detail.stringValue = "herdr still isn’t installed. Run the command below in a terminal, then click Start herdr again."
+            needsLayout = true
+            return
+        }
+        onStart?()
+    }
+
+    @objc private func copyInstallClicked() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Self.installCommand, forType: .string)
+        copyInstall.title = "Copied"
+        needsLayout = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.copyInstall.title = "Copy Install Command"
+            self?.needsLayout = true
+        }
+    }
     @objc private func actionClicked() { onAction?() }
     @objc private func connectClicked() { onConnect?() }
 }

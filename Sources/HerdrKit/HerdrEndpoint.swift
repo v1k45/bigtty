@@ -5,7 +5,10 @@ public struct HerdrEndpoint: Sendable, Equatable {
     /// `nil` is the default session.
     public let session: String?
     public let socketPath: String
-    public let herdrBinary: String
+    /// The herdr CLI: the one asked for, else wherever it is installed now
+    /// (looked up each time, so installing herdr needs no relaunch).
+    public var herdrBinary: String { binaryOverride ?? Self.locateHerdr() ?? "herdr" }
+    private let binaryOverride: String?
     /// Set for a forwarded (remote) server: the herdr CLI finds both sockets
     /// through `HERDR_SOCKET_PATH`, deriving `herdr-client.sock` beside it.
     public let forwarded: Bool
@@ -13,7 +16,7 @@ public struct HerdrEndpoint: Sendable, Equatable {
     public init(session: String? = nil, socketPath: String? = nil, herdrBinary: String? = nil) {
         self.session = session
         self.socketPath = socketPath ?? Self.defaultSocketPath(session: session)
-        self.herdrBinary = herdrBinary ?? Self.locateHerdr() ?? "herdr"
+        binaryOverride = herdrBinary
         forwarded = false
     }
 
@@ -21,7 +24,7 @@ public struct HerdrEndpoint: Sendable, Equatable {
     public init(forwardedSocket path: String, herdrBinary: String? = nil) {
         session = nil
         socketPath = path
-        self.herdrBinary = herdrBinary ?? Self.locateHerdr() ?? "herdr"
+        binaryOverride = herdrBinary
         forwarded = true
     }
 
