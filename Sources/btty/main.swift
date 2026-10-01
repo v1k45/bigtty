@@ -299,7 +299,8 @@ func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "version", "--version":
-    print("btty 0.1.0")
+    // The app it ships in (bigtty.app/Contents/MacOS/btty) holds the version.
+    print("btty \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")")
 case "pane-host":
     guard args.count >= 3 else { fail("usage: btty pane-host <kind> <id> [title]", code: 64) }
     paneHost(kind: args[1], id: args[2], title: args.count > 3 ? args[3] : nil)
