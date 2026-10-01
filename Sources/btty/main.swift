@@ -299,8 +299,11 @@ func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "version", "--version":
-    // The app it ships in (bigtty.app/Contents/MacOS/btty) holds the version.
-    print("btty \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")")
+    // The app it ships in (bigtty.app/Contents/MacOS/btty) holds the version;
+    // `btty` is usually a link to it (~/.local/bin, Homebrew's bin).
+    let executable = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
+    let app = Bundle(url: executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent())
+    print("btty \(app?.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")")
 case "pane-host":
     guard args.count >= 3 else { fail("usage: btty pane-host <kind> <id> [title]", code: 64) }
     paneHost(kind: args[1], id: args[2], title: args.count > 3 ? args[3] : nil)
