@@ -73,8 +73,8 @@ bigtty is the window onto it.
 | **⌘K to anywhere.** Fuzzy over spaces, agents and panes, and through what every terminal printed. | **Hold ⌘.** Every space, tab and pane shows its shortcut. |
 | ![⌘/ keyboard shortcuts](docs/screenshots/shortcuts-sheet.png) | ![Terminal settings](docs/screenshots/settings-terminal.png) |
 | **⌘/** lists every shortcut, always in sync with the menus. | **Make it yours.** Themes, fonts, translucency, contrast, Ghostty config. |
-| ![Browser settings](docs/screenshots/settings-browser.png) | |
-| **Browser panes, your way.** Where links open, video full screen, uBlock Origin Lite. | |
+| ![Browser settings](docs/screenshots/settings-browser.png) | ![Agents working beside a YouTube Short filling a tall browser pane](docs/screenshots/brainrot.png) |
+| **Browser panes, your way.** Where links open, video full screen, uBlock Origin Lite. | **Brainrot mode.** Two agents grind away while a Short plays full screen in a pane sized for it. |
 
 ## Install
 
