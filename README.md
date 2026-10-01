@@ -95,13 +95,15 @@ Needs **macOS 14+** and **[herdr](https://herdr.dev) 0.9.2+**. Universal
 (Apple Silicon and Intel).
 
 ```sh
-gh release download -R v1k45/bigtty -p 'bigtty-*.dmg' && open bigtty-*.dmg
+brew install --cask v1k45/tap/bigtty
 ```
 
-Drag bigtty to Applications and open it; it finds herdr and connects to your
-default session. Downloaded in a browser instead? The app is ad-hoc signed, so
-clear the quarantine flag once:
-`xattr -dr com.apple.quarantine /Applications/bigtty.app`.
+That also puts `btty` on your `PATH`. Or download the DMG from
+[Releases](https://github.com/v1k45/bigtty/releases/latest) and drag bigtty to
+Applications; it's ad-hoc signed, so after a browser download clear the
+quarantine flag once: `xattr -dr com.apple.quarantine /Applications/bigtty.app`.
+
+Open bigtty and it finds herdr and connects to your default session.
 
 ## Quick start
 

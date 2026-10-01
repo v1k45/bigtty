@@ -72,3 +72,5 @@ codesign --force --sign - "$dmg"
 
 echo "$zip"
 echo "$dmg"
+# For the Homebrew cask (github.com/v1k45/homebrew-tap, Casks/bigtty.rb).
+echo "cask: version \"$version\", sha256 \"$(shasum -a 256 "$zip" | cut -d' ' -f1)\""
