@@ -98,7 +98,8 @@ Needs **macOS 14+** and **[herdr](https://herdr.dev) 0.9.2+**. Universal
 brew install --cask v1k45/tap/bigtty
 ```
 
-That also puts `btty` on your `PATH`. Or download the DMG from
+That also puts `btty` on your `PATH`. Update later with
+`brew update && brew upgrade --cask bigtty`. Or download the DMG from
 [Releases](https://github.com/v1k45/bigtty/releases/latest) and drag bigtty to
 Applications; it's ad-hoc signed, so after a browser download clear the
 quarantine flag once: `xattr -dr com.apple.quarantine /Applications/bigtty.app`.
