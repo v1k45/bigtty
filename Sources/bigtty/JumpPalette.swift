@@ -153,6 +153,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
         }
         items.append(Item(section: "Actions", title: "New Space…", detail: "⌘N", symbol: "plus", alert: false, target: .newSpace, haystack: "new space workspace"))
+        items.append(Item(section: "Actions", title: "Pin / Unpin Pane", detail: "⌥⌘P", symbol: "pin", alert: false, target: .action(#selector(PaneActions.togglePin(_:))), haystack: "pin unpin pane follow sticky keep"))
         items.append(Item(section: "Actions", title: "Move Pane to…", detail: "⌃⌥⌘1–9", symbol: "arrow.right.square", alert: false, target: .action(#selector(PaneActions.movePaneTo(_:))), haystack: "move pane to space tab send"))
         items.append(Item(section: "Actions", title: "New Browser Tab", detail: "⌥⌘T", symbol: "globe", alert: false, target: .action(#selector(PaneActions.newBrowserTab(_:))), haystack: "new browser tab web"))
         items.append(Item(section: "Actions", title: "Open Browser Here", detail: "⇧⌥⌘B", symbol: "globe", alert: false, target: .action(#selector(PaneActions.openBrowserHere(_:))), haystack: "open browser here this pane web replace"))

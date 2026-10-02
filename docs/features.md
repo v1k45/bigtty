@@ -30,6 +30,19 @@ bigtty follows the pane there; hold **⌥** while choosing or dropping to stay
 where you are. A tab or space the move leaves empty closes. Panes move within
 one machine (herdr can't carry a process to another).
 
+## Pinned panes
+
+**⌥⌘P** (Pane ▸ Pin Pane, or ⌘K) pins a pane: it follows you between spaces,
+as a full-height column on the right of whatever you switch to. Pin a dev
+server's logs, a `localhost` preview or an agent you're watching, and it stays
+in view. Several pins stack in the column; drag its divider to set the width.
+A 📌 marks a pinned pane, and pinned panes don't name the tabs they visit.
+
+Pinning is a real move in herdr, so herdr's own terminal UI and your other
+Macs see the pane where you last were. **⌥⌘P** again unpins it, back beside
+the pane it was next to. Switching quickly moves the pins once, when you
+settle; a zoomed tab is left alone.
+
 ## Spaces
 
 The sidebar lists every space with its branch, folder, listening ports and

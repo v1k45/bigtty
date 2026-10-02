@@ -7,13 +7,17 @@ import HerdrKit
 /// needs you gets a thin accent ring.
 @MainActor
 final class PaneContainerView: NSView {
-    let paneID: String
+    /// Changes when the pane moves to another space (herdr gives it a new
+    /// id; the view and its terminal connection stay).
+    var paneID: String
     let content: NSView
     private let ring = CALayer()
     private let detached = DetachedOverlay()
     private let zoomPill = ZoomPill()
     private let grip = PaneGrip()
     private var badge: KeyCap?
+    /// Pinned: it follows you between spaces.
+    private let pinMark = NSImageView()
 
     /// ⌘ held: this pane's shortcut, large, in its middle.
     var hintBadge: String? {
@@ -109,9 +113,17 @@ final class PaneContainerView: NSView {
     }
 
     func update(pane: Pane?, attention: Attention.Reason?) {
-        guard pane != nil else { return }
+        guard let pane else { return }
         self.attention = attention
         updateRing()
+        if pinMark.superview == nil {
+            pinMark.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")
+            pinMark.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+            pinMark.contentTintColor = .tertiaryLabelColor
+            pinMark.toolTip = "Pinned: follows you between spaces (⌥⌘P to unpin)"
+            addSubview(pinMark)
+        }
+        pinMark.isHidden = pane.tokens?["btty_pin"] == nil
     }
 
     private func updateRing() {
@@ -156,6 +168,7 @@ final class PaneContainerView: NSView {
         }
         // The whole top edge is the handle; the pill shows in its middle.
         grip.frame = NSRect(x: 0, y: b.height - PaneGrip.bandHeight, width: b.width, height: PaneGrip.bandHeight)
+        pinMark.frame = NSRect(x: b.width - 22, y: 8, width: 14, height: 14) // bottom right: clear of browser toolbars
         let pill = zoomPill.fittingSize
         zoomPill.frame = NSRect(x: b.width - pill.width - 12, y: b.height - pill.height - 10, width: pill.width, height: pill.height)
         CATransaction.begin()

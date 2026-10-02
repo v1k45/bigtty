@@ -36,6 +36,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "sidebarVisible") }
     }
 
+    /// How much of a tab's width pinned panes take (their column).
+    static var pinColumnWidth: Double {
+        get { UserDefaults.standard.object(forKey: "pinColumnWidth") as? Double ?? 0.32 }
+        set { UserDefaults.standard.set(min(0.7, max(0.15, newValue)), forKey: "pinColumnWidth") }
+    }
+
     static var dimUnfocused: Bool {
         get { UserDefaults.standard.object(forKey: "dimUnfocused") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "dimUnfocused") }

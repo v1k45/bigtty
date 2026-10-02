@@ -48,6 +48,7 @@ import AppKit
     func showChanges(_ sender: Any?)
     func movePaneToSpaceByNumber(_ sender: Any?)
     func movePaneTo(_ sender: Any?)
+    func togglePin(_ sender: Any?)
 }
 
 @MainActor
@@ -162,6 +163,7 @@ enum MainMenu {
         let moveToItem = NSMenuItem(title: "Move Pane To", action: nil, keyEquivalent: "")
         moveToItem.submenu = moveTo
         pane.addItem(moveToItem)
+        item(pane, "Pin Pane", #selector(PaneActions.togglePin(_:)), "p", [.command, .option])
         let moveNumbers = NSMenu(title: "Move Pane to Space")
         let moveNumbersItem = NSMenuItem(title: "Move Pane to Space", action: nil, keyEquivalent: "")
         moveNumbersItem.submenu = moveNumbers

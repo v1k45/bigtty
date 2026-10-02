@@ -171,6 +171,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         splitTree.paneView = { [weak self] id in self?.paneView(for: id) }
         splitTree.onRatioChange = { [weak self] path, ratio in
             guard let self, let tabID = self.tabID else { return }
+            // Resizing the pin column sets its width for every space.
+            if path.isEmpty, let root = self.store.layouts[tabID]?.root,
+               PinLayout.isColumn(root, pins: self.pinnedPanes.map(\.paneID)) {
+                Settings.pinColumnWidth = 1 - ratio
+            }
             self.store.perform { try await $0.setSplitRatio(tabID: tabID, path: path, ratio: ratio) }
         }
     }
@@ -450,10 +455,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
         let layout = tabID.flatMap { store.layouts[$0] }
         let visible = Set(layout?.root.paneIDs ?? [])
+        adoptMovedViews(visible: visible)
         for (id, view) in paneViews where !visible.contains(id) {
-            view.terminal?.detach()
             view.removeFromSuperview()
             paneViews.removeValue(forKey: id)
+            // A pin leaving with the space you left: keep its live view for
+            // a moment, it's about to arrive in the one you're in.
+            if let terminal = view.terminal, store.pane(id)?.tokens?["btty_pin"] != nil {
+                parkedPins[terminal.terminalID] = (view, Date())
+            } else {
+                view.terminal?.detach()
+            }
+        }
+        for (terminal, parked) in parkedPins where Date().timeIntervalSince(parked.since) > 3 {
+            parked.view.terminal?.detach()
+            parkedPins.removeValue(forKey: terminal)
         }
         // Each window keeps its own focused pane. herdr's focus is followed
         // only by the key window, where it moved because of this window's
@@ -487,6 +503,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         let zoomed = layout?.zoomed == true ? herdrFocus : nil
         noteShown(tab: tabID, zoomed: zoomed)
+        schedulePinFollow()
         splitTree.show(layout?.root, zoomedPane: zoomed)
         if !retagged.isEmpty { splitTree.rebuild() }
         let dim = Settings.dimUnfocused
@@ -600,7 +617,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// The pane a tab is named after: its terminal or agent; a browser or
     /// files pane beside it only names a tab that has nothing else.
     private static func leadPane(of tab: Tab, store: SessionStore) -> Pane? {
-        let panes = store.panes(in: tab.tabID)
+        // A pinned pane only visits: the tab is named after its own panes.
+        let all = store.panes(in: tab.tabID)
+        let own = all.filter { $0.tokens?["btty_pin"] == nil }
+        let panes = own.isEmpty ? all : own
         let terminals = panes.filter { $0.hostKind == nil }
         return terminals.first { $0.focused } ?? terminals.first { $0.agent != nil } ?? terminals.first ?? panes.first
     }
@@ -962,8 +982,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             content = makeFiles(pane: pane, hostID: hostID)
         } else {
             let terminal = HerdrTerminalView(pane: pane, endpoint: store.client.endpoint, controller: terminalController)
-            terminal.onFocus = { [weak self] in self?.paneGainedFocus(id) }
-            terminal.onOpenURL = { [weak self] url in self?.openURL(url, from: id) }
+            // By the view, not the id: a pane moved to another space gets a
+            // new id and keeps this view.
+            terminal.onFocus = { [weak self, weak terminal] in
+                guard let self, let terminal, let id = self.paneID(showing: terminal) else { return }
+                self.paneGainedFocus(id)
+            }
+            terminal.onOpenURL = { [weak self, weak terminal] url in
+                guard let self, let terminal, let id = self.paneID(showing: terminal) else { return }
+                self.openURL(url, from: id)
+            }
             content = terminal
         }
         let view = PaneContainerView(paneID: id, content: content)
@@ -1014,14 +1042,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// the pane spans it (full width or height). Only within this window's
     /// machine and tab.
     private func wireDrag(_ view: PaneContainerView) {
-        let id = view.paneID
-        view.dragPayload = { [weak self] in
+        view.dragPayload = { [weak self, weak view] in
             // Any pane drags: to rearrange its tab (2+ panes), or onto the
             // sidebar to move it to another tab or space.
-            guard let self else { return nil }
-            return PaneDragPayload(machineID: self.machine.id, paneID: id)
+            guard let self, let view else { return nil }
+            return PaneDragPayload(machineID: self.machine.id, paneID: view.paneID)
         }
-        view.dragTitle = { [weak self] in self?.store.pane(id)?.displayName ?? "Pane" }
+        view.dragTitle = { [weak self, weak view] in view.flatMap { self?.store.pane($0.paneID)?.displayName } ?? "Pane" }
+    }
+
+    private func paneID(showing terminal: HerdrTerminalView) -> String? {
+        paneViews.first { $0.value.terminal === terminal }?.key
     }
 
     /// The outer strip (from the area's edge inward) that means "span the
@@ -1528,6 +1559,170 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         render()
     }
 
+    // MARK: - Pinned panes
+
+    /// Live views of pins that just left with a space, by terminal, until
+    /// they arrive in the one shown (or a few seconds pass).
+    private var parkedPins: [String: (view: PaneContainerView, since: Date)] = [:]
+    private var pinFollow: DispatchWorkItem?
+    /// "tab|pins" already arranged, so a refresh doesn't redo it.
+    private var pinFollowDone = ""
+    private var followingPins = false
+
+    /// Panes pinned to follow you between spaces, in column order.
+    private var pinnedPanes: [Pane] {
+        store.snapshot.panes.filter { $0.tokens?["btty_pin"] != nil }
+            .sorted { (Int($0.tokens?["btty_pin"] ?? "") ?? 0) < (Int($1.tokens?["btty_pin"] ?? "") ?? 0) }
+    }
+
+    var focusedPaneIsPinned: Bool { focusedPaneID.flatMap { store.pane($0)?.tokens?["btty_pin"] } != nil }
+
+    /// A pane that moved here from another space comes with a new id but
+    /// the same terminal: give it the view (and live connection) it had.
+    private func adoptMovedViews(visible: Set<String>) {
+        for id in visible where paneViews[id] == nil {
+            guard let pane = store.pane(id), pane.hostKind == nil else { continue }
+            if let (old, view) = paneViews.first(where: { !visible.contains($0.key) && $0.value.terminal?.terminalID == pane.terminalID }) {
+                paneViews.removeValue(forKey: old)
+                view.paneID = id
+                paneViews[id] = view
+            } else if let parked = parkedPins.removeValue(forKey: pane.terminalID) {
+                parked.view.paneID = id
+                paneViews[id] = parked.view
+            }
+        }
+    }
+
+    /// ⌥⌘P: pin the focused pane (it follows you between spaces, in a
+    /// column on the right) or unpin it (back where it was).
+    @objc func togglePin(_: Any?) {
+        guard let id = focusedPaneID else { return NSSound.beep() }
+        focusedPaneIsPinned ? unpin(id) : pin(id)
+    }
+
+    /// Debug hook: "<pane>" pins or unpins it.
+    @objc func debugPin(_ sender: Any?) {
+        guard let id = sender as? String, store.pane(id) != nil else { return }
+        store.pane(id)?.tokens?["btty_pin"] != nil ? unpin(id) : pin(id)
+    }
+
+    private func pin(_ paneID: String) {
+        guard let pane = store.pane(paneID), let root = store.layouts[pane.tabID]?.root else { return }
+        let order = (pinnedPanes.compactMap { Int($0.tokens?["btty_pin"] ?? "") }.max() ?? 0) + 1
+        // Where it goes back to: beside the pane next to it now.
+        let (neighbor, split) = Self.sibling(of: paneID, in: root) ?? ("", .right)
+        let neighborTerminal = store.pane(neighbor)?.terminalID ?? ""
+        let home = [pane.workspaceID, pane.tabID, neighborTerminal, split.rawValue].joined(separator: "|")
+        let width = String(format: "%.3f", Settings.pinColumnWidth)
+        pinFollowDone = ""
+        store.perform { client in
+            try await client.reportMetadata(paneID: paneID, title: nil, tokens: ["btty_pin": String(order), "btty_pin_home": home, "btty_pin_width": width])
+        }
+    }
+
+    private func unpin(_ paneID: String) {
+        guard let pane = store.pane(paneID) else { return }
+        let home = (pane.tokens?["btty_pin_home"] ?? "").split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        pinFollowDone = ""
+        store.perform { client in
+            try await client.reportMetadata(paneID: paneID, title: nil, tokens: ["btty_pin": nil, "btty_pin_home": nil, "btty_pin_width": nil])
+            guard home.count == 4 else { return }
+            let (workspace, tab, neighborTerminal, split) = (home[0], home[1], home[2], home[3])
+            let snapshot = try await client.snapshot()
+            let neighbor = neighborTerminal.isEmpty ? nil : snapshot.panes.first { $0.terminalID == neighborTerminal }
+            // Back beside its old neighbour, else into its old tab or space;
+            // already there, it stays.
+            if let neighbor, neighbor.tabID != pane.tabID {
+                try await client.movePane(paneID, to: .tab(neighbor.tabID, beside: neighbor.paneID, split: split, ratio: nil))
+            } else if neighbor == nil, tab != pane.tabID, snapshot.tabs.contains(where: { $0.tabID == tab }) {
+                try await client.movePane(paneID, to: .tab(tab, beside: nil, split: "right", ratio: nil))
+            } else if neighbor == nil, workspace != pane.workspaceID, snapshot.workspaces.contains(where: { $0.workspaceID == workspace }) {
+                try await client.movePane(paneID, to: .newTab(workspaceID: workspace))
+            }
+        }
+    }
+
+    /// The pane beside `id` in its split, and that split's direction.
+    private static func sibling(of id: String, in node: LayoutNode) -> (String, SplitDirection)? {
+        guard case let .split(direction, _, first, second) = node else { return nil }
+        if case let .pane(leaf) = first, leaf == id { return (second.paneIDs.first ?? "", direction) }
+        if case let .pane(leaf) = second, leaf == id { return (first.paneIDs.last ?? "", direction) }
+        return sibling(of: id, in: first) ?? sibling(of: id, in: second)
+    }
+
+    /// Brings the pins to the tab this window shows, once it settles (quick
+    /// ⌘1–9 or ⌃⌘⇥ cycling moves them once). The key window decides.
+    private func schedulePinFollow() {
+        guard window?.isKeyWindow == true, !followingPins, let tabID, let layout = store.layouts[tabID] else { return }
+        let pins = pinnedPanes.map(\.paneID)
+        guard !pins.isEmpty else { return }
+        let key = tabID + "|" + pins.joined(separator: ",")
+        guard key != pinFollowDone else { return }
+        // Already a column, only pins here, or zoomed (herdr won't move into
+        // a zoomed tab): nothing to do.
+        if PinLayout.isColumn(layout.root, pins: pins) || layout.root.paneIDs.allSatisfy(pins.contains) || layout.zoomed {
+            pinFollowDone = key
+            return
+        }
+        pinFollow?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.followPins(to: tabID) }
+        pinFollow = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+    }
+
+    /// Moves the pins into `tabID` as a full-height column on the right:
+    /// the first beside the pane along the right edge, the rest below it,
+    /// then (if the tab's shape needs it) a rebuild by moves. Never
+    /// layout.apply, which replaces the panes it lays out.
+    private func followPins(to tabID: String) {
+        guard tabID == self.tabID, let tab = store.tab(tabID) else { return }
+        let pins = pinnedPanes.map(\.paneID)
+        let width = Settings.pinColumnWidth
+        followingPins = true
+        rearranging = true
+        let store = store
+        Task { [weak self] in
+            do {
+                let client = store.client
+                var root = try await client.layout(tabID: tabID).root
+                var placed: [String] = []
+                for pin in pins {
+                    if root.paneIDs.contains(pin) { placed.append(pin); continue }
+                    let others = pins.reduce(Optional(root)) { $0?.removing($1) }
+                    let destination: HerdrClient.MoveDestination
+                    if let last = placed.last {
+                        destination = .tab(tabID, beside: last, split: "down", ratio: nil)
+                    } else if let others, let edge = PinLayout.rightEdgeLeaf(others) {
+                        destination = .tab(tabID, beside: edge.id, split: "right", ratio: PinLayout.splitRatio(share: edge.share, width: width))
+                    } else {
+                        destination = .tab(tabID, beside: others?.paneIDs.last, split: "right", ratio: 1 - width)
+                    }
+                    let moved = try await client.movePane(pin, to: destination, focus: false)
+                    guard moved.changed else { break }
+                    placed.append(moved.paneID)
+                    root = try await client.layout(tabID: tabID).root
+                }
+                if placed.count == pins.count, !PinLayout.isColumn(root, pins: placed),
+                   let others = placed.reduce(Optional(root), { $0?.removing($1) }) {
+                    let column = PinLayout.column(others: others, pins: placed, width: width)
+                    try await client.applyLayout(column, current: root, tabID: tabID, workspaceID: tab.workspaceID)
+                }
+            } catch {
+                NSLog("bigtty: pins couldn't follow: \(error)")
+            }
+            try? await store.refresh()
+            await MainActor.run {
+                guard let self else { return }
+                // Done with this tab and these pins, however it went: no
+                // retrying in a loop (new ids after a move get one check).
+                self.pinFollowDone = tabID + "|" + pins.joined(separator: ",")
+                self.followingPins = false
+                self.rearranging = false
+                self.render()
+            }
+        }
+    }
+
     // MARK: - Moving panes to other tabs and spaces
 
     enum MoveTarget {
@@ -1992,6 +2187,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     func windowDidBecomeKey(_: Notification) {
         restartSeenClock()
+        // Pins follow the window you're in.
+        pinFollowDone = ""
+        schedulePinFollow()
         // Coming back to a window takes control of the pane it shows.
         if let id = lastFocusedPane, let terminal = paneViews[id]?.terminal, terminal.mode == .observe {
             terminal.takeControl()
@@ -2500,4 +2698,13 @@ final class PlaceholderView: NSView {
     }
     @objc private func actionClicked() { onAction?() }
     @objc private func connectClicked() { onConnect?() }
+}
+
+extension MainWindowController: NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(PaneActions.togglePin(_:)) {
+            item.title = focusedPaneIsPinned ? "Unpin Pane" : "Pin Pane"
+        }
+        return true
+    }
 }

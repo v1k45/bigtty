@@ -68,9 +68,12 @@ final class SpaceInfoCenter {
 
     // MARK: - Derivation
 
-    /// The pane that speaks for a space: the focused pane of its active tab.
+    /// The pane that speaks for a space: the focused pane of its active tab,
+    /// never a pinned pane passing through (its folder is somewhere else).
     private func leadPane(_ workspace: Workspace) -> Pane? {
-        let panes = store.panes(in: workspace.activeTabID)
+        let all = store.panes(in: workspace.activeTabID)
+        let own = all.filter { $0.tokens?["btty_pin"] == nil }
+        let panes = own.isEmpty ? all : own
         return panes.first { $0.focused } ?? panes.first
     }
 
