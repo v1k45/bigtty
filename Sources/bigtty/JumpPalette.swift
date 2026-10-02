@@ -404,7 +404,9 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         switch selector {
         case #selector(NSResponder.moveDown(_:)): move(1); return true
         case #selector(NSResponder.moveUp(_:)): move(-1); return true
-        case #selector(NSResponder.insertNewline(_:)): pickSelected(); return true
+        // ⌥Return arrives as its own command (Move Pane to… reads ⌥ as "stay").
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            pickSelected(); return true
         case #selector(NSResponder.cancelOperation(_:)): panel?.orderOut(nil); return true
         default: return false
         }

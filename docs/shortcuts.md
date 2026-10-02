@@ -10,6 +10,7 @@
 | ⌥1–9 · ⌘] / ⌘[ · ⌥⌘ arrows | Pane by number · next / previous pane · pane in a direction |
 | ⌘D / ⇧⌘D · ⇧⌘↩ | Split right / down · zoom pane |
 | ⌃⌘ arrows | Resize pane |
+| ⌃⌥⌘1–9 · ⌘K ▸ Move Pane to… | Move the pane to space N · to any space or tab |
 | ⌘T · ⌥⌘T · ⌘N · ⇧⌘N | New tab · new browser tab · new space · new window |
 | ⌥⌘B · ⇧⌥⌘B · ⌘L | Split with browser · browser here · address bar |
 | ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
