@@ -238,6 +238,9 @@ final class MachineManager {
     nonisolated static func defaultName(for target: String) -> String {
         var host = target.split(separator: "@").last.map(String.init) ?? target
         host = host.split(separator: ":").first.map(String.init) ?? host
+        // An address stays whole ("192.168.1.20", not "192"); a name loses
+        // its domain ("box.example.com" → "box").
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) { return host }
         return host.split(separator: ".").first.map(String.init) ?? host
     }
 
