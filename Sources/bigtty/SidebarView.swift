@@ -67,6 +67,8 @@ final class SidebarView: NSView {
     var onSelectSpace: ((String) -> Void)?
     var onSelectTab: ((String, String) -> Void)?
     var onSpaceMenu: ((String) -> NSMenu?)?
+    var onCloseSpace: ((String) -> Void)?
+    var onCloseTab: ((String, String) -> Void)?
     var onMachineClick: ((String) -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
@@ -239,6 +241,8 @@ final class SidebarView: NSView {
         let card = SpaceCard(space: space)
         card.onClick = { [weak self] in self?.onSelectSpace?(space.id) }
         card.onTab = { [weak self] tab in self?.onSelectTab?(space.id, tab) }
+        card.onClose = { [weak self] in self?.onCloseSpace?(space.id) }
+        card.onCloseTab = { [weak self] tab in self?.onCloseTab?(space.id, tab) }
         card.menuProvider = { [weak self] in self?.onSpaceMenu?(space.id) }
         return card
     }
@@ -508,7 +512,11 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     let space: SidebarModel.Space
     var onClick: (() -> Void)?
     var onTab: ((String) -> Void)?
+    var onClose: (() -> Void)?
+    var onCloseTab: ((String) -> Void)?
     var menuProvider: (() -> NSMenu?)?
+    /// Shown on hover in place of the shortcut.
+    private let closeIcon = CloseIcon()
 
     private let dot = NSView()
     private let name = NSTextField(labelWithString: "")
@@ -519,7 +527,14 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     private let tabSummary = NSTextField(labelWithString: "")
     private var chips: [NSTextField] = []
     private var tabRows: [TabRow] = []
-    private var hovering = false { didSet { updateBackground(); updateFade() } }
+    private var hovering = false {
+        didSet {
+            updateBackground()
+            updateFade()
+            closeIcon.isHidden = !hovering
+            shortcut.isHidden = hovering
+        }
+    }
 
     /// Quiet spaces fade back until hovered or selected.
     private func updateFade() {
@@ -573,6 +588,9 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
         tabSummary.lineBreakMode = .byTruncatingTail
         tabSummary.isHidden = space.tabSummary == nil
         for view in [dot, name, shortcut, meta, line, tabSummary] { addSubview(view) }
+        closeIcon.isHidden = true
+        closeIcon.toolTip = "Close Space"
+        addSubview(closeIcon)
 
         for port in space.ports.prefix(3) {
             let chip = NSTextField(labelWithString: ":\(port)")
@@ -590,6 +608,7 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
         for tab in space.tabs {
             let row = TabRow(tab: tab)
             row.onClick = { [weak self] in self?.onTab?(tab.id) }
+            row.onClose = { [weak self] in self?.onCloseTab?(tab.id) }
             tabRows.append(row)
             addSubview(row)
         }
@@ -635,6 +654,7 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
 
     override func layout() {
         super.layout()
+        syncHover()
         let w = bounds.width
         var x: CGFloat = 10
         if !dot.isHidden {
@@ -645,6 +665,7 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
         let shortcutWidth = max(32, ceil(shortcut.intrinsicContentSize.width) + 2)
         shortcut.frame = NSRect(x: w - 10 - shortcutWidth, y: 9, width: shortcutWidth, height: 15)
         speaker.frame = NSRect(x: w - 58, y: 10, width: 14, height: 13)
+        closeIcon.frame = NSRect(x: w - 8 - 18, y: 7, width: 18, height: 18)
         meta.frame = NSRect(x: 10, y: 26, width: w - 20, height: 15)
         var y: CGFloat = 44
         var lx: CGFloat = 10
@@ -671,11 +692,20 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     override func mouseEntered(with _: NSEvent) { hovering = true }
     override func mouseExited(with _: NSEvent) { hovering = false }
 
+    /// The sidebar rebuilds its rows as things change; a new one under the
+    /// pointer gets no mouseEntered, so it looks for itself.
+    private func syncHover() {
+        guard let window else { return }
+        let inside = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        if inside != hovering { hovering = inside }
+    }
+
     private var pressEvent: NSEvent?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if tabRows.contains(where: { $0.frame.contains(point) }) { return super.mouseDown(with: event) }
+        if !closeIcon.isHidden, closeIcon.frame.insetBy(dx: -3, dy: -3).contains(point) { return onClose?() ?? () }
         pressEvent = event
         onClick?()
     }
@@ -718,13 +748,28 @@ private final class TabRow: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
     var onClick: (() -> Void)?
+    var onClose: (() -> Void)?
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    /// Shown on hover in place of the detail ("+N more" has none).
+    private let closeIcon = CloseIcon()
+    private let closable: Bool
+    private var hovering = false {
+        didSet {
+            closeIcon.isHidden = !(hovering && closable)
+            detail.isHidden = hovering && closable
+            workingDotHidden(hovering && closable)
+        }
+    }
+    private var dotWanted = false
+
+    private func workingDotHidden(_ hide: Bool) { workingDot.isHidden = hide || !dotWanted }
     /// Its agent is working: a small breathing dot before the detail.
     private let workingDot = NSView()
 
     init(tab: SidebarModel.Tab) {
+        closable = !tab.id.isEmpty
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 5
@@ -751,8 +796,13 @@ private final class TabRow: NSView {
         workingDot.wantsLayer = true
         workingDot.layer?.cornerRadius = 3
         workingDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
-        workingDot.isHidden = !tab.working || tab.alert
+        dotWanted = tab.working && !tab.alert
+        workingDot.isHidden = !dotWanted
         addSubview(workingDot)
+        closeIcon.isHidden = true
+        closeIcon.toolTip = "Close Tab"
+        addSubview(closeIcon)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
         if !workingDot.isHidden { NSView.breathe(workingDot) }
         setAccessibilityRole(.button)
         setAccessibilityLabel("Tab \(tab.label)")
@@ -763,6 +813,10 @@ private final class TabRow: NSView {
 
     override func layout() {
         super.layout()
+        if let window {
+            let inside = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+            if inside != hovering { hovering = inside }
+        }
         let h = bounds.height
         icon.frame = NSRect(x: 6, y: (h - 12) / 2, width: 13, height: 12)
         // The name takes whatever the detail ("needs you", "2 panes") leaves.
@@ -770,10 +824,54 @@ private final class TabRow: NSView {
         detail.frame = NSRect(x: bounds.width - detailWidth - 6, y: (h - 14) / 2, width: detailWidth, height: 14)
         let dotSpace: CGFloat = workingDot.isHidden ? 0 : 12
         workingDot.frame = NSRect(x: bounds.width - detailWidth - 6 - 10, y: (h - 6) / 2, width: 6, height: 6)
-        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: max(0, bounds.width - 24 - detailWidth - dotSpace - 12), height: 15)
+        label.frame = NSRect(x: 24, y: (h - 15) / 2, width: max(0, bounds.width - 24 - max(detailWidth + dotSpace, 22) - 12), height: 15)
+        closeIcon.frame = NSRect(x: bounds.width - 4 - 18, y: (h - 18) / 2, width: 18, height: 18)
     }
 
-    override func mouseDown(with _: NSEvent) { onClick?() }
+    override func mouseEntered(with _: NSEvent) { hovering = true }
+    override func mouseExited(with _: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if !closeIcon.isHidden, closeIcon.frame.insetBy(dx: -3, dy: -3).contains(point) { return onClose?() ?? () }
+        onClick?()
+    }
+}
+
+/// The × on a hovered space card or tab row; the row handles the click.
+private final class CloseIcon: NSView {
+    private let image = NSImageView()
+    private var hovering = false { didSet { updateBackground() } }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        image.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
+        image.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        image.contentTintColor = .secondaryLabelColor
+        addSubview(image)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        image.frame = bounds.insetBy(dx: 3, dy: 3)
+    }
+
+    override func hitTest(_: NSPoint) -> NSView? { nil }
+    override func mouseEntered(with _: NSEvent) { hovering = true }
+    override func mouseExited(with _: NSEvent) { hovering = false }
+
+    private func updateBackground() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = hovering ? NSColor.labelColor.withAlphaComponent(0.12).cgColor : nil
+        }
+        image.contentTintColor = hovering ? .labelColor : .secondaryLabelColor
+    }
 }
 
 /// A borderless symbol button for the title strip; takes the click

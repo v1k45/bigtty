@@ -224,6 +224,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             guard let self, let ref = SpaceRef(key: key), ref.machine == self.machine.id else { return nil }
             return self.spaceMenu(ref.workspace)
         }
+        sidebar.onCloseSpace = { [weak self] key in
+            guard let self, let ref = SpaceRef(key: key), let store = self.manager.machine(ref.machine)?.store else { return }
+            self.confirmCloseSpace(ref.workspace, store: store, agentTitles: self.manager.machine(ref.machine)?.spaceInfo?.agentTitles ?? [:])
+        }
+        sidebar.onCloseTab = { [weak self] key, tab in
+            guard let self, let ref = SpaceRef(key: key), let machine = self.manager.machine(ref.machine),
+                  let store = machine.store else { return }
+            self.confirmCloseTab(tab, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
+        }
         sidebar.onMachineClick = { [weak self] id in
             guard let self, let machine = self.manager.machine(id) else { return }
             self.onMachineProblem?(machine)
@@ -905,7 +914,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             if index < order.count - 1 { add("Move Down") { [weak self] in self?.moveSpace(id, to: index + 1) } }
         }
         menu.addItem(.separator())
-        add("Close Space…") { [weak self] in self?.confirmCloseSpace(id) }
+        add("Close Space…") { [weak self] in guard let self else { return }; self.confirmCloseSpace(id, store: self.store, agentTitles: self.machine.spaceInfo?.agentTitles ?? [:]) }
         return menu
     }
 
@@ -1701,7 +1710,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     @objc func closeSpace(_: Any?) {
-        if let workspaceID { confirmCloseSpace(workspaceID) }
+        if let workspaceID { confirmCloseSpace(workspaceID, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:]) }
     }
 
     // MARK: - Text size (View ▸ Bigger / Smaller / Actual Size)
@@ -1754,17 +1763,35 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
-    private func confirmCloseSpace(_ id: String) {
+    private func confirmCloseSpace(_ id: String, store: SessionStore, agentTitles: [String: String]) {
         guard let window, let workspace = store.workspace(id) else { return }
         let alert = NSAlert()
-        alert.messageText = "Close “\(workspace.label)”?"
+        alert.messageText = "Close “\(Self.spaceName(workspace, store: store, agentTitles: agentTitles))”?"
         alert.informativeText = "Its \(workspace.paneCount) pane\(workspace.paneCount == 1 ? "" : "s") and anything running in them stop. Files on disk are not touched."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Close Space")
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
+        alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
-            self?.store.perform { try await $0.closeWorkspace(id) }
+            store.perform { try await $0.closeWorkspace(id) }
+        }
+    }
+
+    /// The × on a sidebar tab: closes it, asking first if an agent runs there.
+    private func confirmCloseTab(_ tabID: String, store: SessionStore, agentTitles: [String: String]) {
+        let panes = store.panes(in: tabID)
+        guard let window, panes.contains(where: { $0.agent != nil }),
+              let tab = store.snapshot.tabs.first(where: { $0.tabID == tabID })
+        else { return store.perform { try await $0.closeTab(tabID) } }
+        let alert = NSAlert()
+        alert.messageText = "Close “\(Self.tabTitle(tab, store: store, agentTitles: agentTitles))”?"
+        alert.informativeText = "An agent is running in this tab; closing it stops the agent and everything else in the tab."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            store.perform { try await $0.closeTab(tabID) }
         }
     }
 
