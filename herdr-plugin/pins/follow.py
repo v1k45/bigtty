@@ -1,4 +1,5 @@
-"""Brings pinned panes to herdr's focused tab, as a column on the right.
+"""Brings pinned panes to herdr's focused tab, as a column on the right;
+as an action ("Pin or unpin pane"), pins or unpins the focused pane.
 
 bigtty pins a pane by tagging it (pane tokens: btty_pin = its order,
 btty_pin_width = the column's share of the tab). bigtty moves pins itself
@@ -104,13 +105,72 @@ def follow():
         placed.append(moved["pane"]["pane_id"])
 
 
+def sibling(node, pane_id):
+    """The pane beside `pane_id` in its split, and that split's direction."""
+    if node.get("type") != "split":
+        return None
+    first, second = node["first"], node["second"]
+    if first.get("type") == "pane" and first["pane_id"] == pane_id:
+        return leaves(second)[0], node["direction"]
+    if second.get("type") == "pane" and second["pane_id"] == pane_id:
+        return leaves(first)[-1], node["direction"]
+    return sibling(first, pane_id) or sibling(second, pane_id)
+
+
+def toggle_pin(pane_id):
+    """Pins the pane (the same tokens bigtty writes, so either side sees
+    it), or unpins it and puts it back beside the pane it was next to."""
+    snap = call("session.snapshot")["snapshot"]
+    pane = next((p for p in snap["panes"] if p["pane_id"] == pane_id), None)
+    if pane is None:
+        return
+    tokens = pane.get("tokens") or {}
+    if tokens.get("btty_pin"):
+        call("pane.report_metadata", {"pane_id": pane_id, "source": "bigtty",
+                                      "tokens": {"btty_pin": None, "btty_pin_home": None, "btty_pin_width": None}})
+        home = (tokens.get("btty_pin_home") or "").split("|")
+        if len(home) != 4:
+            return
+        workspace, tab, neighbor_terminal, split = home
+        neighbor = next((p for p in snap["panes"] if neighbor_terminal and p["terminal_id"] == neighbor_terminal), None)
+        tabs = {t["tab_id"] for t in snap["tabs"]}
+        spaces = {w["workspace_id"] for w in snap["workspaces"]}
+        if neighbor and neighbor["tab_id"] != pane["tab_id"]:
+            destination = {"type": "tab", "tab_id": neighbor["tab_id"], "split": split if split in ("right", "down") else "right",
+                           "target_pane_id": neighbor["pane_id"]}
+        elif not neighbor and tab != pane["tab_id"] and tab in tabs:
+            destination = {"type": "tab", "tab_id": tab, "split": "right"}
+        elif not neighbor and workspace != pane["workspace_id"] and workspace in spaces:
+            destination = {"type": "new_tab", "workspace_id": workspace}
+        else:
+            return  # already home
+        call("pane.move", {"pane_id": pane_id, "destination": destination, "focus": True})
+        return
+    pins = [p for p in snap["panes"] if (p.get("tokens") or {}).get("btty_pin")]
+    order = max([int(p["tokens"]["btty_pin"]) for p in pins if p["tokens"]["btty_pin"].isdigit()] or [0]) + 1
+    width = (pins[0]["tokens"].get("btty_pin_width") if pins else None) or "0.320"
+    root = call("layout.export", {"tab_id": pane["tab_id"]})["layout"]["root"]
+    near = sibling(root, pane_id)
+    neighbor_terminal = ""
+    if near:
+        neighbor_terminal = next((p["terminal_id"] for p in snap["panes"] if p["pane_id"] == near[0]), "")
+    home = "|".join([pane["workspace_id"], pane["tab_id"], neighbor_terminal, near[1] if near else "right"])
+    call("pane.report_metadata", {"pane_id": pane_id, "source": "bigtty",
+                                  "tokens": {"btty_pin": str(order), "btty_pin_home": home, "btty_pin_width": width}})
+
+
 def main():
     if not SOCKET:
+        return
+    os.makedirs(STATE, exist_ok=True)
+    if os.environ.get("HERDR_PLUGIN_ACTION_ID"):
+        pane_id = os.environ.get("HERDR_PANE_ID") or ""
+        if pane_id:
+            toggle_pin(pane_id)
         return
     # Quick switching fires several hooks: let it settle, then one at a time,
     # each acting on whatever is focused by then.
     time.sleep(0.12)
-    os.makedirs(STATE, exist_ok=True)
     with open(os.path.join(STATE, "follow.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         follow()

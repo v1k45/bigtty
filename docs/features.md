@@ -48,7 +48,8 @@ settle; a zoomed tab is left alone.
 
 In herdr's terminal UI, pins stay where you last were, unless you add the
 [pins plugin](../herdr-plugin/pins/README.md) (`herdr plugin install
-v1k45/bigtty/herdr-plugin/pins`): then they follow you there too.
+v1k45/bigtty/herdr-plugin/pins`): then they follow you there too, and herdr
+gets a **Pin or unpin pane** action for its command palette or a key.
 
 ## Spaces
 
