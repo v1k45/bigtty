@@ -1231,7 +1231,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         // Tag panes made before addresses were shared with herdr, too.
-        if state.url != nil, pane.tokens?["btty_url"] != state.url { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        if state.url != nil, HostPaneState.read("btty_url", from: pane.tokens) != state.url { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         browser.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return browser
     }
@@ -1246,7 +1246,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let id = pane.paneID
         files.onFocus = { [weak self] in self?.paneGainedFocus(id) }
         files.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
-        if state.path != nil, pane.tokens?["btty_path"] != state.path { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        if state.path != nil, HostPaneState.read("btty_path", from: pane.tokens) != state.path { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         files.onInsertPath = { [weak self] path in self?.insertPath(path, near: id) }
         files.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
         return files

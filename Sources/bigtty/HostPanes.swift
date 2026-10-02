@@ -36,22 +36,58 @@ struct HostPaneState: Codable, Equatable {
 extension HostPaneState {
     /// herdr tags for the pane: what it is and what it shows, so any bigtty
     /// that connects (another Mac, a fresh install) can show it too.
-    func tokens(id: String) -> [String: String] {
-        var tokens = ["btty_kind": kind.rawValue, "btty_id": id]
-        tokens["btty_url"] = kind == .browser ? url : nil
-        tokens["btty_path"] = kind == .browser ? nil : path
-        tokens["btty_selection"] = kind == .browser ? nil : selection
-        tokens["btty_mode"] = kind == .browser ? nil : mode
+    func tokens(id: String) -> [String: String?] {
+        var tokens: [String: String?] = ["btty_kind": kind.rawValue, "btty_id": id]
+        if kind == .browser {
+            Self.write("btty_url", url, into: &tokens)
+        } else {
+            Self.write("btty_path", path, into: &tokens)
+            Self.write("btty_selection", selection, into: &tokens)
+            if let mode { tokens["btty_mode"] = mode }
+        }
         return tokens
     }
 
     /// A pane this Mac has no record of, from its herdr tags.
     init(kind: HostPaneKind, tokens: [String: String]?) {
         self.init(kind: kind)
-        url = tokens?["btty_url"]
-        path = tokens?["btty_path"]
-        selection = tokens?["btty_selection"]
+        url = Self.read("btty_url", from: tokens)
+        path = Self.read("btty_path", from: tokens)
+        selection = Self.read("btty_selection", from: tokens)
         mode = tokens?["btty_mode"]
+    }
+
+    /// herdr keeps only the first 80 characters of a tag's value, so a long
+    /// one (a deep path, a long URL) goes over several: `btty_path`, then
+    /// `btty_path_2`, `btty_path_3`… The tag after the last is cleared, which
+    /// ends it even where a longer value left more behind.
+    nonisolated static let tagLimit = 80
+    private nonisolated static let maxParts = 32
+
+    nonisolated static func write(_ key: String, _ value: String?, into tokens: inout [String: String?]) {
+        guard let value else { return }
+        let scalars = Array(value.unicodeScalars)
+        var parts: [String] = []
+        var start = 0
+        repeat {
+            let end = min(start + tagLimit, scalars.count)
+            var part = String.UnicodeScalarView()
+            part.append(contentsOf: scalars[start..<end])
+            parts.append(String(part))
+            start = end
+        } while start < scalars.count && parts.count < maxParts
+        for (i, part) in parts.enumerated() { tokens[i == 0 ? key : "\(key)_\(i + 1)"] = part }
+        tokens.updateValue(nil, forKey: "\(key)_\(parts.count + 1)")
+    }
+
+    nonisolated static func read(_ key: String, from tokens: [String: String]?) -> String? {
+        guard let tokens, var value = tokens[key] else { return nil }
+        var i = 2
+        while i <= maxParts, let part = tokens["\(key)_\(i)"] {
+            value += part
+            i += 1
+        }
+        return value
     }
 }
 
