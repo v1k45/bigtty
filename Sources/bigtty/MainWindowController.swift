@@ -1257,20 +1257,35 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let line = target.line
         let relative = !target.path.hasPrefix("/") && !target.path.hasPrefix("~")
         Task.detached {
-            let exists = source.exists(path)
-            let isDirectory = exists && source.isDirectory(path)
-            let repo = GitClient.repository(containing: exists ? path : cwd, runner: source.runner)
+            var path = path
+            var exists = source.exists(path)
+            var isDirectory = exists && source.isDirectory(path)
+            var repo = GitClient.repository(containing: exists ? path : cwd, runner: source.runner)
             // A bare name ("workspace.png" in an agent's table): find it in
             // the project.
-            let matches = !exists && relative ? (repo?.files(named: target.path) ?? []) : []
+            var matches = !exists && relative ? (repo?.files(named: target.path) ?? []) : []
+            // Not in this checkout: maybe in another worktree of the repo,
+            // where an agent may be working ("spikes/results/", "chart.png").
+            if !exists, relative, matches.isEmpty, let here = repo {
+                for worktree in here.otherWorktrees() {
+                    let there = (worktree.root as NSString).appendingPathComponent(target.path)
+                    if source.exists(there) {
+                        (path, exists, isDirectory, repo) = (there, true, source.isDirectory(there), worktree)
+                        break
+                    }
+                    let found = worktree.files(named: target.path)
+                    if !found.isEmpty { (matches, repo) = (found, worktree); break }
+                }
+            }
+            let (finalPath, found, folder, root, choices) = (path, exists, isDirectory, repo?.root, matches)
             await MainActor.run {
-                if exists {
-                    let folder = isDirectory ? path : (path as NSString).deletingLastPathComponent
-                    self.showInFiles(path: isDirectory ? nil : path, root: repo?.root ?? folder, line: line, beside: paneID)
-                } else if matches.count == 1, let match = matches.first {
-                    self.showInFiles(path: match, root: repo?.root ?? (match as NSString).deletingLastPathComponent, line: line, beside: paneID)
-                } else if matches.count > 1, let repo {
-                    self.chooseFile(matches, root: repo.root, line: line, beside: paneID)
+                if found {
+                    let parent = folder ? finalPath : (finalPath as NSString).deletingLastPathComponent
+                    self.showInFiles(path: folder ? nil : finalPath, root: root ?? parent, line: line, beside: paneID)
+                } else if choices.count == 1, let match = choices.first {
+                    self.showInFiles(path: match, root: root ?? (match as NSString).deletingLastPathComponent, line: line, beside: paneID)
+                } else if choices.count > 1, let root {
+                    self.chooseFile(choices, root: root, line: line, beside: paneID)
                 } else {
                     NSSound.beep()
                 }

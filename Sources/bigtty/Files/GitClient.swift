@@ -52,6 +52,16 @@ struct GitClient: Sendable {
             .map { (root as NSString).appendingPathComponent($0) }
     }
 
+    /// The repository's other checkouts (`git worktree add`): an agent may
+    /// work in one while its terminal sits in another.
+    func otherWorktrees() -> [GitClient] {
+        guard let out = git(["worktree", "list", "--porcelain"]) else { return [] }
+        return out.split(separator: "\n")
+            .compactMap { $0.hasPrefix("worktree ") ? String($0.dropFirst("worktree ".count)) : nil }
+            .filter { $0 != root }
+            .map { GitClient(root: $0, runner: runner) }
+    }
+
     func status() -> Status {
         var changes: [String: Change] = [:]
         guard let out = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else {
