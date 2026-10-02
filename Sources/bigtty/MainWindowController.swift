@@ -572,10 +572,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     static func tabTitle(_ tab: Tab, store: SessionStore, agentTitles: [String: String]) -> String {
         if tab.label != String(tab.number), !tab.label.isEmpty { return tab.label }
         let lead = leadPane(of: tab, store: store)
-        if let title = paneTitle(lead, agentTitles: agentTitles) { return title }
-        if let title = lead?.shownTitle { return title }
+        if let title = paneTitle(lead, agentTitles: agentTitles) ?? lead?.shownTitle { return shortShellTitle(title) ?? title }
         if let agent = lead?.displayAgent ?? lead?.agent { return agent }
         return "tab \(tab.number)"
+    }
+
+    /// A shell's own title ("me@host: ~/code/api") as just its folder ("api").
+    static func shortShellTitle(_ title: String) -> String? {
+        guard let match = title.firstMatch(of: /^[^\s@]+@[^\s:]+:\s*(\S.*)$/) else { return nil }
+        let path = String(match.1).trimmingCharacters(in: .whitespaces)
+        if path == "~" || path == "/" { return path }
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? path : name
     }
 
     /// The pane a tab is named after: its terminal or agent; a browser or

@@ -112,7 +112,7 @@ final class HostPaneStore {
         }
     }
 
-    static func newID(_ kind: HostPaneKind) -> String {
+    nonisolated static func newID(_ kind: HostPaneKind) -> String {
         "\(kind.rawValue.prefix(1))\(UUID().uuidString.prefix(8).lowercased())"
     }
 
@@ -177,7 +177,11 @@ final class HostPaneStore {
         let command: String
         if remote {
             // No btty on the other machine: a plain sh placeholder does the same job.
-            let banner = "\\033[2J\\033[H\\n  bigtty \(kind.rawValue) pane\\n  \(title.replacingOccurrences(of: "'", with: ""))\\n\\n  Open this workspace in bigtty to see it.\\n"
+            // The address or folder goes on its own line, so a bigtty that
+            // finds the pane untagged can read back what it showed.
+            let shows = (state.kind == .browser ? state.url : state.path).map { "\\n  \($0)" } ?? ""
+            let banner = "\\033[2J\\033[H\\n  bigtty \(kind.rawValue) pane\\n  \(title)\(shows)\\n\\n  Open this workspace in bigtty to see it.\\n"
+                .replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "%", with: "%%")
             command = "sh -c " + shellQuote("printf '\(banner)'; stty -echo -icanon 2>/dev/null; exec cat >/dev/null")
         } else {
             command = [bttyPath, "pane-host", kind.rawValue, id, title].map(shellQuote).joined(separator: " ")
@@ -187,8 +191,9 @@ final class HostPaneStore {
 
     /// herdr drops pane tags on a restart or live handoff while the pane's
     /// placeholder keeps running. Untagged panes are checked once: one
-    /// running `btty pane-host <kind> <id>` (or, remotely, our placeholder in
-    /// a pane we recorded) gets its tags back.
+    /// running `btty pane-host <kind> <id>`, or, remotely, our placeholder in
+    /// a pane we recorded, or showing our placeholder's text, gets its tags
+    /// back.
     private static var checkedPanes: Set<String> = []
 
     static func restoreTags(store: SessionStore, remote: Bool) {
@@ -208,9 +213,17 @@ final class HostPaneStore {
                     var tag: (id: String, kind: HostPaneKind)?
                     if let at = args.firstIndex(of: "pane-host"), args.count > at + 2, let kind = HostPaneKind(rawValue: args[at + 1]) {
                         tag = (args[at + 2], kind)
-                    } else if remote, args.first.map({ ($0 as NSString).lastPathComponent == "cat" }) == true,
-                              let (id, state) = recorded[pane.paneID] {
-                        tag = (id, state.kind)
+                    } else if remote, args.first.map({ ($0 as NSString).lastPathComponent == "cat" }) == true {
+                        if let (id, state) = recorded[pane.paneID] {
+                            tag = (id, state.kind)
+                        } else if let text = try? await client.readPane(pane.paneID, lines: 12),
+                                  let found = placeholder(in: text) {
+                            // Made by another Mac, or forgotten here: start it
+                            // again from what the placeholder says it showed.
+                            let id = newID(found.kind)
+                            await MainActor.run { shared[id] = found }
+                            tag = (id, found.kind)
+                        }
                     }
                     guard let tag else { continue }
                     let state = await MainActor.run { shared[tag.id] } ?? HostPaneState(kind: tag.kind)
@@ -220,6 +233,23 @@ final class HostPaneStore {
                 }
             }
         }
+    }
+
+    /// What a remote placeholder's text says the pane is: "bigtty browser
+    /// pane" and its address (or a files pane and its folder).
+    nonisolated static func placeholder(in text: String) -> HostPaneState? {
+        let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let head = lines.first(where: { $0.hasPrefix("bigtty ") && $0.hasSuffix(" pane") }),
+              let kind = HostPaneKind(rawValue: String(head.dropFirst("bigtty ".count).dropLast(" pane".count)))
+        else { return nil }
+        var state = HostPaneState(kind: kind)
+        if kind == .browser {
+            state.url = lines.first { $0.hasPrefix("http://") || $0.hasPrefix("https://") }
+        } else {
+            state.path = lines.first { $0.hasPrefix("/") || $0.hasPrefix("~") }
+            state.mode = kind == .diff ? "changes" : nil
+        }
+        return state
     }
 
     static func hostTitle(_ state: HostPaneState) -> String {
