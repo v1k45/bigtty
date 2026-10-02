@@ -51,7 +51,15 @@ final class FileSource: @unchecked Sendable {
             var dir: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &dir) && dir.boolValue
         }
-        return runner.run("test", ["-d", path]) != nil
+        return check("-d", path)
+    }
+
+    /// `test` over SSH, read from what it prints rather than its exit
+    /// status: a server that reports every command as successful (seen
+    /// through Tailscale SSH) would otherwise make every path a folder.
+    private func check(_ flag: String, _ path: String) -> Bool {
+        runner.run("sh", ["-c", "test \(flag) \"$1\" && echo yes", "sh", path])?
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "yes"
     }
 
     /// Modification time, to notice edits to the open file.
@@ -67,7 +75,7 @@ final class FileSource: @unchecked Sendable {
     /// The home directory, for panes with no better starting point.
     func exists(_ path: String) -> Bool {
         guard isRemote else { return FileManager.default.fileExists(atPath: path) }
-        return runner.run("test", ["-e", path]) != nil
+        return check("-e", path)
     }
 
     /// Why a file came back empty or unusable, in words for the pane:
