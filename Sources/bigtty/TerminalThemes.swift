@@ -177,7 +177,7 @@ enum TerminalAppearance {
     static func makeController() -> TerminalController {
         let controller = TerminalController(configSource: configSource(), theme: TerminalThemeChoice.find(Settings.terminalTheme).theme)
         lastIssue = controller.lastConfigurationIssue
-        controller.setTerminalConfiguration(overrides())
+        controller.setTerminalConfiguration(overrides(for: controller))
         return controller
     }
 
@@ -225,7 +225,7 @@ enum TerminalAppearance {
     static func apply(to controller: TerminalController) {
         lastIssue = controller.updateConfigSource(configSource()) ? nil : controller.lastConfigurationIssue
         controller.setTheme(TerminalThemeChoice.find(Settings.terminalTheme).theme)
-        controller.setTerminalConfiguration(overrides())
+        controller.setTerminalConfiguration(overrides(for: controller))
         Settings.changed()
     }
 
@@ -262,12 +262,18 @@ enum TerminalAppearance {
         return changed ? .generated(lines.joined(separator: "\n")) : .file(path)
     }
 
-    private static func overrides() -> TerminalConfiguration {
-        TerminalConfiguration { builder in
+    private static func overrides(for controller: TerminalController) -> TerminalConfiguration {
+        let c = controller.backgroundColor
+        let light = (0.2126 * Double(c.red) + 0.7152 * Double(c.green) + 0.0722 * Double(c.blue)) / 255 >= 0.5
+        return TerminalConfiguration { builder in
             let family = Settings.fontFamily.trimmingCharacters(in: .whitespaces)
             if !family.isEmpty { builder.withFontFamily(family) }
             if Settings.fontSize > 0 { builder.withFontSize(Float(Settings.fontSize)) }
-            if let ratio = Settings.contrast.ratio { builder.withMinimumContrast(ratio) }
+            // With a see-through background Ghostty measures contrast
+            // against black, turning dark text on a light theme white.
+            if let ratio = Settings.contrast.ratio, !(light && Settings.terminalOpacity < 1) {
+                builder.withMinimumContrast(ratio)
+            }
             // Translucent terminals: Ghostty leaves default-background cells
             // clear and the pane card paints the color once, at the chosen
             // opacity (both painting it doubled the opacity toward black).

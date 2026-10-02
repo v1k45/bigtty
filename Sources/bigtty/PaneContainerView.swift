@@ -12,6 +12,10 @@ final class PaneContainerView: NSView {
     var paneID: String
     let content: NSView
     private let ring = CALayer()
+    /// Unfocused panes fade toward their own background (not see-through:
+    /// the window behind follows macOS, which may be light under a dark
+    /// theme and wash the pane out).
+    private let dim = CALayer()
     private let detached = DetachedOverlay()
     private let zoomPill = ZoomPill()
     private let grip = PaneGrip()
@@ -88,6 +92,9 @@ final class PaneContainerView: NSView {
         ring.borderColor = NSColor.clear.cgColor
         ring.zPosition = 10
         layer?.addSublayer(ring)
+        dim.zPosition = 9
+        dim.opacity = 0
+        layer?.addSublayer(dim)
 
         terminal?.onDetached = { [weak self] reason in self?.detached.show(.disconnected(reason)) }
         terminal?.onModeChange = { [weak self] mode in
@@ -109,6 +116,10 @@ final class PaneContainerView: NSView {
         // them must be as see-through, or the material can't show.
         let alpha = terminal != nil ? CGFloat(Settings.terminalOpacity) : 1
         layer?.backgroundColor = theme.pane.withAlphaComponent(alpha).cgColor
+        // Text and controls inside (the files tree, the address bar) match
+        // the terminal theme, which can be dark while macOS is light.
+        appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+        dim.backgroundColor = theme.pane.cgColor
         updateRing()
     }
 
@@ -131,7 +142,11 @@ final class PaneContainerView: NSView {
     }
 
     private func updateDimming() {
-        alphaValue = isDragSource ? 0.4 : (isFocusedPane || !dimsWhenUnfocused ? 1 : 0.72)
+        alphaValue = isDragSource ? 0.4 : 1
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dim.opacity = isDragSource || isFocusedPane || !dimsWhenUnfocused ? 0 : 0.3
+        CATransaction.commit()
     }
 
     private func takeControl() {
@@ -174,6 +189,7 @@ final class PaneContainerView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ring.frame = b
+        dim.frame = b
         CATransaction.commit()
     }
 
