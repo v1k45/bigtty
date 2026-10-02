@@ -63,15 +63,17 @@ final class SSHAskpass {
             answeredBy[key] = sshPID
             return known
         }
-        // Off the main thread: the Keychain may be slow, or ask to unlock.
-        if kind == .secret, !retry, let stored = await Task.detached(operation: { Keychain.read(key) }).value {
-            answers[key] = stored
-            answeredBy[key] = sshPID
-            return stored
-        }
-        // Several connections may ask at once: one dialog for all of them.
+        // Several connections may ask at once: one lookup and one dialog for
+        // all of them, joined before anything waits (a connection that
+        // waited on the Keychain first would miss the dialog in progress).
         if let pending = asking[key] { return await pending.value }
-        let task = Task { @MainActor in self.ask(prompt: prompt, target: target, kind: kind, key: key, retry: retry) }
+        let task = Task { @MainActor () -> String? in
+            // Off the main thread: the Keychain may be slow, or ask to unlock.
+            if kind == .secret, !retry, let stored = await Task.detached(operation: { Keychain.read(key) }).value {
+                return stored
+            }
+            return self.ask(prompt: prompt, target: target, kind: kind, key: key, retry: retry)
+        }
         asking[key] = task
         let result = await task.value
         asking[key] = nil
