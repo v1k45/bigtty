@@ -595,16 +595,29 @@ private final class FileCell: NSTableCellView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
+    /// Git status colors: macOS's on dark, darker on light, where its
+    /// yellow and green are too pale to read.
+    private static func status(light: Int, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark
+                : NSColor(srgbRed: CGFloat(light >> 16 & 255) / 255, green: CGFloat(light >> 8 & 255) / 255, blue: CGFloat(light & 255) / 255, alpha: 1)
+        }
+    }
+    private static let added = status(light: 0x1A7F37, dark: .systemGreen)
+    private static let deleted = status(light: 0xCF222E, dark: .systemRed)
+    private static let conflicted = status(light: 0xBC4C00, dark: .systemOrange)
+    private static let modified = status(light: 0x9A6700, dark: .systemYellow)
+
     func configure(name: String, detail: String, isDirectory: Bool, change: GitClient.Change?, dirty: Bool) {
         icon.image = NSImage(systemSymbolName: isDirectory ? "folder" : "doc.text", accessibilityDescription: nil)
         icon.contentTintColor = isDirectory ? .systemBlue : .secondaryLabelColor
         label.stringValue = name
         let color: NSColor = switch change {
-        case .untracked, .added: .systemGreen
-        case .deleted: .systemRed
-        case .conflicted: .systemOrange
-        case .modified, .renamed: .systemYellow
-        case nil: dirty ? .systemYellow : .labelColor
+        case .untracked, .added: Self.added
+        case .deleted: Self.deleted
+        case .conflicted: Self.conflicted
+        case .modified, .renamed: Self.modified
+        case nil: dirty ? Self.modified : .labelColor
         }
         let text = NSMutableAttributedString(string: name, attributes: [
             .foregroundColor: change == nil && !dirty ? NSColor.labelColor : color, .font: NSFont.systemFont(ofSize: 12),
