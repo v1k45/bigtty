@@ -128,6 +128,59 @@ public struct HerdrClient: Sendable {
         try await call("pane.move", ["pane_id": .string(paneID), "destination": ["type": "new_tab", "workspace_id": .string(workspaceID)]])
     }
 
+    /// Where `movePane(_:to:focus:)` sends a pane. herdr keeps its process
+    /// running; a move into another space gives it a new pane id.
+    public enum MoveDestination: Sendable, Equatable {
+        /// Beside `target` (the tab's focused pane if nil), `split` "right" or
+        /// "down", taking `1 - ratio` of the space when given.
+        case tab(String, beside: String?, split: String, ratio: Double?)
+        case newTab(workspaceID: String)
+        case newSpace(label: String?)
+
+        var json: JSONValue {
+            switch self {
+            case let .tab(tabID, target, split, ratio):
+                var destination: [String: JSONValue] = ["type": "tab", "tab_id": .string(tabID), "split": .string(split)]
+                if let target { destination["target_pane_id"] = .string(target) }
+                if let ratio { destination["ratio"] = .number(ratio) }
+                return .object(destination)
+            case let .newTab(workspaceID):
+                return ["type": "new_tab", "workspace_id": .string(workspaceID)]
+            case let .newSpace(label):
+                var destination: [String: JSONValue] = ["type": "new_workspace"]
+                if let label { destination["label"] = .string(label) }
+                return .object(destination)
+            }
+        }
+    }
+
+    public struct MoveResult: Sendable, Equatable {
+        /// False when nothing moved: into its own tab, or a zoomed one.
+        public let changed: Bool
+        /// The pane's id after the move (new when it changed space).
+        public let paneID: String
+        public let tabID: String?
+        public let workspaceID: String?
+        /// A tab or space the move left empty, which herdr closed.
+        public let closedTabID: String?
+        public let closedWorkspaceID: String?
+    }
+
+    @discardableResult
+    public func movePane(_ paneID: String, to destination: MoveDestination, focus: Bool = false) async throws -> MoveResult {
+        let reply = try await call("pane.move", ["pane_id": .string(paneID), "destination": destination.json, "focus": .bool(focus)])
+        let result = reply["move_result"] ?? reply
+        let pane = result["pane"]
+        return MoveResult(
+            changed: result["changed"]?.boolValue ?? false,
+            paneID: pane?["pane_id"]?.stringValue ?? paneID,
+            tabID: pane?["tab_id"]?.stringValue,
+            workspaceID: pane?["workspace_id"]?.stringValue,
+            closedTabID: result["closed_tab_id"]?.stringValue,
+            closedWorkspaceID: result["closed_workspace_id"]?.stringValue
+        )
+    }
+
     public func closePane(_ paneID: String) async throws {
         try await call("pane.close", ["pane_id": .string(paneID)])
     }
@@ -196,11 +249,13 @@ public struct HerdrClient: Sendable {
         try await call("pane.send_text", ["pane_id": .string(paneID), "text": .string(text)])
     }
 
-    public func reportMetadata(paneID: String, title: String?, tokens: [String: String]) async throws {
+    /// herdr merges tokens per source: those named here are set (a nil
+    /// value clears one), others stay as they are.
+    public func reportMetadata(paneID: String, title: String?, tokens: [String: String?]) async throws {
         var params: [String: JSONValue] = [
             "pane_id": .string(paneID),
             "source": "bigtty",
-            "tokens": .object(tokens.mapValues(JSONValue.string)),
+            "tokens": .object(tokens.mapValues { $0.map(JSONValue.string) ?? .null }),
         ]
         if let title { params["title"] = .string(title) }
         try await call("pane.report_metadata", .object(params))

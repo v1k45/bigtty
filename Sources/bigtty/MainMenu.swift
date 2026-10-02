@@ -46,6 +46,8 @@ import AppKit
     func newFilesPane(_ sender: Any?)
     func toggleFileViewer(_ sender: Any?)
     func showChanges(_ sender: Any?)
+    func movePaneToSpaceByNumber(_ sender: Any?)
+    func movePaneTo(_ sender: Any?)
 }
 
 @MainActor
@@ -154,6 +156,20 @@ enum MainMenu {
         }
         paneNumbersMenu = paneNumbers
         pane.addItem(.separator())
+        // Filled when opened: this machine's spaces and their tabs.
+        let moveTo = NSMenu(title: "Move Pane To")
+        moveTo.delegate = MovePaneMenu.shared
+        let moveToItem = NSMenuItem(title: "Move Pane To", action: nil, keyEquivalent: "")
+        moveToItem.submenu = moveTo
+        pane.addItem(moveToItem)
+        let moveNumbers = NSMenu(title: "Move Pane to Space")
+        let moveNumbersItem = NSMenuItem(title: "Move Pane to Space", action: nil, keyEquivalent: "")
+        moveNumbersItem.submenu = moveNumbers
+        pane.addItem(moveNumbersItem)
+        for n in 1...9 {
+            item(moveNumbers, "Space \(n)", #selector(PaneActions.movePaneToSpaceByNumber(_:)), "\(n)", [.command, .control, .option]).tag = n
+        }
+        pane.addItem(.separator())
         item(pane, "Resize Left", #selector(PaneActions.resizeLeft(_:)), arrow(.leftArrow), [.command, .control])
         item(pane, "Resize Right", #selector(PaneActions.resizeRight(_:)), arrow(.rightArrow), [.command, .control])
         item(pane, "Resize Up", #selector(PaneActions.resizeUp(_:)), arrow(.upArrow), [.command, .control])
@@ -251,4 +267,19 @@ private extension Int {
     static let rightArrow = NSRightArrowFunctionKey
     static let upArrow = NSUpArrowFunctionKey
     static let downArrow = NSDownArrowFunctionKey
+}
+
+/// Pane ▸ Move Pane To: built from the key window's spaces each time it opens.
+@MainActor
+final class MovePaneMenu: NSObject, NSMenuDelegate {
+    static let shared = MovePaneMenu()
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let controller = NSApp.keyWindow?.windowController as? MainWindowController else {
+            menu.addItem(NSMenuItem(title: "No Pane", action: nil, keyEquivalent: ""))
+            return
+        }
+        controller.fillMoveMenu(menu)
+    }
 }

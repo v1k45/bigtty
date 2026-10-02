@@ -528,6 +528,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             NSApp.sendAction(selector, to: nil, from: nil)
         case .connectMachine:
             connectMachine(nil)
+        case let .perform(run):
+            run()
         case let .session(name):
             let running = manager.knownSessions.first { $0.name == name }?.running ?? (name == manager.local.session)
             let machine = running ? (name.map { manager.open(session: $0) } ?? manager.local) : manager.startSession(name)

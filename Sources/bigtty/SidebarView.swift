@@ -69,6 +69,9 @@ final class SidebarView: NSView {
     var onSpaceMenu: ((String) -> NSMenu?)?
     var onCloseSpace: ((String) -> Void)?
     var onCloseTab: ((String, String) -> Void)?
+    /// A pane dropped on a space card (key), one of its tabs (key, tab) or
+    /// the empty list below the cards (nil, nil: a new space).
+    var onDropPane: ((String?, String?, PaneDragPayload) -> Void)?
     var onMachineClick: ((String) -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
@@ -106,9 +109,13 @@ final class SidebarView: NSView {
         filesButton.action = #selector(filesClicked)
         addSubview(hideButton)
         addSubview(filesButton)
-        list.registerForDraggedTypes([.bigttySpace])
+        list.registerForDraggedTypes([.bigttySpace, .bigttyPane])
         list.onDrag = { [weak self] key, point, done in self?.dragSpace(key, at: point, drop: done) ?? false }
-        list.onDragEnd = { [weak self] in self?.dropLine.isHidden = true }
+        list.onPaneDrag = { [weak self] payload, point, done in self?.dragPane(payload, at: point, drop: done) ?? false }
+        list.onDragEnd = { [weak self] in
+            self?.dropLine.isHidden = true
+            self?.markPaneDrop(nil, tab: nil)
+        }
         dropLine.wantsLayer = true
         dropLine.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
         dropLine.layer?.cornerRadius = 1
@@ -135,6 +142,48 @@ final class SidebarView: NSView {
         dropLine.isHidden = false
         list.addSubview(dropLine) // on top
         return true
+    }
+
+    /// A pane dragged over the list: onto one of its machine's space cards
+    /// (that space's tab under the pointer, else its current one), or below
+    /// the cards for a new space. Highlights the target; on drop, moves.
+    private func dragPane(_ payload: PaneDragPayload, at point: NSPoint, drop: Bool) -> Bool {
+        let cards = list.subviews.compactMap { $0 as? SpaceCard }.filter { $0.space.id.hasPrefix(payload.machineID + "|") }
+        guard !cards.isEmpty else { return false }
+        if let card = cards.first(where: { $0.frame.contains(point) }) {
+            let tab = card.tab(at: card.convert(point, from: list))
+            if drop {
+                markPaneDrop(nil, tab: nil)
+                onDropPane?(card.space.id, tab, payload)
+            } else {
+                markPaneDrop(card, tab: tab)
+            }
+            return true
+        }
+        // Below this machine's last card: a space of its own.
+        guard let last = cards.last, point.y > last.frame.maxY else {
+            markPaneDrop(nil, tab: nil)
+            return false
+        }
+        markPaneDrop(nil, tab: nil)
+        if drop {
+            dropLine.isHidden = true
+            onDropPane?(nil, nil, payload)
+            return true
+        }
+        dropLine.frame = NSRect(x: 12, y: last.frame.maxY + 3, width: list.bounds.width - 24, height: 2)
+        dropLine.isHidden = false
+        list.addSubview(dropLine)
+        return true
+    }
+
+    private weak var paneDropCard: SpaceCard?
+
+    private func markPaneDrop(_ card: SpaceCard?, tab: String?) {
+        if paneDropCard !== card { paneDropCard?.paneDropTab = nil }
+        paneDropCard = card
+        card?.paneDropTab = .some(tab)
+        if card != nil { dropLine.isHidden = true }
     }
 
     @objc private func hideClicked() { onHideSidebar?() }
@@ -322,16 +371,24 @@ final class FlippedView: NSView {
 
     /// Space cards dragged over the list (the sidebar decides).
     var onDrag: ((String, NSPoint, Bool) -> Bool)?
+    /// Panes dragged over the list.
+    var onPaneDrag: ((PaneDragPayload, NSPoint, Bool) -> Bool)?
     var onDragEnd: (() -> Void)?
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if let pane = PaneDragPayload(sender.draggingPasteboard) {
+            return onPaneDrag?(pane, convert(sender.draggingLocation, from: nil), false) == true ? .move : []
+        }
         guard let key = sender.draggingPasteboard.string(forType: .bigttySpace) else { return [] }
         return onDrag?(key, convert(sender.draggingLocation, from: nil), false) == true ? .move : []
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if let pane = PaneDragPayload(sender.draggingPasteboard) {
+            return onPaneDrag?(pane, convert(sender.draggingLocation, from: nil), true) ?? false
+        }
         guard let key = sender.draggingPasteboard.string(forType: .bigttySpace) else { return false }
         return onDrag?(key, convert(sender.draggingLocation, from: nil), true) ?? false
     }
@@ -527,6 +584,20 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
     private let tabSummary = NSTextField(labelWithString: "")
     private var chips: [NSTextField] = []
     private var tabRows: [TabRow] = []
+
+    /// A pane dragged over this card: nil when not, .some(tab) when it
+    /// would land in that tab (or the space's current one).
+    var paneDropTab: String?? {
+        didSet {
+            updateBackground()
+            for row in tabRows { row.dropTarget = paneDropTab == .some(row.tabID) && !row.tabID.isEmpty }
+        }
+    }
+
+    /// The tab whose row is under `point` (in this card), if any.
+    func tab(at point: NSPoint) -> String? {
+        tabRows.first { $0.frame.contains(point) && !$0.tabID.isEmpty }?.tabID
+    }
     private var hovering = false {
         didSet {
             updateBackground()
@@ -626,6 +697,12 @@ private final class SpaceCard: NSView, SidebarRow, NSDraggingSource {
 
     private func updateBackground() {
         let theme = Theme.current
+        if paneDropTab != nil {
+            layer?.borderWidth = 2
+            layer?.borderColor = NSColor.controlAccentColor.cgColor
+            effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = Theme.sidebarHover.cgColor }
+            return
+        }
         if space.alert {
             layer?.backgroundColor = theme?.accentWash.cgColor
             layer?.borderWidth = 1
@@ -768,13 +845,27 @@ private final class TabRow: NSView {
     /// Its agent is working: a small breathing dot before the detail.
     private let workingDot = NSView()
 
+    let tabID: String
+    private var normalBackground: CGColor?
+
+    /// A pane dragged over it would land in this tab.
+    var dropTarget = false {
+        didSet {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer?.backgroundColor = dropTarget ? NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor : normalBackground
+            }
+        }
+    }
+
     init(tab: SidebarModel.Tab) {
         closable = !tab.id.isEmpty
+        tabID = tab.id
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 5
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = tab.selected ? Theme.sidebarRow.cgColor : nil
+            normalBackground = tab.selected ? Theme.sidebarRow.cgColor : nil
+            layer?.backgroundColor = normalBackground
         }
         // The "+N more" row (no tab id) opens the space.
         let symbol = tab.id.isEmpty ? "ellipsis" : tab.audible ? "speaker.wave.2.fill" : "terminal"

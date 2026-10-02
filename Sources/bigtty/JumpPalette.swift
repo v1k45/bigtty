@@ -17,6 +17,18 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case session(String?)
         /// A menu action by selector, sent to the key window.
         case action(Selector)
+        /// A choice offered by `choose` (Move Pane to…).
+        case perform(@MainActor () -> Void)
+    }
+
+    /// One option for `choose`.
+    struct Choice {
+        let section: String
+        let title: String
+        let detail: String
+        let symbol: String
+        let enabled: Bool
+        let run: @MainActor () -> Void
     }
 
     private struct Item {
@@ -46,7 +58,22 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private var onPick: ((Target) -> Void)?
     private weak var manager: MachineManager?
 
+    /// Only these sections, in this order, while choosing (nil: jumping).
+    private var choosing: [String]?
+
+    /// The palette as a picker: just `choices`, no terminal search.
+    func choose(_ choices: [Choice], placeholder: String) {
+        choosing = choices.map(\.section).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        onPick = { target in if case let .perform(run) = target { run() } }
+        items = choices.filter(\.enabled).map {
+            Item(section: $0.section, title: $0.title, detail: $0.detail, symbol: $0.symbol, alert: false,
+                 target: .perform($0.run), haystack: $0.detail.lowercased())
+        }
+        present(placeholder: placeholder)
+    }
+
     func show(manager: MachineManager, onPick: @escaping (Target) -> Void) {
+        choosing = nil
         self.onPick = onPick
         self.manager = manager
         items = Self.collect(manager: manager)
@@ -57,8 +84,15 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             self.filter()
         }
         TerminalIndex.shared.refresh(manager.all)
+        present(placeholder: Self.jumpPlaceholder)
+    }
+
+    private static let jumpPlaceholder = "Jump to a space, agent or pane, or search terminal output"
+
+    private func present(placeholder: String) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
+        field.placeholderString = placeholder
         field.stringValue = ""
         filter()
         if let screen = NSApp.keyWindow?.screen ?? NSScreen.main {
@@ -119,6 +153,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)
         }
         items.append(Item(section: "Actions", title: "New Space…", detail: "⌘N", symbol: "plus", alert: false, target: .newSpace, haystack: "new space workspace"))
+        items.append(Item(section: "Actions", title: "Move Pane to…", detail: "⌃⌥⌘1–9", symbol: "arrow.right.square", alert: false, target: .action(#selector(PaneActions.movePaneTo(_:))), haystack: "move pane to space tab send"))
         items.append(Item(section: "Actions", title: "New Browser Tab", detail: "⌥⌘T", symbol: "globe", alert: false, target: .action(#selector(PaneActions.newBrowserTab(_:))), haystack: "new browser tab web"))
         items.append(Item(section: "Actions", title: "Open Browser Here", detail: "⇧⌥⌘B", symbol: "globe", alert: false, target: .action(#selector(PaneActions.openBrowserHere(_:))), haystack: "open browser here this pane web replace"))
         items.append(Item(section: "Actions", title: "Split with Browser", detail: "⌥⌘B", symbol: "rectangle.split.2x1", alert: false, target: .action(#selector(PaneActions.newBrowserPane(_:))), haystack: "split browser pane web"))
@@ -185,7 +220,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         matched.sort { $0.1 > $1.1 }
         // What the terminals show: newest lines first.
         var terminal: [Item] = []
-        if query.count >= 2, let manager {
+        if query.count >= 2, choosing == nil, let manager {
             terminal = TerminalIndex.shared.search(query, in: manager.all).map { hit in
                 let machine = manager.machine(hit.machineID)
                 let store = machine?.store
@@ -207,7 +242,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             }
         }
         // Waiting agents first within their section.
-        let order = ["Sessions", "Machines", "Spaces", "Agents", "Panes", "In Terminals", "Actions"]
+        let order = choosing ?? ["Sessions", "Machines", "Spaces", "Agents", "Panes", "In Terminals", "Actions"]
         let all = matched.map(\.0) + terminal
         rows = []
         for section in order {
@@ -296,7 +331,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 18)
-        field.placeholderString = "Jump to a space, agent or pane, or search terminal output"
+        field.placeholderString = Self.jumpPlaceholder
         field.delegate = self
         let line = NSBox()
         line.boxType = .separator

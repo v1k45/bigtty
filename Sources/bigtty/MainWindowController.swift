@@ -233,6 +233,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                   let store = machine.store else { return }
             self.confirmCloseTab(tab, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
         }
+        sidebar.onDropPane = { [weak self] key, tab, payload in
+            guard let self, payload.machineID == self.machine.id else { return NSSound.beep() }
+            let follow = !NSEvent.modifierFlags.contains(.option)
+            if let tab {
+                self.movePane(payload.paneID, to: .tab(tab), follow: follow)
+            } else if let key, let ref = SpaceRef(key: key) {
+                self.movePane(payload.paneID, to: .space(ref.workspace), follow: follow)
+            } else {
+                self.movePane(payload.paneID, to: .newSpace, follow: follow)
+            }
+        }
         sidebar.onMachineClick = { [weak self] id in
             guard let self, let machine = self.manager.machine(id) else { return }
             self.onMachineProblem?(machine)
@@ -1005,7 +1016,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private func wireDrag(_ view: PaneContainerView) {
         let id = view.paneID
         view.dragPayload = { [weak self] in
-            guard let self, self.store.panes(in: self.tabID ?? "").count > 1 else { return nil }
+            // Any pane drags: to rearrange its tab (2+ panes), or onto the
+            // sidebar to move it to another tab or space.
+            guard let self else { return nil }
             return PaneDragPayload(machineID: self.machine.id, paneID: id)
         }
         view.dragTitle = { [weak self] in self?.store.pane(id)?.displayName ?? "Pane" }
@@ -1513,6 +1526,151 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         lastFocusedPane = nil
         noteVisited(SpaceRef(machine: machine.id, workspace: id))
         render()
+    }
+
+    // MARK: - Moving panes to other tabs and spaces
+
+    enum MoveTarget {
+        /// That space's current tab.
+        case space(String)
+        case tab(String)
+        case newTab(String)
+        case newSpace
+    }
+
+    /// Moves a pane, process and all, into another tab or space on this
+    /// machine, beside the focused pane there. `follow`: show it there.
+    func movePane(_ paneID: String, to target: MoveTarget, follow: Bool) {
+        guard let pane = store.pane(paneID) else { return NSSound.beep() }
+        let destination: HerdrClient.MoveDestination
+        switch target {
+        case let .space(workspaceID):
+            guard let tab = store.workspace(workspaceID)?.activeTabID ?? store.tabs(in: workspaceID).first?.tabID else {
+                return movePane(paneID, to: .newTab(workspaceID), follow: follow)
+            }
+            return movePane(paneID, to: .tab(tab), follow: follow)
+        case let .tab(tabID):
+            guard tabID != pane.tabID else { return }
+            destination = .tab(tabID, beside: store.layouts[tabID]?.focusedPaneID, split: "right", ratio: nil)
+        case let .newTab(workspaceID):
+            destination = .newTab(workspaceID: workspaceID)
+        case .newSpace:
+            destination = .newSpace(label: nil)
+        }
+        let store = store
+        store.perform { [weak self] client in
+            let result = try await client.movePane(paneID, to: destination, focus: follow)
+            guard follow, result.changed else { return }
+            // Show it once this window's copy of herdr has the space (a new
+            // one isn't there yet, and render() would fall back elsewhere).
+            try? await store.refresh()
+            await MainActor.run { self?.showMoved(result) }
+        }
+    }
+
+    /// After a move you follow: its space and tab, focus on the pane (by its
+    /// new id).
+    private func showMoved(_ result: HerdrClient.MoveResult) {
+        guard let workspace = result.workspaceID else { return }
+        let ref = SpaceRef(machine: machine.id, workspace: workspace)
+        if let pinned = pinnedSpace, pinned != ref { return onShowSpace?(ref) ?? () }
+        if workspace != workspaceID {
+            workspaceID = workspace
+            noteVisited(ref)
+        }
+        tabID = result.tabID ?? tabID
+        lastFocusedPane = nil
+        pendingFocus = result.paneID
+        render()
+    }
+
+    /// Debug hook: "<pane> space:<ws>|tab:<tab>|newtab:<ws>|newspace [stay]".
+    @objc func debugMovePane(_ sender: Any?) {
+        let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
+        guard parts.count >= 2 else { return }
+        let spec = parts[1].split(separator: ":", maxSplits: 1).map(String.init)
+        let target: MoveTarget? = switch spec.first {
+        case "space": spec.count == 2 ? .space(spec[1]) : nil
+        case "tab": spec.count == 2 ? .tab(spec[1]) : nil
+        case "newtab": spec.count == 2 ? .newTab(spec[1]) : nil
+        case "newspace": .newSpace
+        default: nil
+        }
+        guard let target else { return }
+        movePane(parts[0], to: target, follow: parts.count < 3 || parts[2] != "stay")
+    }
+
+    /// ⌘K ▸ Move Pane to…: the palette as a picker of this machine's spaces
+    /// and tabs. ⌥ when choosing: move it without following.
+    @objc func movePaneTo(_: Any?) {
+        guard let paneID = focusedPaneID, let pane = store.pane(paneID) else { return NSSound.beep() }
+        let titles = machine.spaceInfo?.agentTitles ?? [:]
+        let follow = { !NSEvent.modifierFlags.contains(.option) }
+        var choices: [JumpPalette.Choice] = []
+        for workspace in store.snapshot.workspaces {
+            let name = Self.spaceName(workspace, store: store, agentTitles: titles)
+            let tabs = store.tabs(in: workspace.workspaceID)
+            for tab in tabs {
+                let title = tabs.count > 1 ? Self.tabTitle(tab, store: store, agentTitles: titles) : name
+                choices.append(.init(section: "Move to", title: title, detail: tabs.count > 1 ? name : "", symbol: "square.stack",
+                                     enabled: tab.tabID != pane.tabID) { [weak self] in
+                    self?.movePane(paneID, to: .tab(tab.tabID), follow: follow())
+                })
+            }
+        }
+        choices.append(.init(section: "New", title: "New Tab in This Space", detail: "", symbol: "plus.rectangle", enabled: true) { [weak self] in
+            self?.movePane(paneID, to: .newTab(pane.workspaceID), follow: follow())
+        })
+        choices.append(.init(section: "New", title: "New Space", detail: "", symbol: "plus.square.on.square", enabled: true) { [weak self] in
+            self?.movePane(paneID, to: .newSpace, follow: follow())
+        })
+        JumpPalette.shared.choose(choices, placeholder: "Move the pane to a space or tab (⌥ to stay here)")
+    }
+
+    /// ⌃⌥⌘1–9: the focused pane to space N (numbered as ⌘1–9).
+    @objc func movePaneToSpaceByNumber(_ sender: Any?) {
+        guard let n = Self.number(sender), let pane = focusedPaneID else { return }
+        let spaces = orderedSpaces
+        guard spaces.indices.contains(n - 1), spaces[n - 1].machine == machine.id else { return NSSound.beep() }
+        movePane(pane, to: .space(spaces[n - 1].workspace), follow: true)
+    }
+
+    /// Pane ▸ Move Pane To: this machine's spaces with their tabs, a new tab
+    /// here, a new space. ⌥ while choosing: move it without following.
+    func fillMoveMenu(_ menu: NSMenu) {
+        guard let paneID = focusedPaneID, let pane = store.pane(paneID) else {
+            menu.addItem(NSMenuItem(title: "No Pane", action: nil, keyEquivalent: ""))
+            return
+        }
+        let titles = machine.spaceInfo?.agentTitles ?? [:]
+        let follow = { !NSEvent.modifierFlags.contains(.option) }
+        for workspace in store.snapshot.workspaces {
+            let tabs = store.tabs(in: workspace.workspaceID)
+            let name = Self.spaceName(workspace, store: store, agentTitles: titles)
+            if tabs.count <= 1 {
+                let item = ClosureMenuItem(title: name) { [weak self] in self?.movePane(paneID, to: .space(workspace.workspaceID), follow: follow()) }
+                item.isEnabled = tabs.first?.tabID != pane.tabID
+                if !item.isEnabled { item.action = nil }
+                menu.addItem(item)
+            } else {
+                menu.addItem(NSMenuItem.sectionHeader(title: name))
+                for tab in tabs {
+                    let item = ClosureMenuItem(title: Self.tabTitle(tab, store: store, agentTitles: titles)) { [weak self] in
+                        self?.movePane(paneID, to: .tab(tab.tabID), follow: follow())
+                    }
+                    item.indentationLevel = 1
+                    if tab.tabID == pane.tabID { item.action = nil }
+                    menu.addItem(item)
+                }
+            }
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "New Tab in This Space") { [weak self] in
+            self?.movePane(paneID, to: .newTab(pane.workspaceID), follow: follow())
+        })
+        menu.addItem(ClosureMenuItem(title: "New Space") { [weak self] in
+            self?.movePane(paneID, to: .newSpace, follow: follow())
+        })
     }
 
     // MARK: - Recent spaces (⌃⌘Tab)
