@@ -296,6 +296,17 @@ func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 
 // MARK: - Main
 
+// ssh asking for a password (SSH_ASKPASS, set by bigtty): the app asks you.
+if ProcessInfo.processInfo.environment["BIGTTY_ASKPASS"] == "1" {
+    let prompt = CommandLine.arguments.dropFirst().joined(separator: " ")
+    let target = ProcessInfo.processInfo.environment["BIGTTY_ASKPASS_TARGET"] ?? ""
+    guard let result = try? ControlClient(timeout: 900).call(
+        "ssh.askpass", ["prompt": .string(prompt), "target": .string(target), "ssh_pid": .number(Double(getppid()))]
+    ), let answer = result["answer"]?.stringValue else { exit(1) }
+    print(answer)
+    exit(0)
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "version", "--version":

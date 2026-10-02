@@ -137,6 +137,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private func startControlServer() {
         let server = ControlServer { [weak self] method, params in
+            // ssh asking for a password while connecting to a machine.
+            if method == "ssh.askpass" {
+                let answer = await SSHAskpass.shared.answer(
+                    prompt: params["prompt"]?.stringValue ?? "", target: params["target"]?.stringValue ?? "the machine",
+                    sshPID: params["ssh_pid"]?.intValue ?? 0
+                )
+                guard let answer else { throw ControlServer.Failure(code: "cancelled", message: "no answer") }
+                return ["answer": .string(answer)]
+            }
             guard let api = await self?.controlAPI(for: params) else {
                 throw ControlServer.Failure(code: "unavailable", message: "bigtty is quitting")
             }
@@ -367,7 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch machine.status {
         case let .signIn(message), let .failed(message):
             alert.messageText = machine.status == .signIn(message) ? "Sign in to \(machine.name)" : "Can’t reach \(machine.name)"
-            alert.informativeText = "SSH to \(machine.target ?? machine.name) failed: \(message)\n\nbigtty connects with your SSH keys and agent (no passwords). Its spaces keep running on the machine."
+            alert.informativeText = "SSH to \(machine.target ?? machine.name) failed: \(message)\n\nbigtty uses your SSH keys and agent, and asks for a password when the machine wants one. Its spaces keep running on the machine."
             actions = [("Try Again", { machine.connect() }), ("Open in Terminal", { [weak self] in self?.openSSHInTerminal(machine) })]
         case .notRunning:
             alert.messageText = machine.isLocal ? "herdr isn’t running" : "herdr isn’t running on \(machine.name)"

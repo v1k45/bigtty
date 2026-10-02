@@ -171,8 +171,11 @@ final class Machine {
     // MARK: - Remote connection
 
     /// Probes the machine, forwards its sockets and starts the store.
-    func connect() {
+    /// `byUser`: you asked for it, so ssh may ask for a password again even
+    /// if you cancelled one before; background retries never re-ask.
+    func connect(byUser: Bool = true) {
         guard let tunnel, !isLocal else { return }
+        if byUser { SSHAskpass.shared.allow(tunnel.config.target) }
         reconnectTask?.cancel()
         status = .connecting
         let local = HerdrEndpoint.locateHerdr().flatMap { Self.version(of: $0) }
@@ -245,7 +248,7 @@ final class Machine {
                 if case .reconnecting = self?.status { self?.status = .reconnecting(seconds: remaining - 1) }
             }
             guard !Task.isCancelled else { return }
-            self?.connect()
+            self?.connect(byUser: false)
         }
     }
 

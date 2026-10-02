@@ -157,8 +157,8 @@ final class SSHTunnel: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         // Its own connection: through the shared control connection, ssh
         // would hand the forwards to the master and exit.
+        process.environment = SSHAskpass.environment(target: config.target)
         process.arguments = [
-            "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=no",
             "-o", "ControlPath=none",
@@ -223,8 +223,9 @@ final class SSHTunnel: @unchecked Sendable {
         let local = Self.freePort()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.environment = SSHAskpass.environment(target: config.target)
         process.arguments = [
-            "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=no", "-o", "ControlPath=none",
             "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
             "-N", "-L", "127.0.0.1:\(local):localhost:\(remotePort)", "--", config.target,
@@ -277,9 +278,11 @@ final class SSHTunnel: @unchecked Sendable {
 
     // MARK: - Helpers
 
+    /// Not BatchMode: when keys and the agent aren't enough, ssh asks for a
+    /// password (or a passphrase, a code, a new host key) through
+    /// `SSHAskpass`, never on a terminal.
     static func baseOptions(_ config: Config) -> [String] {
         [
-            "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=auto",
             "-o", "ControlPath=\(config.controlPath)",
@@ -305,6 +308,7 @@ final class SSHTunnel: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         guard Config.isValid(target: config.target) else { return nil }
         process.arguments = baseOptions(config) + ["--", config.target, remoteCommand]
+        process.environment = SSHAskpass.environment(target: config.target)
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out

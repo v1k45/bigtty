@@ -88,6 +88,14 @@ reach the machine's `localhost` (the address bar still says `localhost:3000`).
 It uses your SSH keys and agent; machines saved with `herdr machine add`
 appear on their own.
 
+**Passwords.** When keys aren't enough, bigtty asks in a dialog: a password,
+a key's passphrase, a one-time code, or whether to trust a machine's new host
+key. You're asked once per connection to a machine, not for each thing it
+opens, and **Remember in Keychain** keeps a password or passphrase for next
+time (codes are never stored). Cancel, or a password that doesn't work twice,
+and bigtty stops asking for that machine until you connect it again yourself,
+so it never piles up dialogs while it retries in the background.
+
 ## How it works
 
 - **HerdrKit** speaks herdr's NDJSON socket API (`session.snapshot`,
