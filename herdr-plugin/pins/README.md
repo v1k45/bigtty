@@ -9,8 +9,9 @@ on the right, the same as in bigtty.
 herdr plugin install v1k45/bigtty/herdr-plugin/pins
 ```
 
-Install it where herdr runs (your Mac, or a server you connect to). It needs
-`python3`, which most Linux systems and macOS (with the developer tools) have.
+Install it where herdr runs (your Mac, or a server you connect to). herdr
+fetches plugins with `git`, and this one runs on `python3`; most Linux systems
+and macOS (with the developer tools) have both.
 
 How it works: bigtty tags pinned panes (`btty_pin`, `btty_pin_width` pane
 tokens). On every `workspace.focused` and `tab.focused` event the plugin moves
