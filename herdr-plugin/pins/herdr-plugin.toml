@@ -1,0 +1,14 @@
+id = "bigtty.pins"
+name = "bigtty pins"
+version = "0.1.0"
+min_herdr_version = "0.9.2"
+description = "Panes pinned in bigtty follow you between spaces in herdr's terminal UI too."
+platforms = ["linux", "macos"]
+
+[[events]]
+on = "workspace.focused"
+command = ["sh", "follow.sh"]
+
+[[events]]
+on = "tab.focused"
+command = ["sh", "follow.sh"]

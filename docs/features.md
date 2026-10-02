@@ -46,6 +46,10 @@ Macs see the pane where you last were. **⌥⌘P** again unpins it, back beside
 the pane it was next to. Switching quickly moves the pins once, when you
 settle; a zoomed tab is left alone.
 
+In herdr's terminal UI, pins stay where you last were, unless you add the
+[pins plugin](../herdr-plugin/pins/README.md) (`herdr plugin install
+v1k45/bigtty/herdr-plugin/pins`): then they follow you there too.
+
 ## Spaces
 
 The sidebar lists every space with its branch, folder, listening ports and

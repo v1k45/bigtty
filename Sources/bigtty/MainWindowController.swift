@@ -1700,9 +1700,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// ⌘1–9 or ⌃⌘⇥ cycling moves them once). The key window decides.
     private func schedulePinFollow() {
         guard window?.isKeyWindow == true, !followingPins, let tabID, let layout = store.layouts[tabID] else { return }
-        let pins = pinnedPanes.map(\.paneID)
+        let pinned = pinnedPanes
+        let pins = pinned.map(\.paneID)
         guard !pins.isEmpty else { return }
-        let key = tabID + "|" + pins.joined(separator: ",")
+        // By terminal, which a move keeps: pins moved by someone else (the
+        // herdr plugin, another Mac) don't pull them back here; only a
+        // switch in this window, or a pin added or removed, does.
+        let key = Self.pinKey(tab: tabID, pins: pinned)
         guard key != pinFollowDone else { return }
         // Already a column, only pins here, or zoomed (herdr won't move into
         // a zoomed tab): nothing to do.
@@ -1716,13 +1720,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
+    private static func pinKey(tab: String, pins: [Pane]) -> String {
+        tab + "|" + pins.map(\.terminalID).joined(separator: ",")
+    }
+
     /// Moves the pins into `tabID` as a full-height column on the right:
     /// the first beside the pane along the right edge, the rest below it,
     /// then (if the tab's shape needs it) a rebuild by moves. Never
     /// layout.apply, which replaces the panes it lays out.
     private func followPins(to tabID: String) {
         guard tabID == self.tabID, let tab = store.tab(tabID) else { return }
-        let pins = pinnedPanes.map(\.paneID)
+        let pinned = pinnedPanes
+        let pins = pinned.map(\.paneID)
         let width = Settings.pinColumnWidth
         followingPins = true
         rearranging = true
@@ -1761,7 +1770,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 guard let self else { return }
                 // Done with this tab and these pins, however it went: no
                 // retrying in a loop (new ids after a move get one check).
-                self.pinFollowDone = tabID + "|" + pins.joined(separator: ",")
+                self.pinFollowDone = Self.pinKey(tab: tabID, pins: pinned)
                 self.followingPins = false
                 self.rearranging = false
                 self.render()
