@@ -45,21 +45,54 @@ struct GitClient: Sendable {
     /// Repository files (tracked and untracked, not ignored) whose name is
     /// `name`, or whose path ends in `name` ("screenshots/workspace.png").
     func files(named name: String) -> [String] {
-        guard let out = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]) else { return [] }
-        let suffix = "/" + name
+        // git matches the name itself (pathspecs), so ignored folders are
+        // skipped and only hits come back.
+        guard let out = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", name, ":(glob)**/\(name)"])
+        else { return [] }
         return out.split(separator: "\0").map(String.init)
-            .filter { $0 == name || $0.hasSuffix(suffix) }
             .map { (root as NSString).appendingPathComponent($0) }
     }
 
-    /// The repository's other checkouts (`git worktree add`): an agent may
-    /// work in one while its terminal sits in another.
-    func otherWorktrees() -> [GitClient] {
-        guard let out = git(["worktree", "list", "--porcelain"]) else { return [] }
-        return out.split(separator: "\n")
-            .compactMap { $0.hasPrefix("worktree ") ? String($0.dropFirst("worktree ".count)) : nil }
-            .filter { $0 != root }
-            .map { GitClient(root: $0, runner: runner) }
+    /// Where else in the repo a clicked path is: the repo's other worktrees
+    /// (an agent may work in one while its terminal sits in another). The
+    /// path as written is checked in every worktree (a file test each);
+    /// a name is looked up in at most the 8 most recently active ones, and
+    /// the first that has it wins. One shell call, so one round trip on a
+    /// remote machine, however many worktrees there are.
+    func findInOtherWorktrees(_ target: String) -> (root: String, paths: [String])? {
+        let script = #"""
+        here=$1; t=$2
+        common=$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+        [ -d "$common/worktrees" ] || exit 0
+        # Every worktree with its index's age, newest first, in a fixed few
+        # processes however many there are.
+        if stat -c %Y / >/dev/null 2>&1; then ages() { stat -c '%Y %n' "$@" 2>/dev/null; }
+        else ages() { stat -f '%m %N' "$@" 2>/dev/null; }; fi
+        wts=$( {
+          awk 'FNR==1 { d = FILENAME; sub(/\/gitdir$/, "", d); w = $0; sub(/\/\.git\/?$/, "", w); print "W\t" d "\t" w }' "$common"/worktrees/*/gitdir 2>/dev/null
+          if [ "${common%/.git}" != "$common" ]; then printf 'W\t%s\t%s\n' "$common" "${common%/.git}"; fi
+          ages "$common"/worktrees/*/index "$common/index" | awk '{ m = $1; p = substr($0, length($1) + 2); sub(/\/index$/, "", p); print "M\t" p "\t" m }'
+        } | awk -F '\t' '$1 == "W" { w[$2] = $3 } $1 == "M" { m[$2] = $3 } END { for (d in w) print (m[d] + 0) "\t" w[d] }' \
+          | sort -rn | cut -f2- | grep -vxF "$here")
+        # The path as written: a test per worktree, no processes.
+        hit=$(printf '%s\n' "$wts" | while IFS= read -r wt; do
+          if [ -n "$wt" ] && [ -e "$wt/$t" ]; then printf '%s\t%s/%s\n' "$wt" "$wt" "$t"; break; fi
+        done)
+        if [ -n "$hit" ]; then printf '%s\n' "$hit"; exit 0; fi
+        # A name: asked of the 8 most recently active worktrees.
+        printf '%s\n' "$wts" | head -n 8 | while IFS= read -r wt; do
+          [ -n "$wt" ] || continue
+          m=$(git -C "$wt" ls-files --cached --others --exclude-standard -- "$t" ":(glob)**/$t" 2>/dev/null)
+          if [ -n "$m" ]; then
+            printf '%s\n' "$m" | while IFS= read -r f; do printf '%s\t%s/%s\n' "$wt" "$wt" "$f"; done
+            break
+          fi
+        done
+        """#
+        guard let out = runner.run("/bin/sh", ["-c", script, "sh", root, target]) else { return nil }
+        let rows = out.split(separator: "\n").map { $0.split(separator: "\t", maxSplits: 1).map(String.init) }.filter { $0.count == 2 }
+        guard let first = rows.first else { return nil }
+        return (first[0], rows.filter { $0[0] == first[0] }.map { $0[1].hasSuffix("/") && $0[1].count > 1 ? String($0[1].dropLast()) : $0[1] })
     }
 
     func status() -> Status {

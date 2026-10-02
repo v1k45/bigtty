@@ -1266,15 +1266,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             var matches = !exists && relative ? (repo?.files(named: target.path) ?? []) : []
             // Not in this checkout: maybe in another worktree of the repo,
             // where an agent may be working ("spikes/results/", "chart.png").
-            if !exists, relative, matches.isEmpty, let here = repo {
-                for worktree in here.otherWorktrees() {
-                    let there = (worktree.root as NSString).appendingPathComponent(target.path)
-                    if source.exists(there) {
-                        (path, exists, isDirectory, repo) = (there, true, source.isDirectory(there), worktree)
-                        break
-                    }
-                    let found = worktree.files(named: target.path)
-                    if !found.isEmpty { (matches, repo) = (found, worktree); break }
+            if !exists, relative, matches.isEmpty, let here = repo, let found = here.findInOtherWorktrees(target.path) {
+                repo = GitClient(root: found.root, runner: here.runner)
+                let there = (found.root as NSString).appendingPathComponent(target.path)
+                if found.paths == [there] || found.paths == [String(there.dropLast())] {
+                    (path, exists, isDirectory) = (found.paths[0], true, source.isDirectory(found.paths[0]))
+                } else {
+                    matches = found.paths
                 }
             }
             let (finalPath, found, folder, root, choices) = (path, exists, isDirectory, repo?.root, matches)
