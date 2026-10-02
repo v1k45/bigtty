@@ -15,9 +15,11 @@ cd "$root"
 derived="build/xc"
 out="build/release"
 
+# CLANG_COVERAGE_MAPPING=NO: xcodebuild otherwise instruments package
+# targets for coverage, and the app leaves default.profraw files behind.
 for scheme in bigtty btty; do
     xcodebuild -scheme "$scheme" -configuration Release -destination 'generic/platform=macOS' \
-        -derivedDataPath "$derived" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build -quiet
+        -derivedDataPath "$derived" CLANG_COVERAGE_MAPPING=NO ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build -quiet
 done
 products="$derived/Build/Products/Release"
 
