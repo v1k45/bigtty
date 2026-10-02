@@ -57,13 +57,14 @@ final class SSHAskpass {
         let retry = answeredBy[key] == sshPID && kind != .confirm
         if retry {
             answers[key] = nil
-            Keychain.delete(key)
+            Task.detached { Keychain.delete(key) }
         }
         if let known = answers[key] {
             answeredBy[key] = sshPID
             return known
         }
-        if kind == .secret, !retry, let stored = Keychain.read(key) {
+        // Off the main thread: the Keychain may be slow, or ask to unlock.
+        if kind == .secret, !retry, let stored = await Task.detached(operation: { Keychain.read(key) }).value {
             answers[key] = stored
             answeredBy[key] = sshPID
             return stored
@@ -131,10 +132,14 @@ final class SSHAskpass {
             alert.accessoryView = box
             alert.addButton(withTitle: "Continue")
             alert.addButton(withTitle: "Cancel")
+            // The field takes the typing straight away (an alert only
+            // honours this once laid out).
+            alert.layout()
             alert.window.initialFirstResponder = field
+            alert.window.makeFirstResponder(field)
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
             let value = field.stringValue
-            if kind == .secret, remember.state == .on { Keychain.save(value, for: key) }
+            if kind == .secret, remember.state == .on { Task.detached { Keychain.save(value, for: key) } }
             return value
         }
     }
