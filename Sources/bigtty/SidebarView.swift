@@ -72,6 +72,9 @@ final class SidebarView: NSView {
     /// A pane dropped on a space card (key), one of its tabs (key, tab) or
     /// the empty list below the cards (nil, nil: a new space).
     var onDropPane: ((String?, String?, PaneDragPayload) -> Void)?
+    /// A dragged pane held over a space (key) or one of its tabs: open it,
+    /// to place the pane there precisely.
+    var onSpringLoad: ((String, String?) -> Void)?
     var onMachineClick: ((String) -> Void)?
     var onSessionMenu: (() -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
@@ -115,6 +118,7 @@ final class SidebarView: NSView {
         list.onDragEnd = { [weak self] in
             self?.dropLine.isHidden = true
             self?.markPaneDrop(nil, tab: nil)
+            self?.springTarget = nil
         }
         dropLine.wantsLayer = true
         dropLine.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
@@ -153,13 +157,16 @@ final class SidebarView: NSView {
         if let card = cards.first(where: { $0.frame.contains(point) }) {
             let tab = card.tab(at: card.convert(point, from: list))
             if drop {
+                springTarget = nil
                 markPaneDrop(nil, tab: nil)
                 onDropPane?(card.space.id, tab, payload)
             } else {
                 markPaneDrop(card, tab: tab)
+                springTarget = SpringTarget(space: card.space.id, tab: tab)
             }
             return true
         }
+        springTarget = nil
         // Below this machine's last card: a space of its own.
         guard let last = cards.last, point.y > last.frame.maxY else {
             markPaneDrop(nil, tab: nil)
@@ -175,6 +182,42 @@ final class SidebarView: NSView {
         dropLine.isHidden = false
         list.addSubview(dropLine)
         return true
+    }
+
+    // MARK: Spring-loading (as Finder opens a folder you hold a file over)
+
+    private struct SpringTarget: Equatable {
+        let space: String
+        let tab: String?
+    }
+
+    private var springTimer: DispatchWorkItem?
+    /// What a dragged pane is held over; after a moment it blinks and opens.
+    private var springTarget: SpringTarget? {
+        didSet {
+            guard springTarget != oldValue else { return }
+            springTimer?.cancel()
+            springTimer = nil
+            guard let target = springTarget else { return }
+            let work = DispatchWorkItem { [weak self] in self?.spring(target) }
+            springTimer = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
+        }
+    }
+
+    private func spring(_ target: SpringTarget) {
+        guard springTarget == target else { return }
+        let card = list.subviews.compactMap { $0 as? SpaceCard }.first { $0.space.id == target.space }
+        // Two quick blinks, then open.
+        for (i, on) in [false, true, false, true].enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.07) { [weak card] in
+                card?.paneDropTab = on ? .some(target.tab) : nil
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.springTarget == target else { return }
+            self.onSpringLoad?(target.space, target.tab)
+        }
     }
 
     private weak var paneDropCard: SpaceCard?

@@ -238,6 +238,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                   let store = machine.store else { return }
             self.confirmCloseTab(tab, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
         }
+        sidebar.onSpringLoad = { [weak self] key, tab in
+            // Opened while dragging a pane: show it, so the pane can be
+            // placed exactly (the drag goes on).
+            guard let self, let ref = SpaceRef(key: key), ref.machine == self.machine.id else { return }
+            self.select(ref)
+            if let tab { self.selectTab(tab) }
+        }
         sidebar.onDropPane = { [weak self] key, tab, payload in
             guard let self, payload.machineID == self.machine.id else { return NSSound.beep() }
             let follow = !NSEvent.modifierFlags.contains(.option)
@@ -1062,8 +1069,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// The drop under a window point, and the area it would take (in the
     /// main area's coordinates).
     private func dropTarget(_ payload: PaneDragPayload, at point: NSPoint) -> (PaneDropTarget, NSRect)? {
+        // A pane from another tab or space (sprung open from the sidebar)
+        // drops in here too.
         guard payload.machineID == machine.id, let tabID, let root = store.layouts[tabID]?.root,
-              root.paneIDs.contains(payload.paneID), let main = mainArea else { return nil }
+              store.pane(payload.paneID) != nil, let main = mainArea else { return nil }
+        let fromHere = root.paneIDs.contains(payload.paneID)
         let tree = splitTree.convert(splitTree.bounds, to: main)
         let p = main.convert(point, from: nil)
         guard main.bounds.contains(p) else { return nil }
@@ -1071,7 +1081,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let edges: [(HerdrClient.DropZone, CGFloat)] = [
             (.left, p.x - tree.minX), (.right, tree.maxX - p.x), (.bottom, p.y - tree.minY), (.top, tree.maxY - p.y),
         ]
-        if root.paneIDs.count > 1, let (zone, distance) = edges.min(by: { $0.1 < $1.1 }), distance < Self.edgeBand {
+        if root.paneIDs.count > 1 || !fromHere, let (zone, distance) = edges.min(by: { $0.1 < $1.1 }), distance < Self.edgeBand {
             let span: NSRect = switch zone {
             case .left: NSRect(x: tree.minX, y: tree.minY, width: tree.width / 3, height: tree.height)
             case .right: NSRect(x: tree.maxX - tree.width / 3, y: tree.minY, width: tree.width / 3, height: tree.height)
@@ -1117,6 +1127,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// into the dropped arrangement (herdr keeps every pane and process).
     private func drop(_ source: String, on target: PaneDropTarget) {
         guard let tabID, let root = store.layouts[tabID]?.root, let workspaceID = store.pane(source)?.workspaceID else { return }
+        guard root.paneIDs.contains(source) else { return drop(fromElsewhere: source, on: target, tabID: tabID, root: root) }
         pendingFocus = source
         if case let .pane(other, .center) = target {
             splitTree.show(root.dropping(source, on: target), zoomedPane: nil)
@@ -1144,6 +1155,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 NSLog("bigtty: moving pane failed: \(error)")
             }
             guard let self else { return }
+            self.rearranging = false
+            self.store.scheduleRefresh()
+            self.render()
+        }
+    }
+
+    /// A pane from another tab or space dropped here: in beside the pane it
+    /// was dropped on (then a swap for left/top, where herdr only splits
+    /// right/down), or spanning an edge of the whole tab (then a rebuild by
+    /// moves). A move from another space gives it a new id.
+    private func drop(fromElsewhere source: String, on target: PaneDropTarget, tabID: String, root: LayoutNode) {
+        guard let workspaceID = store.tab(tabID)?.workspaceID else { return }
+        rearranging = true
+        let client = store.client
+        Task { [weak self] in
+            var landed = source
+            do {
+                switch target {
+                case let .pane(other, zone):
+                    let split = zone == .top || zone == .bottom ? "down" : "right"
+                    let moved = try await client.movePane(source, to: .tab(tabID, beside: other, split: split, ratio: nil), focus: true)
+                    landed = moved.paneID
+                    if zone == .left || zone == .top { try await client.swapPanes(landed, other) }
+                case let .tabEdge(zone):
+                    let moved = try await client.movePane(source, to: .tab(tabID, beside: root.paneIDs.last, split: "right", ratio: nil), focus: true)
+                    landed = moved.paneID
+                    let now = try await client.layout(tabID: tabID).root
+                    try await client.applyLayout(root.wrapped(with: .pane(id: landed), zone: zone), current: now, tabID: tabID, workspaceID: workspaceID)
+                }
+                try? await client.focusPane(landed)
+            } catch {
+                NSLog("bigtty: moving pane in failed: \(error)")
+            }
+            guard let self else { return }
+            self.pendingFocus = landed
             self.rearranging = false
             self.store.scheduleRefresh()
             self.render()

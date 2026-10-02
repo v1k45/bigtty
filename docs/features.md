@@ -22,6 +22,9 @@ servers and browser panes keep going where they land.
 
 - **Drag** a pane by its top edge onto a space in the sidebar (onto one of its
   tab rows for that tab), or below the cards for a new space of its own.
+  **Hold it there** a moment and the space blinks and opens, like a folder in
+  Finder: keep dragging to drop the pane exactly where you want it (beside a
+  pane, or along an edge of the whole tab).
 - **Pane ▸ Move Pane To** lists your spaces and their tabs, a new tab here and
   a new space; **⌘K ▸ Move Pane to…** picks one in the palette.
 - **⌃⌥⌘1–9** sends the focused pane to space 1–9.
