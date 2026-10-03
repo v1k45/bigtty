@@ -12,6 +12,14 @@ scripts/release.sh 0.3.0          # universal release → build/release/bigtty-0
 
 `BIGTTY_SESSION=<name>` connects to a named herdr session.
 
+Only one copy of a bundle id runs: launching a second (say from Spotlight)
+brings the running one to the front. Dev builds use `dev.bigtty.dev`, so
+they run next to the installed `dev.bigtty.bigtty`, with their own settings
+(`defaults read dev.bigtty.dev`) and notification permission. Both share
+the control socket; whichever started first serves `btty`. Set
+`BIGTTY_SOCKET=<path>` to give an instance its own socket; such instances
+always run.
+
 ## Development
 
 ```sh

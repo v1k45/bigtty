@@ -25,12 +25,17 @@ for bundle in "$bin"/*.bundle; do
 done
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 
+# Its own bundle id, so a dev build runs next to the installed app (which
+# lets only one copy of dev.bigtty.bigtty run) and keeps its own settings
+# and notification permission.
+bundle_id="dev.bigtty.dev"
+
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>dev.bigtty.bigtty</string>
+    <key>CFBundleIdentifier</key><string>${bundle_id}</string>
     <key>CFBundleName</key><string>bigtty</string>
     <key>CFBundleExecutable</key><string>bigtty</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -45,7 +50,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 # Ad-hoc signing gives the app a stable identity, which notifications need.
-codesign --force --sign - --identifier dev.bigtty.bigtty "$app/Contents/MacOS/btty"
-codesign --force --sign - --identifier dev.bigtty.bigtty "$app"
+codesign --force --sign - --identifier "$bundle_id" "$app/Contents/MacOS/btty"
+codesign --force --sign - --identifier "$bundle_id" "$app"
 
 echo "$app"
