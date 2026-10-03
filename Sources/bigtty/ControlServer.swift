@@ -14,6 +14,8 @@ final class ControlServer: @unchecked Sendable {
     private let path: String
     private let handler: Handler
     private var listenFD: Int32 = -1
+    /// The socket file this instance bound, to tell it from a later one.
+    private var boundFile: (dev: dev_t, ino: ino_t)?
 
     init(path: String = BigttyControl.socketPath, handler: @escaping Handler) {
         self.path = path
@@ -53,13 +55,25 @@ final class ControlServer: @unchecked Sendable {
         }
         chmod(path, 0o600)
         listenFD = fd
+        boundFile = Self.fileID(path)
         Thread.detachNewThread { [self] in acceptLoop() }
     }
 
     func stop() {
         guard listenFD >= 0 else { return } // never ours: don't remove another instance's socket
         close(listenFD)
-        unlink(path)
+        listenFD = -1
+        // The file may since belong to another instance (ours was deleted
+        // and it bound a new one); only remove the one we made.
+        if let ours = boundFile, let now = Self.fileID(path), ours == now {
+            unlink(path)
+        }
+    }
+
+    private static func fileID(_ path: String) -> (dev: dev_t, ino: ino_t)? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        return (info.st_dev, info.st_ino)
     }
 
     /// Whether something accepts connections at `path`.
