@@ -72,7 +72,7 @@ enum MainMenu {
         item(appMenu, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
         item(appMenu, "Show All", #selector(NSApplication.unhideAllApplications(_:)), "")
         appMenu.addItem(.separator())
-        item(appMenu, "Quit bigtty", #selector(NSApplication.terminate(_:)), "q")
+        item(appMenu, "Quit bigtty", #selector(AppDelegate.holdToQuit(_:)), "q")
 
         let file = submenu(main, "File")
         item(file, "New Space", #selector(PaneActions.newSpaceHere(_:)), "n")

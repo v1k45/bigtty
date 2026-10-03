@@ -36,8 +36,11 @@ final class KeyCap: NSView {
     override func layout() {
         super.layout()
         let text = label.intrinsicContentSize
-        label.frame = NSRect(x: (bounds.width - text.width) / 2, y: (bounds.height - text.height) / 2,
-                             width: text.width, height: text.height)
+        // Extra room below the text (same position) so tails like Q's
+        // aren't clipped.
+        let tail = ceil(label.font!.pointSize * 0.25)
+        label.frame = NSRect(x: (bounds.width - text.width) / 2, y: (bounds.height - text.height) / 2 - tail,
+                             width: text.width, height: text.height + tail)
     }
 
     override func hitTest(_: NSPoint) -> NSView? { nil }

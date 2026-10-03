@@ -22,6 +22,7 @@
 | ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |
 | ⌘V | Paste (an image pastes as a file the agent can attach) |
 | ⌘, | Settings |
+| Hold ⌘Q | Quit (a quick press only shows the hint, so a slip doesn't close bigtty) |
 
 The pane-number modifier (⌥ or ⌥⌘) is a setting.
 

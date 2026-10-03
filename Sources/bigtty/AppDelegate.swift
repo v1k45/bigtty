@@ -432,6 +432,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     // MARK: - Jump
 
+    /// ⌘Q: quits when held (see HoldToQuit); the menu item quits at once.
+    @objc func holdToQuit(_: Any?) {
+        HoldToQuit.begin()
+    }
+
     /// Debug hook: connect a machine like the Connect sheet does (`target`).
     @objc func debugAddMachine(_ sender: Any?) {
         guard let target = sender as? String else { return }
