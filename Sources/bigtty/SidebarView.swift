@@ -38,10 +38,10 @@ struct SidebarModel: Equatable {
         var stale = false
     }
 
-    /// This Mac's session switcher.
+    /// A machine's session switcher.
     struct SessionChip: Equatable {
         let name: String
-        /// Panes in this Mac's other sessions that need you.
+        /// Panes in the machine's other sessions that need you.
         let othersNeedingYou: Int
     }
 
@@ -51,7 +51,7 @@ struct SidebarModel: Equatable {
         let status: String
         let statusIsProblem: Bool
         var statusTip: String? = nil
-        /// Set for this Mac: its header switches sessions.
+        /// Set when the machine has sessions to switch between.
         var session: SessionChip? = nil
         let spaces: [Space]
     }
@@ -76,7 +76,8 @@ final class SidebarView: NSView {
     /// to place the pane there precisely.
     var onSpringLoad: ((String, String?) -> Void)?
     var onMachineClick: ((String) -> Void)?
-    var onSessionMenu: (() -> NSMenu?)?
+    /// The session switcher for a machine (by id).
+    var onSessionMenu: ((String) -> NSMenu?)?
     var onHideSidebar: (() -> Void)?
     /// A space card dropped at a position among its machine's spaces.
     var onMoveSpace: ((String, Int) -> Void)?
@@ -310,9 +311,10 @@ final class SidebarView: NSView {
                 continue
             }
             let header = MachineHeader(machine: machine)
-            header.onClick = { [weak self, weak header] in
-                guard let self else { return }
-                if machine.session != nil, let header { self.popUpSessionMenu(under: header) } else { self.onMachineClick?(machine.id) }
+            header.onClick = { [weak self] in self?.onMachineClick?(machine.id) }
+            header.onChipClick = { [weak self, weak header] in
+                guard let self, let header else { return }
+                self.popUpSessionMenu(under: header)
             }
             rows.append(header)
             if let message = model.message, machine == model.machines.first {
@@ -361,7 +363,7 @@ final class SidebarView: NSView {
     }
 
     private func popUpSessionMenu(under header: MachineHeader) {
-        guard let menu = onSessionMenu?() else { return }
+        guard let menu = onSessionMenu?(header.machine.id) else { return }
         header.pressed = true
         menu.popUp(positioning: nil, at: NSPoint(x: 6, y: header.bounds.maxY + 2), in: header)
         header.pressed = false
@@ -479,7 +481,7 @@ private final class MachineHeader: NSView, SidebarRow {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
-    /// This Mac's session: name, chevron, and a badge for the others.
+    /// The machine's session: name, chevron, and a badge for the others.
     private let chip = NSView()
     private let chipLabel = NSTextField(labelWithString: "")
     private let chipChevron = NSImageView()
@@ -528,9 +530,10 @@ private final class MachineHeader: NSView, SidebarRow {
             chipBadge.isHidden = session.othersNeedingYou == 0
             for view in [chipLabel, chipChevron, chipBadge] as [NSView] { chip.addSubview(view) }
             addSubview(chip)
+            let shortcut = machine.name == "This Mac" ? " · ⇧⌘S" : ""
             toolTip = session.othersNeedingYou > 0
-                ? "Session “\(session.name)” · \(session.othersNeedingYou) waiting in other sessions · ⇧⌘S to switch"
-                : "Session “\(session.name)” · click or ⇧⌘S to switch sessions"
+                ? "Session “\(session.name)” · \(session.othersNeedingYou) waiting in other sessions · click to switch\(shortcut)"
+                : "Session “\(session.name)” · click to switch sessions\(shortcut)"
             updateChip()
         }
     }
@@ -556,7 +559,18 @@ private final class MachineHeader: NSView, SidebarRow {
 
     func height(forWidth _: CGFloat) -> CGFloat { 30 }
 
-    override func mouseDown(with _: NSEvent) { onClick?() }
+    /// The session chip (or, on this Mac, the whole header).
+    var onChipClick: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        // A remote's header elsewhere explains a connection problem.
+        if isSessionSwitcher, machine.name == "This Mac" || chip.frame.contains(point) || !isProblem {
+            onChipClick?()
+        } else {
+            onClick?()
+        }
+    }
 
     override var isFlipped: Bool { true }
 

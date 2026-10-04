@@ -114,6 +114,11 @@ stays connected in the background: its agents' questions badge the
 switcher, notify you and count in the Dock badge. `btty` commands from an
 agent act in the agent's own session.
 
+Machines connected over SSH get the same switcher once they have more than
+one session: click the session name on the machine's row to switch, start a
+stopped session there, or create one. Their running sessions stay connected
+in the background too.
+
 ## Remote machines
 
 **File ▸ Connect Machine…** takes any SSH target (`user@host`, `host:port`, an

@@ -133,11 +133,14 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         }
         var number = 0
         let visibleLocal = manager.activeLocal
-        for machine in [visibleLocal] + manager.remotes + manager.localMachines.filter({ $0 !== visibleLocal }) {
+        let shownRemotes = manager.remotes.map { manager.shown(for: $0) }
+        let otherRemotes = manager.remotes.flatMap { manager.sessions(of: $0) }.filter { m in !shownRemotes.contains { $0 === m } }
+        for machine in [visibleLocal] + shownRemotes + manager.localMachines.filter({ $0 !== visibleLocal }) + otherRemotes {
             guard let store = machine.store, let spaceInfo = machine.spaceInfo, let attention = machine.attention,
                   case .connected = store.state else { continue }
-            let visible = machine === visibleLocal || !machine.isLocal
-            let suffix = !machine.isLocal ? " · \(machine.name)" : visible ? "" : " · \(machine.sessionName) session"
+            let visible = machine === visibleLocal || shownRemotes.contains { $0 === machine }
+            let remoteSession = machine.session.map { " (\($0))" } ?? ""
+            let suffix = !machine.isLocal ? " · \(machine.name)\(remoteSession)" : visible ? "" : " · \(machine.sessionName) session"
             for workspace in store.snapshot.workspaces {
                 if visible { number += 1 }
                 let info = spaceInfo.info[workspace.workspaceID]
@@ -147,7 +150,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                     section: "Spaces", title: name, detail: detail + (visible && number <= 9 ? "   ⌘\(number)" : ""),
                     symbol: "square.stack", alert: info?.lineIsAlert == true,
                     target: .space(SpaceRef(machine: machine.id, workspace: workspace.workspaceID)),
-                    haystack: "\(name) \(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.isLocal ? machine.sessionName : "")".lowercased()
+                    haystack: "\(name) \(workspace.label) \(info?.branch ?? "") \(info?.directory ?? "") \(machine.name) \(machine.sessionName)".lowercased()
                 ))
             }
             items += collectPanes(machine: machine, store: store, attention: attention, suffix: suffix)

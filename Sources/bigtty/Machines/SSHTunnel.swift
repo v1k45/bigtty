@@ -43,10 +43,20 @@ final class SSHTunnel: @unchecked Sendable {
         let target: String
         /// Remote herdr session; `nil` is the default one.
         let session: String?
-        /// Local folder holding the forwarded sockets and the control socket.
+        /// Local folder holding the forwarded sockets.
         let directory: String
+        /// Folder holding the shared SSH connection's control socket: a
+        /// machine's other sessions use their parent's.
+        let controlDirectory: String
 
-        var controlPath: String { directory + "/cm" }
+        init(target: String, session: String?, directory: String, controlDirectory: String? = nil) {
+            self.target = target
+            self.session = session
+            self.directory = directory
+            self.controlDirectory = controlDirectory ?? directory
+        }
+
+        var controlPath: String { controlDirectory + "/cm" }
 
         /// A target ssh can't mistake for an option (`-oProxyCommand=…`) or
         /// a second argument.

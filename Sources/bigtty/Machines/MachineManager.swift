@@ -49,10 +49,18 @@ final class MachineManager {
     /// Every session on this Mac, stopped ones too, for the switcher.
     private(set) var knownSessions: [SessionInfo] = []
     private(set) var remotes: [Machine] = []
+    /// A remote's other herdr sessions that are running, by its id.
+    private(set) var remoteSessions: [String: [Machine]] = [:]
+    /// Every herdr session on each remote, by its id, for the switcher.
+    private(set) var remoteKnown: [String: [SessionInfo]] = [:]
+    /// The session each remote shows: its id to the session's name (a
+    /// remote's own session when unset).
+    private var remoteShown: [String: String] = UserDefaults.standard.dictionary(forKey: "remoteSessions") as? [String: String] ?? [:]
+    private var sessionTicks = 0
     private var observers: [UUID: @MainActor () -> Void] = [:]
     private var sessionTimer: Timer?
 
-    var all: [Machine] { [local] + sessions + remotes }
+    var all: [Machine] { [local] + sessions + remotes + remotes.flatMap { remoteSessions[$0.id] ?? [] } }
     /// One machine per session on this Mac.
     var localMachines: [Machine] { [local] + sessions }
 
@@ -85,7 +93,13 @@ final class MachineManager {
         importHerdrMachines()
         refreshSessions()
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshSessions() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refreshSessions()
+                // Remotes less often: each look is an SSH command.
+                self.sessionTicks += 1
+                if self.sessionTicks % 3 == 0 { self.refreshRemoteSessions() }
+            }
         }
     }
 
@@ -175,7 +189,7 @@ final class MachineManager {
     }
 
     /// Valid for `herdr --session`: letters, digits, - and _.
-    static func isValidSessionName(_ name: String) -> Bool {
+    nonisolated static func isValidSessionName(_ name: String) -> Bool {
         !name.isEmpty && name.count <= 40 && name != "default"
             && name.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "_" }
     }
@@ -221,6 +235,9 @@ final class MachineManager {
     func remove(_ id: String) {
         guard let machine = remotes.first(where: { $0.id == id }) else { return }
         machine.disconnect()
+        for other in remoteSessions[id] ?? [] { other.disconnect() }
+        remoteSessions[id] = nil
+        remoteKnown[id] = nil
         remotes.removeAll { $0.id == id }
         Self.save(Self.load().filter { $0.id != id })
         changed()
@@ -229,10 +246,129 @@ final class MachineManager {
     @discardableResult
     private func attach(_ saved: Saved) -> Machine {
         let machine = Machine(id: saved.id, name: saved.name, target: saved.target, session: saved.session)
-        machine.observe { [weak self] in self?.changed() }
+        machine.observe { [weak self, weak machine] in
+            guard let self, let machine else { return }
+            // Just connected: list its sessions now rather than on the timer.
+            if machine.status == .connected, self.remoteKnown[machine.id] == nil { self.refreshRemoteSessions(machine) }
+            self.changed()
+        }
         remotes.append(machine)
         machine.connect()
         return machine
+    }
+
+    // MARK: - Sessions on remotes
+
+    /// The session a remote shows in the sidebar: its own, or another one
+    /// switched to.
+    func shown(for remote: Machine) -> Machine {
+        guard let name = remoteShown[remote.id], name != remote.sessionName else { return remote }
+        return remoteSessions[remote.id]?.first { $0.sessionName == name } ?? remote
+    }
+
+    /// The saved remote a machine is (or is a session of).
+    func remote(of machine: Machine) -> Machine? {
+        remotes.first { $0.id == (machine.parentID ?? machine.id) }
+    }
+
+    /// Every session's machine on a remote: its own first.
+    func sessions(of remote: Machine) -> [Machine] {
+        [remote] + (remoteSessions[remote.id] ?? [])
+    }
+
+    /// Shows a remote's session in the sidebar.
+    func show(_ machine: Machine) {
+        guard let remote = remote(of: machine) else { return }
+        remoteShown[remote.id] = machine.sessionName
+        if !Self.remotesDisabled { UserDefaults.standard.set(remoteShown, forKey: "remoteSessions") }
+        changed()
+    }
+
+    /// A remote's session by name, connecting to it if needed; `start`
+    /// starts its herdr server when it's stopped.
+    @discardableResult
+    func open(session name: String?, on remote: Machine, start: Bool = false) -> Machine? {
+        if name == remote.session { return remote }
+        guard let name, Self.isValidSessionName(name), let target = remote.target else { return nil }
+        if let existing = remoteSessions[remote.id]?.first(where: { $0.session == name }) {
+            if start, existing.status == .notRunning { existing.startServer() }
+            return existing
+        }
+        let machine = Machine(id: remote.id + "/" + name, name: remote.name, target: target, session: name, parent: remote.id)
+        machine.startsWhenStopped = start
+        machine.observe { [weak self] in self?.changed() }
+        opened[machine.id] = Date()
+        remoteSessions[remote.id, default: []].append(machine)
+        remoteSessions[remote.id]?.sort { $0.sessionName.localizedStandardCompare($1.sessionName) == .orderedAscending }
+        machine.connect(byUser: false)
+        changed()
+        return machine
+    }
+
+    /// Lists every connected remote's herdr sessions and connects the
+    /// running ones, so their agents reach you too.
+    func refreshRemoteSessions(_ only: Machine? = nil) {
+        for remote in remotes where remote.status == .connected && (only == nil || only === remote) && !listing.contains(remote.id) {
+            listing.insert(remote.id)
+            let runner = remote.runner
+            Task.detached {
+                let found = Self.remoteSessionList(runner)
+                await MainActor.run {
+                    self.listing.remove(remote.id)
+                    found.map { self.remoteSessionsListed($0, on: remote) }
+                }
+            }
+        }
+    }
+
+    private var listing: Set<String> = []
+    /// When each remote session's machine was made, by id.
+    private var opened: [String: Date] = [:]
+
+    private func remoteSessionsListed(_ found: [SessionInfo], on remote: Machine) {
+        guard remotes.contains(where: { $0 === remote }) else { return }
+        for info in found where info.running && info.name != remote.session {
+            open(session: info.name, on: remote)
+        }
+        // Stopped or deleted elsewhere: let go, unless just opened (it may
+        // be starting).
+        let running = Set(found.filter(\.running).map(\.title))
+        let gone = (remoteSessions[remote.id] ?? []).filter { machine in
+            !running.contains(machine.sessionName) && Date().timeIntervalSince(opened[machine.id] ?? .distantPast) > 30
+        }
+        if !gone.isEmpty {
+            for machine in gone { machine.disconnect() }
+            remoteSessions[remote.id]?.removeAll { machine in gone.contains { $0 === machine } }
+        }
+        let sorted = found.sorted { a, b in
+            a.name == nil || (b.name != nil && a.title.localizedStandardCompare(b.title) == .orderedAscending)
+        }
+        if sorted != remoteKnown[remote.id] || !gone.isEmpty {
+            remoteKnown[remote.id] = sorted
+            changed()
+        }
+    }
+
+    /// herdr's sessions on a remote: its config folder, and whether each
+    /// has a server socket. Nil when the command fails.
+    nonisolated static func remoteSessionList(_ runner: CommandRunner) -> [SessionInfo]? {
+        let script = """
+        base="${XDG_CONFIG_HOME:-$HOME/.config}/herdr"
+        if [ -d "$base" ]; then r=no; [ -S "$base/herdr.sock" ] && r=yes; printf '\\t%s\\n' "$r"; fi
+        for d in "$base"/sessions/*/; do
+          [ -d "$d" ] || continue
+          n="$(basename "$d")"; r=no; [ -S "$d/herdr.sock" ] && r=yes
+          printf '%s\\t%s\\n' "$n" "$r"
+        done
+        """
+        guard let output = runner.run("sh", ["-c", script]) else { return nil }
+        return output.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count == 2 else { return nil }
+            let name = parts[0].isEmpty ? nil : parts[0]
+            if let name, !isValidSessionName(name) { return nil }
+            return SessionInfo(name: name, running: parts[1] == "yes")
+        }
     }
 
     nonisolated static func defaultName(for target: String) -> String {

@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     /// Spaces of the session on screen and of every remote machine.
     private var allSpaces: [SpaceRef] {
-        ([manager.activeLocal] + manager.remotes).flatMap { machine -> [SpaceRef] in
+        ([manager.activeLocal] + manager.remotes.map { manager.shown(for: $0) }).flatMap { machine -> [SpaceRef] in
             guard let store = machine.store, case .connected = store.state else { return [] }
             return store.snapshot.workspaces.map { SpaceRef(machine: machine.id, workspace: $0.workspaceID) }
         }
@@ -242,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Switches this Mac's session: to its focused space, or to the
     /// session itself while it has none (not running, starting).
     func showSession(_ machine: Machine) {
-        guard machine.isLocal else { return }
+        guard machine.isLocal else { return showRemoteSession(machine) }
         let previous = manager.activeLocal
         manager.activeLocal = machine
         let store = machine.store
@@ -273,16 +273,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if space == nil { giveFirstSpace(machine) }
     }
 
+    /// A remote's session: its focused space, or the session itself while
+    /// it has none (starting); one just started gets a first space.
+    private func showRemoteSession(_ machine: Machine) {
+        manager.show(machine)
+        let space = machine.store.flatMap { store -> SpaceRef? in
+            guard case .connected = store.state else { return nil }
+            let id = store.snapshot.focusedWorkspaceID ?? store.snapshot.workspaces.first?.workspaceID
+            return id.map { SpaceRef(machine: machine.id, workspace: $0) }
+        }
+        if let space { return showSpace(space) }
+        if windows.isEmpty { openWindow(pinnedTo: nil) }
+        keyWindow?.switchMachine(to: machine)
+        keyWindow?.window?.makeKeyAndOrderFront(nil)
+        giveFirstSpace(machine)
+    }
+
     /// A session just started (or left with no spaces) gets one in the home
     /// folder once herdr answers, so switching never lands on nothing.
     private func giveFirstSpace(_ machine: Machine) {
         Task { @MainActor in
-            for _ in 0..<40 {
+            // A remote one also waits for SSH and its server to start.
+            for _ in 0..<(machine.isLocal ? 40 : 120) {
                 if case .connected = machine.store?.state { break }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            guard let store = machine.store, case .connected = store.state, store.snapshot.workspaces.isEmpty,
-                  manager.activeLocal === machine else { return }
+            let shown = machine.isLocal ? manager.activeLocal === machine : manager.remote(of: machine).map { manager.shown(for: $0) } === machine
+            guard let store = machine.store, case .connected = store.state, store.snapshot.workspaces.isEmpty, shown else { return }
             // Re-read first: the snapshot may lag the server.
             let fresh = try? await store.client.snapshot()
             if let first = fresh?.workspaces.first {
@@ -290,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 showSpace(SpaceRef(machine: machine.id, workspace: first.workspaceID))
                 return
             }
-            guard let pane = try? await store.client.createWorkspace(cwd: NSHomeDirectory()) else { return }
+            guard let pane = try? await store.client.createWorkspace(cwd: machine.homeDirectory ?? NSHomeDirectory()) else { return }
             store.scheduleRefresh()
             try? await Task.sleep(nanoseconds: 300_000_000)
             showSpace(SpaceRef(machine: machine.id, workspace: pane.workspaceID))
@@ -446,6 +463,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             if machine?.status == .notRunning { machine?.startServer() }
         }
         pendingMachine = machine.id
+    }
+
+    /// Debug hook: `<session>` switches the first remote to that herdr
+    /// session (starting it if stopped), like its switcher; logs the menu.
+    @objc func debugRemoteSession(_ sender: Any?) {
+        guard let name = sender as? String, let remote = manager.remotes.first else { return }
+        let menu = keyWindow?.remoteSessionMenu(manager.shown(for: remote))
+        NSLog("bigtty: remote sessions: %@", menu?.items.map { ($0.state == .on ? "✓ " : "") + $0.title + ($0.badge.map { " [\($0.stringValue)]" } ?? "") }.joined(separator: " | ") ?? "-")
+        let running = manager.remoteKnown[remote.id]?.first { $0.title == name }?.running ?? false
+        let session = name == "default" ? nil : name
+        guard let target = manager.open(session: session, on: remote, start: !running) else { return }
+        showSession(target)
     }
 
     /// Debug hook: start herdr on (or reconnect) every remote machine.

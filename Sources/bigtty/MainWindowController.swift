@@ -130,7 +130,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             // This window's machine was removed (a session deleted elsewhere,
             // a machine removed): fall back rather than show a dead one.
             if !self.manager.all.contains(where: { $0 === self.machine }) {
-                self.switchMachine(to: self.manager.activeLocal)
+                // A remote's session stopped: that remote's own session.
+                let remote = self.manager.remotes.first { $0.id == self.machine.parentID }
+                self.switchMachine(to: remote ?? self.manager.activeLocal)
                 return
             }
             self.render()
@@ -260,7 +262,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             guard let self, let machine = self.manager.machine(id) else { return }
             self.onMachineProblem?(machine)
         }
-        sidebar.onSessionMenu = { [weak self] in self?.sessionMenu() }
+        sidebar.onSessionMenu = { [weak self] id in
+            guard let self, let machine = self.manager.machine(id) else { return nil }
+            return machine.isLocal ? self.sessionMenu() : self.remoteSessionMenu(machine)
+        }
         sidebar.onMoveSpace = { [weak self] key, index in
             guard let self, let ref = SpaceRef(key: key), let machine = self.manager.machine(ref.machine) else { return }
             machine.store?.perform { try await $0.moveWorkspace(ref.workspace, to: index) }
@@ -578,7 +583,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// Points this window at another machine: its panes go, its spaces come.
     func switchMachine(to target: Machine) {
-        if target.isLocal { manager.activeLocal = target }
+        if target.isLocal { manager.activeLocal = target } else { manager.show(target) }
         guard target !== machine else { return }
         for view in paneViews.values {
             view.terminal?.detach()
@@ -683,8 +688,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// one last switched to.
     private var localSession: Machine { machine.isLocal ? machine : manager.activeLocal }
 
-    /// Machines the sidebar shows: one session of this Mac, every remote.
-    private var visibleMachines: [Machine] { [localSession] + manager.remotes }
+    /// Machines the sidebar shows: one session of this Mac, one of every
+    /// remote (this window's, if it shows one of its sessions).
+    private var visibleMachines: [Machine] {
+        [localSession] + manager.remotes.map { remote in
+            manager.sessions(of: remote).contains { $0 === machine } ? machine : manager.shown(for: remote)
+        }
+    }
 
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
@@ -759,7 +769,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     /// The session switcher on this Mac's header: its name, and how many
     /// panes in the other sessions need you.
     private func sessionChip(_ machine: Machine) -> SidebarModel.SessionChip? {
-        guard machine.isLocal else { return nil }
+        if !machine.isLocal {
+            // A remote gets one once it has another session to switch to.
+            guard let remote = manager.remote(of: machine),
+                  (manager.remoteKnown[remote.id]?.count ?? 0) > 1 || machine !== remote else { return nil }
+            let others = manager.sessions(of: remote).filter { $0 !== machine }
+                .reduce(0) { $0 + ($1.attention?.attention.needingAttention.count ?? 0) }
+            return .init(name: machine.sessionName, othersNeedingYou: others)
+        }
         let others = manager.localMachines.filter { $0 !== machine }
             .reduce(0) { $0 + ($1.attention?.attention.needingAttention.count ?? 0) }
         return .init(name: machine.sessionName, othersNeedingYou: others)
@@ -817,6 +834,66 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             menu.addItem(delete)
         }
         return menu
+    }
+
+    /// The switcher on a remote's header: its herdr sessions there.
+    func remoteSessionMenu(_ machine: Machine) -> NSMenu? {
+        guard let remote = manager.remote(of: machine) else { return nil }
+        manager.refreshRemoteSessions(remote)
+        let menu = NSMenu()
+        let header = NSMenuItem(title: "Sessions on \(remote.name)", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        var known = manager.remoteKnown[remote.id] ?? []
+        if !known.contains(where: { $0.name == remote.session }) { known.insert(.init(name: remote.session, running: true), at: 0) }
+        for info in known {
+            let session = manager.sessions(of: remote).first { $0.session == info.name }
+            let item = ClosureMenuItem(title: info.title, keyEquivalent: "") { [weak self] in
+                guard let self, let target = session ?? self.manager.open(session: info.name, on: remote, start: !info.running) else { return }
+                if !info.running, target.status == .notRunning { target.startServer() }
+                self.onShowSession?(target)
+            }
+            item.state = session === machine ? .on : .off
+            let waiting = session?.attention?.attention.needingAttention.count ?? 0
+            if !info.running {
+                item.badge = NSMenuItemBadge(string: "stopped")
+                item.toolTip = "Starts the session on \(remote.name)"
+            } else if waiting > 0 {
+                item.badge = NSMenuItemBadge(count: waiting)
+                item.toolTip = "\(waiting) pane\(waiting == 1 ? "" : "s") need\(waiting == 1 ? "s" : "") you"
+            } else if let count = session?.store?.snapshot.workspaces.count, case .connected = session?.store?.state {
+                item.badge = NSMenuItemBadge(string: "\(count) space\(count == 1 ? "" : "s")")
+            }
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "New Session on \(remote.name)…", keyEquivalent: "") { [weak self] in
+            self?.newRemoteSession(on: remote)
+        })
+        return menu
+    }
+
+    /// A new herdr session on a remote, started and switched to.
+    private func newRemoteSession(on remote: Machine) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "New Session on \(remote.name)"
+        alert.informativeText = "A separate herdr session there, with its own spaces. Letters, digits, - and _."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "work"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            guard MachineManager.isValidSessionName(name), let target = self.manager.open(session: name, on: remote, start: true) else {
+                NSSound.beep()
+                return
+            }
+            self.onShowSession?(target)
+        }
     }
 
     /// Debug hook: logs the session switcher's items.

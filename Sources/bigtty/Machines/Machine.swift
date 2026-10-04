@@ -69,13 +69,14 @@ final class Machine {
     /// "session:<name>".
     init(local endpoint: HerdrEndpoint, id: String = "local") {
         self.id = id
+        parentID = nil
         name = "This Mac"
         kind = .local
         session = endpoint.session
         makeStore(endpoint: endpoint)
     }
 
-    /// The herdr session this Mac's machine shows; nil is the default one.
+    /// The herdr session this machine shows; nil is the default one.
     private(set) var session: String?
 
     /// How the session switcher names it.
@@ -86,16 +87,26 @@ final class Machine {
     /// local session, as before sessions).
     var hostTag: String? { id == "local" ? nil : id }
 
-    /// A machine over SSH; `connect()` brings it up.
-    init(id: String, name: String, target: String, session: String?) {
+    /// The saved machine this is another herdr session of (remote only).
+    let parentID: String?
+
+    /// A machine over SSH; `connect()` brings it up. `parent`: the saved
+    /// machine whose other herdr session this is; it shares that one's SSH
+    /// login and gets a folder of its own for the forwarded sockets.
+    init(id: String, name: String, target: String, session: String?, parent: String? = nil) {
         self.id = id
         self.name = name
+        self.session = session
+        parentID = parent
         kind = .ssh(target: target, session: session)
         // No spaces allowed: ssh splits ControlPath on them. Short, too, for
         // the 104-byte Unix socket path limit.
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("dev.bigtty/m/\(id.prefix(8))").path
-        tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir))
+        let machines = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("dev.bigtty/m")
+        let own = parent.map { String($0.prefix(8)) } ?? String(id.prefix(8))
+        let control = machines.appendingPathComponent(own).path
+        let dir = parent == nil ? control : control + "/s" + Self.shortHash(session ?? "")
+        tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir, controlDirectory: control))
         // A login waiting for approval in the browser: say so, with the link.
         approvalObserver = NotificationCenter.default.addObserver(forName: .bigttyLoginApproval, object: nil, queue: .main) { [weak self] note in
             guard let parts = note.object as? [String], parts.count == 2, let url = URL(string: parts[1]) else { return }
@@ -126,7 +137,8 @@ final class Machine {
     private func makeStore(endpoint: HerdrEndpoint) {
         let store = SessionStore(endpoint: endpoint)
         // Notifications say where: a remote machine, or a session here other than the default.
-        let attention = AttentionCenter(store: store, machineName: isLocal ? session.map { "\($0) session" } : name)
+        let attention = AttentionCenter(store: store, machineName: isLocal ? session.map { "\($0) session" }
+            : parentID != nil ? "\(name) · \(sessionName) session" : name)
         attention.viewedPanes = { [weak self] in self?.viewedPanes() ?? [] }
         attention.reveal = { [weak self] pane in self?.reveal(pane) }
         let spaceInfo = SpaceInfoCenter(store: store, attention: attention, runner: { [weak self] in self?.runner ?? .local })
@@ -222,6 +234,9 @@ final class Machine {
         scheduleReconnect(after: message)
     }
 
+    /// Start herdr for this session if the first connect finds it stopped.
+    var startsWhenStopped = false
+
     /// The last connection error, for the problem sheet and debugging.
     private(set) var lastError: String?
 
@@ -229,7 +244,13 @@ final class Machine {
         lastError = failure.description
         switch failure {
         case .herdrMissing: status = .herdrMissing
-        case .notRunning: status = .notRunning
+        case .notRunning:
+            status = .notRunning
+            // A session you asked to start: start it now that it's probed.
+            if startsWhenStopped {
+                startsWhenStopped = false
+                startServer()
+            }
         case _ where failure.needsSignIn: status = .signIn(failure.description)
         default: scheduleReconnect(after: failure.description)
         }
@@ -319,6 +340,13 @@ final class Machine {
     var target: String? {
         if case let .ssh(target, _) = kind { return target }
         return nil
+    }
+
+    /// Six hex digits naming a session's socket folder (FNV-1a).
+    private static func shortHash(_ text: String) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        return String(format: "%06x", hash & 0xFFFFFF)
     }
 
     static func version(of binary: String) -> String? {
