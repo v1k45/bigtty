@@ -26,6 +26,7 @@ struct NeedsYouEntry {
         case .login: "lock"
         case .blocked: "exclamationmark.bubble"
         case .waiting: "hourglass"
+        case .unreachable: "bolt.horizontal.circle"
         case .finished: "checkmark.circle"
         }
     }
@@ -33,13 +34,17 @@ struct NeedsYouEntry {
     /// Calls for you now (accent-colored), rather than just being on the list.
     var urgent: Bool { kind == .login || kind == .blocked }
 
+    /// Machines' connection problems dismissed until their status changes.
+    static var dismissedMachines = DismissedUntilChanged<Machine.Status>()
+
     static func collect(_ manager: MachineManager) -> [NeedsYouEntry] {
         var entries: [String: NeedsYouEntry] = [:]
         var items: [NeedsYouItem] = []
         for (index, machine) in manager.all.enumerated() {
             let place = Self.place(machine, manager: manager)
-            if machine.needsLogin {
-                let item = NeedsYouItem(kind: .login, machineID: machine.id, order: [index])
+            if let kind = machine.connectionKind {
+                if kind == .unreachable, dismissedMachines.isDismissed(machine.id, in: machine.status) { continue }
+                let item = NeedsYouItem(kind: kind, machineID: machine.id, order: [index])
                 items.append(item)
                 entries[item.id] = NeedsYouEntry(item: item, machine: machine, pane: nil, title: machine.name,
                                                  line: machine.loginLine, place: place)
@@ -55,9 +60,10 @@ struct NeedsYouEntry {
                 let agent = pane.displayAgent ?? pane.agent ?? "agent"
                 let line = switch item.kind {
                 case .blocked: info?.question(for: paneID).map { "\(agent): \($0)" } ?? "\(agent) needs you"
-                case .waiting: "\(agent) · waiting for you"
+                // Seen but unanswered: the question is why you came back.
+                case .waiting: info?.question(for: paneID).map { "\(agent): \($0)" } ?? "\(agent) · waiting for you"
                 case .finished: "\(agent) finished"
-                case .login: ""
+                case .login, .unreachable: ""
                 }
                 items.append(item)
                 entries[item.id] = NeedsYouEntry(item: item, machine: machine, pane: pane, title: space, line: line, place: place)
@@ -83,22 +89,44 @@ struct NeedsYouEntry {
         }
     }
 
-    /// Off the list until its state changes; false if it can't be (a login).
-    @discardableResult
-    func dismiss() -> Bool {
-        guard let pane, let attention = machine.attention else { return false }
-        attention.dismiss(pane.paneID)
-        return true
+    /// A login waiting on you can't be dismissed, only dealt with.
+    var dismissable: Bool { pane != nil || kind == .unreachable }
+
+    /// Off the list until its state changes (or `undismiss`).
+    func dismiss() {
+        if let pane {
+            machine.attention?.dismiss(pane.paneID)
+        } else if kind == .unreachable {
+            Self.dismissedMachines.dismiss(machine.id, in: machine.status)
+            NotificationCenter.default.post(name: .bigttyNeedsYouChanged, object: nil)
+        }
+    }
+
+    func undismiss() {
+        if let pane {
+            machine.attention?.undismiss(pane.paneID)
+        } else {
+            Self.dismissedMachines.undismiss(machine.id)
+            NotificationCenter.default.post(name: .bigttyNeedsYouChanged, object: nil)
+        }
     }
 }
 
+extension Notification.Name {
+    /// Needs You changed outside any store (a machine dismissed, the
+    /// section collapsed): sidebars redraw.
+    static let bigttyNeedsYouChanged = Notification.Name("bigttyNeedsYouChanged")
+}
+
 extension Machine {
-    /// A login that's stuck on you: approval, sign-in, or a failure.
-    var needsLogin: Bool {
-        guard !isLocal else { return false }
+    /// A connection problem for Needs You: a login waiting on you
+    /// (approval, sign-in), or a machine that can't be reached.
+    var connectionKind: NeedsYouItem.Kind? {
+        guard !isLocal else { return nil }
         switch status {
-        case .approval, .signIn, .failed, .herdrMissing: return true
-        default: return false
+        case .approval, .signIn: return .login
+        case .failed, .herdrMissing: return .unreachable
+        default: return nil
         }
     }
 

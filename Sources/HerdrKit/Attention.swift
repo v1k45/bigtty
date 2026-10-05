@@ -67,20 +67,25 @@ public struct Attention: Sendable, Equatable {
         seenBlocked.formUnion(viewed.intersection(blocked))
     }
 
-    /// Takes a pane off Needs You (and counts it as seen) until its agent's
-    /// state changes.
+    /// Takes a pane off Needs You (it stops needing attention) until its
+    /// agent's state changes.
     public mutating func dismiss(_ paneID: String) {
         dismissed.insert(paneID)
-        markViewed([paneID])
+    }
+
+    /// Undoes `dismiss`: the pane is back as it was.
+    public mutating func undismiss(_ paneID: String) {
+        dismissed.remove(paneID)
     }
 
     public func reason(for paneID: String) -> Reason? {
+        if dismissed.contains(paneID) { return nil }
         if blocked.contains(paneID), !seenBlocked.contains(paneID) { return .blocked }
         if unseenDone.contains(paneID) { return .done }
         return nil
     }
 
-    public var needingAttention: Set<String> { blocked.subtracting(seenBlocked).union(unseenDone) }
+    public var needingAttention: Set<String> { blocked.subtracting(seenBlocked).union(unseenDone).subtracting(dismissed) }
 
     /// Panes in the order jump-to-unread visits them: blocked first, then
     /// finished, each in workspace/tab/pane order.

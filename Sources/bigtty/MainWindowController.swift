@@ -25,6 +25,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     private let placeholder = PlaceholderView()
     private var observers: [(UUID, (UUID) -> Void)] = []
     private var audioObserver: NSObjectProtocol?
+    private var needsYouObserver: NSObjectProtocol?
     private var settingsObserver: NSObjectProtocol?
     /// herdr's focused pane as of the last render, to notice when it moves.
     private var lastHerdrFocus: String?
@@ -139,6 +140,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
         observers = [(a, { manager.removeObserver($0) })]
         audioObserver = NotificationCenter.default.addObserver(forName: .bigttyAudioChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.render() }
+        }
+        needsYouObserver = NotificationCenter.default.addObserver(forName: .bigttyNeedsYouChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.render() }
         }
         settingsObserver = NotificationCenter.default.addObserver(forName: .bigttySettingsChanged, object: nil, queue: .main) { [weak self] _ in
@@ -273,6 +277,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         sidebar.onDismissNeedsYou = { [weak self] id in
             guard let self else { return }
             NeedsYouEntry.collect(self.manager).first { $0.id == id }?.dismiss()
+        }
+        sidebar.onToggleNeedsYou = {
+            UserDefaults.standard.set(!Self.needsYouCollapsed, forKey: Self.needsYouCollapsedKey)
+            NotificationCenter.default.post(name: .bigttyNeedsYouChanged, object: nil)
         }
         sidebar.onShowAllNeedsYou = { NSApp.sendAction(#selector(AppDelegate.showNeedsYou(_:)), to: nil, from: nil) }
         sidebar.onMoveSpace = { [weak self] key, index in
@@ -710,10 +718,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
-        model.needsYou = NeedsYouEntry.collect(manager).map {
+        let needsYou = NeedsYouEntry.collect(manager)
+        model.needsYou = needsYou.map {
             .init(id: $0.id, kind: $0.kind, title: $0.title, line: $0.line, place: $0.place, age: $0.age,
-                  symbol: $0.symbol, urgent: $0.urgent, dismissable: $0.pane != nil)
+                  symbol: $0.symbol, urgent: $0.urgent, dismissable: $0.dismissable)
         }
+        model.needsYouCollapsed = Self.needsYouCollapsed
+        // Spaces whose agent's question Needs You already shows, just above:
+        // their cards don't repeat it.
+        let questionAbove: Set<String> = model.needsYouCollapsed ? [] : Set(needsYou.prefix(SidebarView.needsYouShown).compactMap { entry in
+            guard entry.kind == .blocked, let pane = entry.pane else { return nil }
+            return SpaceRef(machine: entry.machine.id, workspace: pane.workspaceID).key
+        })
         var number = 0
         for machine in visibleMachines {
             guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
@@ -760,7 +776,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 return .init(
                     id: ref.key, name: Self.spaceName(workspace, store: store, agentTitles: spaceInfo.agentTitles),
                     shortcut: number <= 9 ? "⌘\(number)" : "",
-                    meta: meta, ports: info.ports, line: info.line,
+                    meta: meta, ports: info.ports,
+                    line: questionAbove.contains(ref.key) && info.lineIsAlert ? Self.withoutQuestion(info.line) : info.line,
                     alert: info.lineIsAlert && !selected || (info.lineIsAlert && selected && tabs.count <= 1),
                     finished: finished, selected: selected, tabs: tabs,
                     hinting: showsHints,
@@ -775,6 +792,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                                         statusTip: machine.statusTip, session: sessionChip(machine), spaces: spaces))
         }
         return model
+    }
+
+    private static let needsYouCollapsedKey = "needsYouCollapsed"
+    static var needsYouCollapsed: Bool { UserDefaults.standard.bool(forKey: needsYouCollapsedKey) }
+
+    /// "claude: Allow this edit?" → "claude needs you · question above".
+    private static func withoutQuestion(_ line: String?) -> String? {
+        guard let line, let colon = line.range(of: ": ") else { return line }
+        return "\(line[..<colon.lowerBound]) needs you · question above"
     }
 
     /// A browser pane playing sound.

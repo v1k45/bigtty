@@ -108,6 +108,45 @@ import Testing
         #expect(items(attention, [pane("a", .blocked)]).map(\.kind) == [.blocked])
     }
 
+    @Test func undoDismissRestoresItAsItWas() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("a", .working), pane("b", .working)], viewed: [], now: t0)
+        let panes = [pane("a", .blocked), pane("b", .done)]
+        _ = attention.update(panes: panes, viewed: [], now: t0 + 1)
+        attention.dismiss("a")
+        attention.dismiss("b")
+        #expect(items(attention, panes).isEmpty)
+        attention.undismiss("a")
+        attention.undismiss("b")
+        // Still unseen, so still news: not demoted to "waiting".
+        #expect(items(attention, panes).map(\.kind) == [.blocked, .finished])
+        #expect(attention.needingAttention == ["a", "b"])
+    }
+
+    @Test func unreachableMachinesRankBelowAgentsWaitingOnYou() {
+        let login = NeedsYouItem(kind: .login, machineID: "tail", order: [3])
+        let offline = NeedsYouItem(kind: .unreachable, machineID: "box", order: [1])
+        let asking = NeedsYouItem(kind: .blocked, machineID: "local", paneID: "p", since: t0, order: [0])
+        let waiting = NeedsYouItem(kind: .waiting, machineID: "local", paneID: "q", since: t0, order: [0])
+        let done = NeedsYouItem(kind: .finished, machineID: "local", paneID: "r", since: t0, order: [0])
+        #expect(NeedsYou.ranked([done, offline, waiting, asking, login]) == [login, asking, waiting, offline, done])
+    }
+
+    @Test func machineDismissedUntilItsStateChanges() {
+        var dismissed = DismissedUntilChanged<String>()
+        dismissed.dismiss("box", in: "failed: timeout")
+        let hidden = dismissed.isDismissed("box", in: "failed: timeout")
+        let other = dismissed.isDismissed("other", in: "failed: timeout")
+        // A different failure is news again, and the old dismissal is gone.
+        let changed = dismissed.isDismissed("box", in: "failed: refused")
+        let back = dismissed.isDismissed("box", in: "failed: timeout")
+        #expect(hidden && !other && !changed && !back)
+        dismissed.dismiss("box", in: "failed: timeout")
+        dismissed.undismiss("box")
+        let undone = dismissed.isDismissed("box", in: "failed: timeout")
+        #expect(!undone)
+    }
+
     @Test func closedPanesAreForgotten() {
         var attention = Attention()
         _ = attention.update(panes: [pane("a", .working)], viewed: [], now: t0)

@@ -72,6 +72,8 @@ struct SidebarModel: Equatable {
 
     /// Everything waiting on you, most urgent first, on every machine.
     var needsYou: [NeedsYou] = []
+    /// The section shows just its header (remembered).
+    var needsYouCollapsed = false
     var machines: [Machine] = []
     var message: String?
 }
@@ -103,6 +105,7 @@ final class SidebarView: NSView {
     var onOpenNeedsYou: ((String) -> Void)?
     var onDismissNeedsYou: ((String) -> Void)?
     var onShowAllNeedsYou: (() -> Void)?
+    var onToggleNeedsYou: (() -> Void)?
     /// Title-strip buttons, right of the traffic lights.
     private let hideButton = StripButton(symbol: "sidebar.left", tip: "Hide Sidebar (⌃⌘S)")
     private let filesButton = StripButton(symbol: "folder", tip: "Toggle File Viewer (⇧⌘E)")
@@ -352,24 +355,39 @@ final class SidebarView: NSView {
     }
 
     /// Rows the sidebar shows of Needs You; the rest are a click (⇧⌘K) away.
-    private static let needsYouShown = 4
+    static let needsYouShown = 4
 
     /// The Needs You section, at the top; nothing when nothing waits.
+    /// Its views are kept and updated in place, so a row under the mouse
+    /// keeps its hover (and its ×) while other things change.
     private func needsYouRows() -> [NSView] {
         let all = model.needsYou
         guard !all.isEmpty else { return [] }
-        let header = NeedsYouHeader(count: all.count, urgent: all.contains(where: \.urgent))
-        header.onClick = { [weak self] in self?.onShowAllNeedsYou?() }
+        let old = list.subviews
+        let header = old.lazy.compactMap { $0 as? NeedsYouHeader }.first ?? {
+            let header = NeedsYouHeader()
+            header.onToggle = { [weak self] in self?.onToggleNeedsYou?() }
+            header.onShowAll = { [weak self] in self?.onShowAllNeedsYou?() }
+            return header
+        }()
+        header.update(count: all.count, urgent: all.contains(where: \.urgent), collapsed: model.needsYouCollapsed)
         var rows: [NSView] = [header]
+        guard !model.needsYouCollapsed else { return rows }
+        let kept = Dictionary(old.compactMap { $0 as? NeedsYouRow }.map { ($0.entry.id, $0) }, uniquingKeysWith: { a, _ in a })
         for entry in all.prefix(Self.needsYouShown) {
-            let row = NeedsYouRow(entry: entry)
+            let row = kept[entry.id] ?? NeedsYouRow()
             row.onClick = { [weak self] in self?.onOpenNeedsYou?(entry.id) }
             row.onDismiss = { [weak self] in self?.onDismissNeedsYou?(entry.id) }
+            row.update(entry)
             rows.append(row)
         }
         if all.count > Self.needsYouShown {
-            let more = NeedsYouMore(count: all.count - Self.needsYouShown)
-            more.onClick = { [weak self] in self?.onShowAllNeedsYou?() }
+            let more = old.lazy.compactMap { $0 as? NeedsYouMore }.first ?? {
+                let more = NeedsYouMore()
+                more.onClick = { [weak self] in self?.onShowAllNeedsYou?() }
+                return more
+            }()
+            more.update(count: all.count - Self.needsYouShown)
             rows.append(more)
         }
         return rows
@@ -1103,37 +1121,63 @@ extension NSView {
 
 // MARK: - Needs You
 
-/// "NEEDS YOU 3 · ⇧⌘K" above the list.
+/// "NEEDS YOU 3 · ⇧⌘K" above the list: click to collapse or expand, the
+/// shortcut to see everything.
 private final class NeedsYouHeader: NSView, SidebarRow {
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
-    var onClick: (() -> Void)?
+    var onToggle: (() -> Void)?
+    var onShowAll: (() -> Void)?
+    private let chevron = NSImageView()
     private let title = NSTextField(labelWithString: "NEEDS YOU")
     private let badge = NSTextField(labelWithString: "")
     private let shortcut = NSTextField(labelWithString: "⇧⌘K")
+    private var urgent = false
 
-    init(count: Int, urgent: Bool) {
+    init() {
         super.init(frame: .zero)
+        chevron.symbolConfiguration = .init(pointSize: 8.5, weight: .semibold)
+        chevron.contentTintColor = .secondaryLabelColor
         title.font = .systemFont(ofSize: 10.5, weight: .semibold)
         title.textColor = .secondaryLabelColor
-        badge.stringValue = "\(count)"
         badge.font = .monospacedDigitSystemFont(ofSize: 9.5, weight: .bold)
-        badge.textColor = urgent ? .white : .secondaryLabelColor
         badge.alignment = .center
         badge.wantsLayer = true
         badge.layer?.cornerRadius = 7
-        badge.layer?.backgroundColor = urgent ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.1).cgColor
         shortcut.font = .systemFont(ofSize: 10.5)
         shortcut.textColor = .tertiaryLabelColor
         shortcut.alignment = .right
-        for view in [title, badge, shortcut] { addSubview(view) }
-        toolTip = "Everything waiting on you, most urgent first (⇧⌘K)"
+        shortcut.toolTip = "Everything waiting on you, most urgent first"
+        for view in [chevron, title, badge, shortcut] { addSubview(view) }
+        setAccessibilityRole(.button)
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
+
+    func update(count: Int, urgent: Bool, collapsed: Bool) {
+        self.urgent = urgent
+        chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: nil)
+        badge.stringValue = "\(count)"
+        badge.textColor = urgent ? .white : .secondaryLabelColor
+        updateBadge()
+        toolTip = collapsed ? "Show what needs you" : "Hide the list (the spaces below still show it)"
+        setAccessibilityLabel("Needs You, \(count), \(collapsed ? "collapsed" : "expanded")")
+        needsLayout = true
+    }
+
+    private func updateBadge() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            badge.layer?.backgroundColor = urgent ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.1).cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBadge()
+    }
 
     override var isFlipped: Bool { true }
 
@@ -1141,14 +1185,18 @@ private final class NeedsYouHeader: NSView, SidebarRow {
 
     override func layout() {
         super.layout()
+        chevron.frame = NSRect(x: 9, y: 6, width: 10, height: 11)
         let titleWidth = ceil(title.intrinsicContentSize.width) + 2
-        title.frame = NSRect(x: 10, y: 5, width: titleWidth, height: 14)
+        title.frame = NSRect(x: 22, y: 5, width: titleWidth, height: 14)
         let badgeWidth = max(14, ceil(badge.intrinsicContentSize.width) + 8)
-        badge.frame = NSRect(x: 10 + titleWidth + 5, y: 4, width: badgeWidth, height: 14)
+        badge.frame = NSRect(x: 22 + titleWidth + 5, y: 4, width: badgeWidth, height: 14)
         shortcut.frame = NSRect(x: bounds.width - 60, y: 5, width: 50, height: 14)
     }
 
-    override func mouseDown(with _: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if shortcut.frame.insetBy(dx: -4, dy: -4).contains(point) { onShowAll?() } else { onToggle?() }
+    }
 }
 
 /// One thing waiting on you: where, what it wants, and for how long.
@@ -1159,53 +1207,64 @@ private final class NeedsYouRow: NSView, SidebarRow {
 
     var onClick: (() -> Void)?
     var onDismiss: (() -> Void)?
-    let entry: SidebarModel.NeedsYou
+    private(set) var entry = SidebarModel.NeedsYou(id: "", kind: .blocked, title: "", line: "", place: "", age: nil,
+                                                   symbol: "circle", urgent: false, dismissable: false)
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let age = NSTextField(labelWithString: "")
     private let line = NSTextField(labelWithString: "")
     private let closeIcon = CloseIcon()
     private var hovering = false {
-        didSet {
-            updateBackground()
-            closeIcon.isHidden = !(hovering && entry.dismissable)
-            age.isHidden = !closeIcon.isHidden
-        }
+        didSet { if hovering != oldValue { updateHover() } }
     }
 
-    init(entry: SidebarModel.NeedsYou) {
-        self.entry = entry
+    init() {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
-        let tint: NSColor = entry.urgent ? .controlAccentColor : entry.kind == .finished ? .systemBlue : .secondaryLabelColor
-        icon.image = NSImage(systemSymbolName: entry.symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 11, weight: .medium)
-        icon.contentTintColor = tint
-        title.stringValue = entry.title
         title.font = .systemFont(ofSize: 12, weight: .semibold)
         title.textColor = .labelColor
         title.lineBreakMode = .byTruncatingTail
-        age.stringValue = entry.age ?? ""
         age.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
         age.textColor = .tertiaryLabelColor
         age.alignment = .right
-        line.stringValue = [entry.line, entry.place].filter { !$0.isEmpty }.joined(separator: " · ")
         line.font = .systemFont(ofSize: 11)
-        line.textColor = entry.urgent ? NSColor.controlAccentColor.blended(withFraction: 0.35, of: .labelColor) : .secondaryLabelColor
         line.lineBreakMode = .byTruncatingTail
         for view in [icon, title, age, line] { addSubview(view) }
         closeIcon.isHidden = true
         closeIcon.toolTip = "Dismiss until it changes"
         addSubview(closeIcon)
-        toolTip = "\(entry.title)\n\(line.stringValue)"
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
         setAccessibilityRole(.button)
-        setAccessibilityLabel("\(entry.title), \(line.stringValue)")
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
+
+    /// Shows `entry`, keeping the view (and its hover) as it is.
+    func update(_ entry: SidebarModel.NeedsYou) {
+        guard entry != self.entry else { return }
+        self.entry = entry
+        icon.image = NSImage(systemSymbolName: entry.symbol, accessibilityDescription: nil)
+        icon.contentTintColor = entry.urgent ? .controlAccentColor : entry.kind == .finished ? .systemBlue : .secondaryLabelColor
+        title.stringValue = entry.title
+        age.stringValue = entry.age ?? ""
+        line.stringValue = [entry.line, entry.place].filter { !$0.isEmpty }.joined(separator: " · ")
+        line.textColor = entry.urgent ? NSColor.controlAccentColor.blended(withFraction: 0.35, of: .labelColor) : .secondaryLabelColor
+        toolTip = "\(entry.title)\n\(line.stringValue)"
+        setAccessibilityLabel("\(entry.title), \(line.stringValue)")
+        updateHover()
+        needsLayout = true
+    }
+
+    private func updateHover() {
+        closeIcon.isHidden = !(hovering && entry.dismissable)
+        age.isHidden = !closeIcon.isHidden
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = hovering ? Theme.sidebarHover.cgColor : nil
+        }
+    }
 
     override var isFlipped: Bool { true }
 
@@ -1213,6 +1272,7 @@ private final class NeedsYouRow: NSView, SidebarRow {
 
     override func layout() {
         super.layout()
+        syncHover()
         let w = bounds.width
         icon.frame = NSRect(x: 8, y: 4, width: 16, height: 16)
         let ageWidth = max(26, ceil(age.intrinsicContentSize.width) + 2)
@@ -1222,14 +1282,15 @@ private final class NeedsYouRow: NSView, SidebarRow {
         line.frame = NSRect(x: 29, y: 18, width: max(0, w - 29 - 8), height: 15)
     }
 
+    /// Rows move as the list changes: hover follows the mouse, not the
+    /// last enter/exit event.
+    private func syncHover() {
+        guard let window else { return }
+        hovering = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
     override func mouseEntered(with _: NSEvent) { hovering = true }
     override func mouseExited(with _: NSEvent) { hovering = false }
-
-    private func updateBackground() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = hovering ? Theme.sidebarHover.cgColor : nil
-        }
-    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -1256,9 +1317,8 @@ private final class NeedsYouMore: NSView, SidebarRow {
     var onClick: (() -> Void)?
     private let label = NSTextField(labelWithString: "")
 
-    init(count: Int) {
+    init() {
         super.init(frame: .zero)
-        label.stringValue = "+\(count) more · ⇧⌘K"
         label.font = .systemFont(ofSize: 11)
         label.textColor = .tertiaryLabelColor
         addSubview(label)
@@ -1266,6 +1326,8 @@ private final class NeedsYouMore: NSView, SidebarRow {
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
+
+    func update(count: Int) { label.stringValue = "+\(count) more · ⇧⌘K" }
 
     override var isFlipped: Bool { true }
 

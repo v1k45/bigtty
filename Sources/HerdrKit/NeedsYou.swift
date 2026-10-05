@@ -4,13 +4,16 @@ import Foundation
 public struct NeedsYouItem: Sendable, Equatable {
     /// Most urgent first.
     public enum Kind: Int, Sendable, Comparable {
-        /// A machine's login waits on you (approval, sign-in) or failed:
-        /// everything on it is stuck.
+        /// A machine's login waits on you (approval, sign-in): everything on
+        /// it is stuck until you act.
         case login
         /// An agent asks something you haven't looked at yet.
         case blocked
         /// An agent still waits on you, though you've seen it.
         case waiting
+        /// A machine can't be reached (offline, herdr missing): worth
+        /// knowing, but often nothing to do right now.
+        case unreachable
         /// An agent finished while you were elsewhere.
         case finished
 
@@ -72,5 +75,25 @@ public enum NeedsYou {
             if a.order != b.order { return a.order.lexicographicallyPrecedes(b.order) }
             return a.id < b.id
         }
+    }
+}
+
+/// Things dismissed until their state changes (a machine's connection
+/// problem): hidden while the state is the one they were dismissed in.
+public struct DismissedUntilChanged<State: Equatable & Sendable>: Sendable {
+    private var dismissed: [String: State] = [:]
+
+    public init() {}
+
+    public mutating func dismiss(_ id: String, in state: State) { dismissed[id] = state }
+
+    public mutating func undismiss(_ id: String) { dismissed[id] = nil }
+
+    /// Hidden while still in the dismissed state; any change forgets it.
+    public mutating func isDismissed(_ id: String, in state: State) -> Bool {
+        guard let at = dismissed[id] else { return false }
+        if at == state { return true }
+        dismissed[id] = nil
+        return false
     }
 }

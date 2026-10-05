@@ -746,13 +746,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 section: Self.needsYouSection(entry.kind), title: entry.title, detail: detail,
                 symbol: entry.symbol, enabled: true, alert: entry.urgent, run: run
             )
-            if entry.pane != nil { choice.dismiss = { entry.dismiss() } }
+            choice.id = entry.id
+            if entry.dismissable {
+                choice.dismiss = { entry.dismiss() }
+                choice.undismiss = { entry.undismiss() }
+            }
             choices.append(choice)
         }
         if choices.isEmpty {
             choices = [JumpPalette.Choice(section: "Needs You", title: "Nothing needs you", detail: "", symbol: "checkmark", enabled: true, run: {})]
         }
-        JumpPalette.shared.choose(choices, placeholder: "Needs you, most urgent first · ⌫ dismisses")
+        JumpPalette.shared.choose(choices, placeholder: "Needs you, most urgent first · ⌘⌫ dismisses")
     }
 
     private static func needsYouSection(_ kind: NeedsYouItem.Kind) -> String {
@@ -760,6 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .login: "Logins"
         case .blocked: "Needs You"
         case .waiting: "Waiting on You"
+        case .unreachable: "Can’t Reach"
         case .finished: "Finished"
         }
     }
