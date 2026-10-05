@@ -69,6 +69,13 @@ sidebar, or right-click one and choose Move Up / Move Down, to put the spaces
 you use most on the keys you want. ⌃⌘⇥ goes back to the last space you were
 in; hold ⌃⌘ and keep tapping ⇥ to go further back.
 
+The **Window** menu lists every space by the same name: the session on screen
+under its own header ("This Mac · hq"), every other session and machine in a
+submenu ("orb · main"). A space with several tabs also lists them as
+"api › logs" (up to 8), and a badge counts what needs you. So menu search
+(Help ▸ Search, or Spotlight's menu actions) finds a space or tab by name, and
+picking one only shows it: nothing moves, and herdr's own focus stays put.
+
 Each card says how long its space has been quiet ("claude · idle · 3h"), and
 spaces with nothing for 12 hours fade until you hover or select them, so the
 ones worth your attention stand out. The window and sidebar remember their

@@ -592,10 +592,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
-    /// Shows a space, switching this window to its machine if needed.
-    func select(_ ref: SpaceRef) {
+    /// Shows a space, switching this window to its machine if needed. With
+    /// `tab`, that tab, here only: herdr's own focus stays where it is.
+    func select(_ ref: SpaceRef, tab: String? = nil) {
         if ref.machine != machine.id, let target = manager.machine(ref.machine) { switchMachine(to: target) }
         selectWorkspace(ref.workspace)
+        guard let tab, tab != tabID, store.tab(tab)?.workspaceID == ref.workspace else { return }
+        tabID = tab
+        lastFocusedPane = nil
+        render()
     }
 
     /// Points this window at another machine: its panes go, its spaces come.
