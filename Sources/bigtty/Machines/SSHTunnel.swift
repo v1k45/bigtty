@@ -103,6 +103,9 @@ final class SSHTunnel: @unchecked Sendable {
     }
 
     let config: Config
+    /// Logins of this tunnel's probe, server start and forward that wait
+    /// for approval in a browser.
+    let logins = PendingLogins()
     private var process: Process?
     private(set) var socksPort: Int = 0
     var onExit: (@Sendable (String) -> Void)?
@@ -127,7 +130,7 @@ final class SSHTunnel: @unchecked Sendable {
         version=""; [ -n "$bin" ] && version="$("$bin" --version 2>/dev/null | head -1)"
         printf 'sock=%s\\nbin=%s\\nrunning=%s\\nversion=%s\\nhome=%s\\n' "$sock" "$bin" "$running" "$version" "$HOME"
         """
-        guard let result = Self.runSSH(config, remoteCommand: "sh -s", stdin: script) else {
+        guard let result = Self.runSSH(config, remoteCommand: "sh -s", stdin: script, logins: logins) else {
             throw Failure.ssh("ssh could not start")
         }
         guard result.status == 0 else {
@@ -148,7 +151,7 @@ final class SSHTunnel: @unchecked Sendable {
     func startServer(binary: String) throws {
         let session = config.session.map { " --session " + Self.shellQuote($0) } ?? ""
         let command = "nohup \(Self.shellQuote(binary))\(session) server >/dev/null 2>&1 &"
-        guard let result = Self.runSSH(config, remoteCommand: "sh -c " + Self.shellQuote(command)), result.status == 0 else {
+        guard let result = Self.runSSH(config, remoteCommand: "sh -c " + Self.shellQuote(command), logins: logins), result.status == 0 else {
             throw Failure.ssh("could not start herdr")
         }
     }
@@ -187,14 +190,17 @@ final class SSHTunnel: @unchecked Sendable {
         process.standardOutput = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let box = ErrorBox()
-        let target = config.target
-        errors.fileHandleForReading.readabilityHandler = { handle in
+        let logins = logins
+        errors.fileHandleForReading.readabilityHandler = { [weak process] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
             box.append(data)
-            LoginApproval.scan(box.text, target: target)
+            if let process, let url = LoginApproval.url(in: box.text) {
+                logins.wait(process, url: url) { [weak process] in process?.terminate() }
+            }
         }
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] process in
+            logins.finished(process)
             self?.onExit?(box.text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         try process.run()
@@ -205,7 +211,10 @@ final class SSHTunnel: @unchecked Sendable {
         while Date() < deadline {
             if LoginApproval.isPending(box.text) { deadline = max(deadline, Date().addingTimeInterval(5)) }
             if FileManager.default.fileExists(atPath: config.localAPISocket),
-               FileManager.default.fileExists(atPath: config.localClientSocket) { return }
+               FileManager.default.fileExists(atPath: config.localClientSocket) {
+                if logins.finished(process) != nil { LoginApproval.approved(target: config.target) }
+                return
+            }
             if !process.isRunning {
                 throw Failure.forwarding(box.text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n").last.map(String.init) ?? "ssh exited")
             }
@@ -281,6 +290,7 @@ final class SSHTunnel: @unchecked Sendable {
         guard let process else { return }
         self.process = nil
         process.terminationHandler = nil
+        logins.finished(process)
         if process.isRunning { process.terminate() }
     }
 
@@ -308,12 +318,15 @@ final class SSHTunnel: @unchecked Sendable {
     }
 
     /// One command over the shared SSH connection.
-    static func runSSH(_ config: Config, remoteCommand: String, stdin: String? = nil, okStatuses: Set<Int32>? = nil) -> Result? {
-        runSSH(config, remoteCommand: remoteCommand, input: stdin.map { Data($0.utf8) }, okStatuses: okStatuses)
+    static func runSSH(_ config: Config, remoteCommand: String, stdin: String? = nil, okStatuses: Set<Int32>? = nil,
+                       logins: PendingLogins? = nil) -> Result? {
+        runSSH(config, remoteCommand: remoteCommand, input: stdin.map { Data($0.utf8) }, okStatuses: okStatuses, logins: logins)
     }
 
     /// One command over the shared connection, fed `input` (a file upload).
-    static func runSSH(_ config: Config, remoteCommand: String, input stdin: Data?, okStatuses: Set<Int32>? = nil) -> Result? {
+    /// A login waiting for approval is reported to `logins`.
+    static func runSSH(_ config: Config, remoteCommand: String, input stdin: Data?, okStatuses: Set<Int32>? = nil,
+                       logins: PendingLogins? = nil) -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         guard Config.isValid(target: config.target) else { return nil }
@@ -338,17 +351,24 @@ final class SSHTunnel: @unchecked Sendable {
         // stderr as it comes: a login that waits for approval in the browser
         // (Tailscale SSH's check mode) says so there before it continues.
         let errors = ErrorBox()
-        let target = config.target
-        err.fileHandleForReading.readabilityHandler = { handle in
+        err.fileHandleForReading.readabilityHandler = { [weak process] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
             errors.append(data)
-            LoginApproval.scan(errors.text, target: target)
+            if let logins, let process, let url = LoginApproval.url(in: errors.text) {
+                logins.wait(process, url: url) { [weak process] in process?.terminate() }
+            }
         }
         let output = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         err.fileHandleForReading.readabilityHandler = nil
+        logins?.finished(process)
         let result = Result(status: process.terminationStatus, data: output, error: errors.text)
+        // Got in after an approval (255 is ssh's own failure): other logins
+        // to this host that still wait can start over and get in too.
+        if process.terminationReason == .exit, result.status != 255, LoginApproval.isPending(result.error) {
+            LoginApproval.approved(target: config.target)
+        }
         if let okStatuses, !okStatuses.contains(result.status) { return nil }
         return result
     }
@@ -378,33 +398,16 @@ private final class ErrorBox: @unchecked Sendable {
     var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
 }
 
-/// Logins that wait for a person: Tailscale SSH in check mode prints
-///   # Tailscale SSH requires an additional check.
-///   # To authenticate, visit: https://login.tailscale.com/a/…
-/// and holds the connection until it's approved in a browser. The link
-/// is posted (`.bigttyLoginApproval`, object: [target, URL]) so the
-/// machine can show it; the connection carries on by itself afterwards.
-enum LoginApproval {
-    nonisolated(unsafe) private static var seen: Set<String> = []
-    private static let lock = NSLock()
-
-    static func url(in text: String) -> URL? {
-        guard let range = text.range(of: #"https://login\.tailscale\.com/a/[A-Za-z0-9]+"#, options: .regularExpression) else { return nil }
-        return URL(string: String(text[range]))
-    }
-
-    static func isPending(_ text: String) -> Bool { url(in: text) != nil }
-
-    static func scan(_ text: String, target: String) {
-        guard let url = url(in: text) else { return }
-        let fresh = lock.withLock { seen.insert(url.absoluteString).inserted }
-        guard fresh else { return }
+extension LoginApproval {
+    /// A login to `target` that waited for approval got in: posts
+    /// `.bigttyLoginApproved` (object: the target) on the main queue.
+    static func approved(target: String) {
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .bigttyLoginApproval, object: [target, url.absoluteString])
+            NotificationCenter.default.post(name: .bigttyLoginApproved, object: target)
         }
     }
 }
 
 extension Notification.Name {
-    static let bigttyLoginApproval = Notification.Name("BigttyLoginApproval")
+    static let bigttyLoginApproved = Notification.Name("BigttyLoginApproved")
 }
