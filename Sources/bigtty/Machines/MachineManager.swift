@@ -55,7 +55,7 @@ final class MachineManager {
     private(set) var remoteKnown: [String: [SessionInfo]] = [:]
     /// The session each remote shows: its id to the session's name (a
     /// remote's own session when unset).
-    private var remoteShown: [String: String] = UserDefaults.standard.dictionary(forKey: "remoteSessions") as? [String: String] ?? [:]
+    private var remoteShown = ShownSessions(UserDefaults.standard.dictionary(forKey: "remoteSessions") as? [String: String] ?? [:])
     private var sessionTicks = 0
     private var observers: [UUID: @MainActor () -> Void] = [:]
     private var sessionTimer: Timer?
@@ -262,7 +262,8 @@ final class MachineManager {
     /// The session a remote shows in the sidebar: its own, or another one
     /// switched to.
     func shown(for remote: Machine) -> Machine {
-        guard let name = remoteShown[remote.id], name != remote.sessionName else { return remote }
+        let name = remoteShown.shown(on: remote.id, own: remote.sessionName)
+        guard name != remote.sessionName else { return remote }
         return remoteSessions[remote.id]?.first { $0.sessionName == name } ?? remote
     }
 
@@ -276,11 +277,12 @@ final class MachineManager {
         [remote] + (remoteSessions[remote.id] ?? [])
     }
 
-    /// Shows a remote's session in the sidebar.
+    /// Shows a remote's session in the sidebar. Already shown is no
+    /// change: windows call this from inside changed().
     func show(_ machine: Machine) {
-        guard let remote = remote(of: machine) else { return }
-        remoteShown[remote.id] = machine.sessionName
-        if !Self.remotesDisabled { UserDefaults.standard.set(remoteShown, forKey: "remoteSessions") }
+        guard let remote = remote(of: machine),
+              remoteShown.show(machine.sessionName, on: remote.id, own: remote.sessionName) else { return }
+        if !Self.remotesDisabled { UserDefaults.standard.set(remoteShown.names, forKey: "remoteSessions") }
         changed()
     }
 
