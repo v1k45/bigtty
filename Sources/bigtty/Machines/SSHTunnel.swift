@@ -16,8 +16,13 @@ struct CommandRunner: Sendable {
     /// Like `run`, but the raw bytes (file contents, images).
     func runData(_ executable: String, _ args: [String], okStatuses: Set<Int32> = [0]) -> Data? {
         if let ssh {
-            let command = ([executable] + args).map(SSHTunnel.shellQuote).joined(separator: " ")
-            return SSHTunnel.runSSH(ssh, remoteCommand: command, okStatuses: okStatuses)?.data
+            // The status comes back in the output: ssh's own can't be
+            // trusted (Tailscale SSH on a Mac always exits 0).
+            let command = RemoteStatus.wrap(executable, args).map(SSHTunnel.shellQuote).joined(separator: " ")
+            guard let result = SSHTunnel.runSSH(ssh, remoteCommand: command) else { return nil }
+            let (output, status) = RemoteStatus.split(result.data)
+            guard okStatuses.contains(status ?? result.status) else { return nil }
+            return output
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable.hasPrefix("/") ? executable : "/usr/bin/env")
