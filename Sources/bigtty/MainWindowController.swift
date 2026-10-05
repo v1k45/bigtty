@@ -1969,7 +1969,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         movePane(parts[0], to: target, follow: parts.count < 3 || parts[2] != "stay")
     }
 
-    /// ⌘K ▸ Move Pane to…: the palette as a picker of this machine's spaces
+    /// Pane ▸ Move Pane To… and ⌘K ▸ Move Pane to…: the palette as a picker of this machine's spaces
     /// and tabs. ⌥ when choosing: move it without following.
     @objc func movePaneTo(_: Any?) {
         guard let paneID = focusedPaneID, let pane = store.pane(paneID) else { return NSSound.beep() }
@@ -2002,44 +2002,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         let spaces = orderedSpaces
         guard spaces.indices.contains(n - 1), spaces[n - 1].machine == machine.id else { return NSSound.beep() }
         movePane(pane, to: .space(spaces[n - 1].workspace), follow: true)
-    }
-
-    /// Pane ▸ Move Pane To: this machine's spaces with their tabs, a new tab
-    /// here, a new space. ⌥ while choosing: move it without following.
-    func fillMoveMenu(_ menu: NSMenu) {
-        guard let paneID = focusedPaneID, let pane = store.pane(paneID) else {
-            menu.addItem(NSMenuItem(title: "No Pane", action: nil, keyEquivalent: ""))
-            return
-        }
-        let titles = machine.spaceInfo?.agentTitles ?? [:]
-        let follow = { !NSEvent.modifierFlags.contains(.option) }
-        for workspace in store.snapshot.workspaces {
-            let tabs = store.tabs(in: workspace.workspaceID)
-            let name = Self.spaceName(workspace, store: store, agentTitles: titles)
-            if tabs.count <= 1 {
-                let item = ClosureMenuItem(title: name) { [weak self] in self?.movePane(paneID, to: .space(workspace.workspaceID), follow: follow()) }
-                item.isEnabled = tabs.first?.tabID != pane.tabID
-                if !item.isEnabled { item.action = nil }
-                menu.addItem(item)
-            } else {
-                menu.addItem(NSMenuItem.sectionHeader(title: name))
-                for tab in tabs {
-                    let item = ClosureMenuItem(title: Self.tabTitle(tab, store: store, agentTitles: titles)) { [weak self] in
-                        self?.movePane(paneID, to: .tab(tab.tabID), follow: follow())
-                    }
-                    item.indentationLevel = 1
-                    if tab.tabID == pane.tabID { item.action = nil }
-                    menu.addItem(item)
-                }
-            }
-        }
-        menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "New Tab in This Space") { [weak self] in
-            self?.movePane(paneID, to: .newTab(pane.workspaceID), follow: follow())
-        })
-        menu.addItem(ClosureMenuItem(title: "New Space") { [weak self] in
-            self?.movePane(paneID, to: .newSpace, follow: follow())
-        })
     }
 
     // MARK: - Recent spaces (⌃⌘Tab)

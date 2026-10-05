@@ -26,5 +26,6 @@ let package = Package(
         ),
         .executableTarget(name: "btty", dependencies: ["HerdrKit"]),
         .testTarget(name: "HerdrKitTests", dependencies: ["HerdrKit"]),
+        .testTarget(name: "bigttyTests", dependencies: ["bigtty"]),
     ]
 )

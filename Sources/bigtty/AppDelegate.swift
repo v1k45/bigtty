@@ -781,8 +781,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             header.tag = Self.spaceItemTag
             menu.addItem(header)
             for space in store.snapshot.workspaces {
+                // The name the sidebar and ⌘K show, so a menu search for it
+                // finds this jump.
+                let name = MainWindowController.spaceName(space, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:])
                 let count = machine.attention?.count(inWorkspace: space.workspaceID) ?? 0
-                let title = count > 0 ? "\(space.label)  (\(count))" : space.label
+                let title = count > 0 ? "\(name)  (\(count))" : name
                 let item = NSMenuItem(title: title, action: #selector(showSpaceFromMenu(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = SpaceRef(machine: machine.id, workspace: space.workspaceID).key

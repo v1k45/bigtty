@@ -25,8 +25,8 @@ servers and browser panes keep going where they land.
   **Hold it there** a moment and the space blinks and opens, like a folder in
   Finder: keep dragging to drop the pane exactly where you want it (beside a
   pane, or along an edge of the whole tab).
-- **Pane ▸ Move Pane To** lists your spaces and their tabs, a new tab here and
-  a new space; **⌘K ▸ Move Pane to…** picks one in the palette.
+- **Pane ▸ Move Pane To…** (or **⌘K ▸ Move Pane to…**) picks one of your
+  spaces and their tabs, a new tab here or a new space in the palette.
 - **⌃⌥⌘1–9** sends the focused pane to space 1–9.
 
 bigtty follows the pane there; hold **⌥** while choosing or dropping to stay

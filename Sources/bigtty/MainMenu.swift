@@ -157,12 +157,10 @@ enum MainMenu {
         }
         paneNumbersMenu = paneNumbers
         pane.addItem(.separator())
-        // Filled when opened: this machine's spaces and their tabs.
-        let moveTo = NSMenu(title: "Move Pane To")
-        moveTo.delegate = MovePaneMenu.shared
-        let moveToItem = NSMenuItem(title: "Move Pane To", action: nil, keyEquivalent: "")
-        moveToItem.submenu = moveTo
-        pane.addItem(moveToItem)
+        // The palette, not a submenu of space names: menu search (Help ▸
+        // Search, Spotlight's menu actions) reads those too, and a space's
+        // name would offer "move this pane there" ahead of Window's jump.
+        item(pane, "Move Pane To…", #selector(PaneActions.movePaneTo(_:)), "")
         item(pane, "Pin Pane", #selector(PaneActions.togglePin(_:)), "p", [.command, .option])
         let moveNumbers = NSMenu(title: "Move Pane to Space")
         let moveNumbersItem = NSMenuItem(title: "Move Pane to Space", action: nil, keyEquivalent: "")
@@ -270,19 +268,4 @@ private extension Int {
     static let rightArrow = NSRightArrowFunctionKey
     static let upArrow = NSUpArrowFunctionKey
     static let downArrow = NSDownArrowFunctionKey
-}
-
-/// Pane ▸ Move Pane To: built from the key window's spaces each time it opens.
-@MainActor
-final class MovePaneMenu: NSObject, NSMenuDelegate {
-    static let shared = MovePaneMenu()
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        guard let controller = NSApp.keyWindow?.windowController as? MainWindowController else {
-            menu.addItem(NSMenuItem(title: "No Pane", action: nil, keyEquivalent: ""))
-            return
-        }
-        controller.fillMoveMenu(menu)
-    }
 }
