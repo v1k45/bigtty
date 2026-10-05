@@ -63,6 +63,8 @@ final class Machine {
     private var reconnectTask: Task<Void, Never>?
     private var pingTimer: Timer?
     private var attempts = 0
+    /// Bumped by each `connect()`, so a superseded one's outcome is dropped.
+    private var connection = 0
 
     /// This Mac's server for one herdr session: the default one (or the
     /// one BIGTTY_SESSION names) is "local", other named sessions
@@ -106,18 +108,35 @@ final class Machine {
         let own = parent.map { String($0.prefix(8)) } ?? String(id.prefix(8))
         let control = machines.appendingPathComponent(own).path
         let dir = parent == nil ? control : control + "/s" + Self.shortHash(session ?? "")
-        tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir, controlDirectory: control))
-        // A login waiting for approval in the browser: say so, with the link.
-        approvalObserver = NotificationCenter.default.addObserver(forName: .bigttyLoginApproval, object: nil, queue: .main) { [weak self] note in
-            guard let parts = note.object as? [String], parts.count == 2, let url = URL(string: parts[1]) else { return }
-            MainActor.assumeIsolated {
-                guard let self, parts[0] == target, self.status != .connected else { return }
-                self.status = .approval(url)
-            }
+        let tunnel = SSHTunnel(config: .init(target: target, session: session, directory: dir, controlDirectory: control))
+        self.tunnel = tunnel
+        // This connection's login waits for approval in the browser: say
+        // so, with its link (another session's link wouldn't let it in).
+        tunnel.logins.onWait = { [weak self] url in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.loginWaits(url) } }
+        }
+        approvedObserver = NotificationCenter.default.addObserver(forName: .bigttyLoginApproved, object: nil, queue: .main) { [weak self] note in
+            guard note.object as? String == target else { return }
+            MainActor.assumeIsolated { self?.loginApprovedElsewhere() }
         }
     }
 
-    private var approvalObserver: NSObjectProtocol?
+    private var approvedObserver: NSObjectProtocol?
+
+    private func loginWaits(_ url: URL) {
+        switch status {
+        case .connected, .disabled: return
+        default: status = .approval(url)
+        }
+    }
+
+    /// Another login to this host was approved while ours still waits on
+    /// its own link: start over, and the approval lets the new one in.
+    private func loginApprovedElsewhere() {
+        guard case .approval = status, let tunnel, tunnel.logins.isWaiting else { return }
+        tunnel.logins.cancelAll()
+        connect(byUser: false)
+    }
 
     @discardableResult
     func observe(_ handler: @escaping @MainActor () -> Void) -> UUID {
@@ -189,6 +208,8 @@ final class Machine {
         guard let tunnel, !isLocal else { return }
         if byUser { SSHAskpass.shared.allow(tunnel.config.target) }
         reconnectTask?.cancel()
+        connection += 1
+        let connection = connection
         status = .connecting
         let local = HerdrEndpoint.locateHerdr().flatMap { Self.version(of: $0) }
         Task.detached { [tunnel] in
@@ -200,11 +221,16 @@ final class Machine {
                     throw SSHTunnel.Failure.notRunning
                 }
                 try tunnel.open(remoteAPISocket: probe.apiSocket)
-                await MainActor.run { self.tunnelOpened(probe: probe, localVersion: local) }
-            } catch let failure as SSHTunnel.Failure {
-                await MainActor.run { self.failed(failure) }
+                await MainActor.run {
+                    guard connection == self.connection else { return }
+                    self.tunnelOpened(probe: probe, localVersion: local)
+                }
             } catch {
-                await MainActor.run { self.failed(.ssh(String(describing: error))) }
+                let failure = error as? SSHTunnel.Failure ?? .ssh(String(describing: error))
+                await MainActor.run {
+                    guard connection == self.connection else { return }
+                    self.failed(failure)
+                }
             }
         }
     }
@@ -290,6 +316,8 @@ final class Machine {
 
     func disconnect() {
         reconnectTask?.cancel()
+        connection += 1
+        tunnel?.logins.cancelAll()
         status = .disabled
         tunnel?.close()
         store?.stop()

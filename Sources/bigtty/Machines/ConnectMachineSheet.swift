@@ -135,14 +135,14 @@ final class ConnectMachineSheet: NSObject, NSTextFieldDelegate {
             let start = Date()
             // Tailscale SSH (check mode) may ask to approve the login in the
             // browser first: the person is connecting right now, so open it.
-            let approval = NotificationCenter.default.addObserver(forName: .bigttyLoginApproval, object: nil, queue: .main) { note in
-                guard let parts = note.object as? [String], parts.count == 2, parts[0] == value, let url = URL(string: parts[1]) else { return }
-                MainActor.assumeIsolated {
-                    self?.show(nil, "Approve this login in your browser (Tailscale SSH asks to confirm it). Waiting…", spinning: true)
-                    NSWorkspace.shared.open(url)
+            tunnel.logins.onWait = { url in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.show(nil, "Approve this login in your browser (Tailscale SSH asks to confirm it). Waiting…", spinning: true)
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             }
-            defer { NotificationCenter.default.removeObserver(approval) }
             let result: Result<SSHTunnel.Probe, Error> = await Task.detached { Result { try tunnel.probe() } }.value
             let ms = Int(Date().timeIntervalSince(start) * 1000)
             guard !Task.isCancelled, let self, self.target.stringValue.trimmingCharacters(in: .whitespaces) == value else { return }
