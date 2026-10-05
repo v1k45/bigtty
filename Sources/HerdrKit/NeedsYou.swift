@@ -78,6 +78,65 @@ public enum NeedsYou {
     }
 }
 
+/// A machine (or one of its herdr sessions) that can't be reached.
+public struct ConnectionProblem: Sendable, Equatable {
+    public let machineID: String
+    /// The SSH target: every session on it shares the one connection, so
+    /// they fail together.
+    public let host: String
+    /// The latest error.
+    public let message: String
+    /// Unreachable since; kept across retries, reset by a connect.
+    public let since: Date?
+    /// The saved machine itself, rather than another session of it.
+    public let isSaved: Bool
+    public let order: Int
+
+    public init(machineID: String, host: String, message: String, since: Date?, isSaved: Bool, order: Int) {
+        self.machineID = machineID
+        self.host = host
+        self.message = message
+        self.since = since
+        self.isSaved = isSaved
+        self.order = order
+    }
+
+    /// What a dismissal is tied to: a new error, or failing again after
+    /// a reconnect, is news again.
+    public var state: String { "\(message)|\(since?.timeIntervalSince1970 ?? 0)" }
+}
+
+extension NeedsYou {
+    /// One problem per host, however many of its sessions fail: the saved
+    /// machine's (else the first session's) latest error, unreachable since
+    /// the earliest of them.
+    public static func perHost(_ problems: [ConnectionProblem]) -> [ConnectionProblem] {
+        var byHost: [String: [ConnectionProblem]] = [:]
+        var hosts: [String] = []
+        for problem in problems {
+            if byHost[problem.host] == nil { hosts.append(problem.host) }
+            byHost[problem.host, default: []].append(problem)
+        }
+        return hosts.compactMap { host in
+            let group = byHost[host] ?? []
+            guard let lead = group.first(where: \.isSaved) ?? group.min(by: { $0.order < $1.order }) else { return nil }
+            let since = group.compactMap(\.since).min()
+            return ConnectionProblem(machineID: lead.machineID, host: host, message: lead.message, since: since,
+                                     isSaved: lead.isSaved, order: group.map(\.order).min() ?? lead.order)
+        }
+    }
+
+    /// Seconds before reconnect attempt `attempt` (1-based): quick at
+    /// first, for a blip, then backing off to every few minutes.
+    public static func reconnectDelay(attempt: Int) -> Int {
+        [5, 10, 30, 60, 120][safe: attempt - 1] ?? 300
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
 /// Things dismissed until their state changes (a machine's connection
 /// problem): hidden while the state is the one they were dismissed in.
 public struct DismissedUntilChanged<State: Equatable & Sendable>: Sendable {

@@ -250,6 +250,17 @@ final class MachineManager {
             guard let self, let machine else { return }
             // Just connected: list its sessions now rather than on the timer.
             if machine.status == .connected, self.remoteKnown[machine.id] == nil { self.refreshRemoteSessions(machine) }
+            // Back after being unreachable: its other sessions, down with
+            // it, retry now rather than waiting out their backoff.
+            if machine.status == .connected {
+                if self.connectedRemotes.insert(machine.id).inserted {
+                    for session in self.remoteSessions[machine.id] ?? [] where session.unreachableSince != nil {
+                        session.connect(byUser: false)
+                    }
+                }
+            } else {
+                self.connectedRemotes.remove(machine.id)
+            }
             self.changed()
         }
         remotes.append(machine)
@@ -324,6 +335,8 @@ final class MachineManager {
     }
 
     private var listing: Set<String> = []
+    /// Saved remotes connected as of their last change, by id.
+    private var connectedRemotes: Set<String> = []
     /// When each remote session's machine was made, by id.
     private var opened: [String: Date] = [:]
 

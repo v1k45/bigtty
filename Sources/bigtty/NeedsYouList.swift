@@ -14,6 +14,8 @@ struct NeedsYouEntry {
     let line: String
     /// "This Mac", "workbox", "workbox · dev session".
     let place: String
+    /// For an unreachable host: what its dismissal is tied to.
+    var problem: ConnectionProblem? = nil
 
     var kind: NeedsYouItem.Kind { item.kind }
     var id: String { item.id }
@@ -34,16 +36,23 @@ struct NeedsYouEntry {
     /// Calls for you now (accent-colored), rather than just being on the list.
     var urgent: Bool { kind == .login || kind == .blocked }
 
-    /// Machines' connection problems dismissed until their status changes.
-    static var dismissedMachines = DismissedUntilChanged<Machine.Status>()
+    /// Hosts' connection problems dismissed until the error changes or the
+    /// host reconnects, by SSH target.
+    static var dismissedHosts = DismissedUntilChanged<String>()
 
     static func collect(_ manager: MachineManager) -> [NeedsYouEntry] {
         var entries: [String: NeedsYouEntry] = [:]
         var items: [NeedsYouItem] = []
+        var problems: [ConnectionProblem] = []
         for (index, machine) in manager.all.enumerated() {
             let place = Self.place(machine, manager: manager)
             if let kind = machine.connectionKind {
-                if kind == .unreachable, dismissedMachines.isDismissed(machine.id, in: machine.status) { continue }
+                // Unreachable: once per host below, not once per session.
+                if kind == .unreachable, let host = machine.target {
+                    problems.append(ConnectionProblem(machineID: machine.id, host: host, message: machine.loginLine,
+                                                      since: machine.unreachableSince, isSaved: machine.parentID == nil, order: index))
+                    continue
+                }
                 let item = NeedsYouItem(kind: kind, machineID: machine.id, order: [index])
                 items.append(item)
                 entries[item.id] = NeedsYouEntry(item: item, machine: machine, pane: nil, title: machine.name,
@@ -68,6 +77,15 @@ struct NeedsYouEntry {
                 items.append(item)
                 entries[item.id] = NeedsYouEntry(item: item, machine: machine, pane: pane, title: space, line: line, place: place)
             }
+        }
+        for problem in NeedsYou.perHost(problems) {
+            guard let machine = manager.machine(problem.machineID),
+                  !dismissedHosts.isDismissed(problem.host, in: problem.state) else { continue }
+            let item = NeedsYouItem(kind: .unreachable, machineID: machine.id, since: problem.since, order: [problem.order])
+            items.append(item)
+            // The host, not one of its sessions: they're all down with it.
+            entries[item.id] = NeedsYouEntry(item: item, machine: machine, pane: nil, title: machine.name, line: problem.message,
+                                             place: machine.name, problem: problem)
         }
         return NeedsYou.ranked(items).compactMap { entries[$0.id] }
     }
@@ -96,8 +114,8 @@ struct NeedsYouEntry {
     func dismiss() {
         if let pane {
             machine.attention?.dismiss(pane.paneID)
-        } else if kind == .unreachable {
-            Self.dismissedMachines.dismiss(machine.id, in: machine.status)
+        } else if let problem {
+            Self.dismissedHosts.dismiss(problem.host, in: problem.state)
             NotificationCenter.default.post(name: .bigttyNeedsYouChanged, object: nil)
         }
     }
@@ -105,8 +123,8 @@ struct NeedsYouEntry {
     func undismiss() {
         if let pane {
             machine.attention?.undismiss(pane.paneID)
-        } else {
-            Self.dismissedMachines.undismiss(machine.id)
+        } else if let problem {
+            Self.dismissedHosts.undismiss(problem.host)
             NotificationCenter.default.post(name: .bigttyNeedsYouChanged, object: nil)
         }
     }
@@ -126,6 +144,8 @@ extension Machine {
         switch status {
         case .approval, .signIn: return .login
         case .failed, .herdrMissing: return .unreachable
+        // Retrying after giving up: still unreachable, the same entry.
+        case .connecting, .reconnecting: return unreachableSince != nil ? .unreachable : nil
         default: return nil
         }
     }
@@ -136,6 +156,9 @@ extension Machine {
         case .signIn: "Sign in to connect"
         case .herdrMissing: "herdr isn’t installed"
         case let .failed(message): "Can’t connect: \(message)"
+        // Retrying: the last error stays, so the entry doesn't change.
+        case .connecting where unreachableSince != nil, .reconnecting where unreachableSince != nil:
+            "Can’t connect: \(lastError ?? "unreachable")"
         default: statusText
         }
     }

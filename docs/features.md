@@ -96,8 +96,9 @@ again.
 across every machine and session, most urgent first: a machine whose login
 waits on you (a Tailscale approval, a sign-in), then agents asking something
 you haven't seen, agents still waiting on an answer (with their question),
-machines that can't be reached, and agents that finished while you were
-away; within each, whatever has waited longest leads. Click one to go there;
+machines that can't be reached (once per host, however many of its sessions
+are down, and it stays put while bigtty retries), and agents that finished
+while you were away; within each, whatever has waited longest leads. Click one to go there;
 click the header to collapse it (the space cards still quote each question).
 **⇧⌘K** opens the whole list as a palette. ⌘⌫ there (or the × on a row)
 dismisses an item until its state changes, and ⌘Z brings it back.

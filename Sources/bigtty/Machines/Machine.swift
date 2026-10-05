@@ -27,7 +27,21 @@ final class Machine {
     let id: String
     let name: String
     let kind: Kind
-    private(set) var status: Status = .connecting { didSet { if status != oldValue { notify() } } }
+    private(set) var status: Status = .connecting {
+        didSet {
+            guard status != oldValue else { return }
+            switch status {
+            case .failed, .herdrMissing: unreachableSince = unreachableSince ?? Date()
+            // Retrying: still unreachable until a retry gets through.
+            case .connecting, .reconnecting: break
+            default: unreachableSince = nil
+            }
+            notify()
+        }
+    }
+    /// Since it was given up on as unreachable; kept while it retries, so
+    /// Needs You keeps one steady entry rather than one per attempt.
+    private(set) var unreachableSince: Date?
     private(set) var store: SessionStore?
     private(set) var attention: AttentionCenter?
     private(set) var spaceInfo: SpaceInfoCenter?
@@ -282,10 +296,11 @@ final class Machine {
         }
     }
 
-    /// Retries with backoff: 5s, 10s, 30s, then every 60s.
+    /// Retries with backoff: 5s, 10s, 30s, 1m, 2m, then every 5m.
     private func scheduleReconnect(after message: String) {
         attempts += 1
-        let delay = [5, 10, 30][safe: attempts - 1] ?? 60
+        lastError = message
+        let delay = NeedsYou.reconnectDelay(attempt: attempts)
         status = attempts > 3 ? .failed(message) : .reconnecting(seconds: delay)
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
@@ -381,10 +396,6 @@ final class Machine {
         let result = CommandRunner.local.run(binary, ["--version"])
         return result?.split(separator: "\n").first.map { $0.replacingOccurrences(of: "herdr ", with: "") }
     }
-}
-
-extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
 /// Rewrites `http://localhost:3000/x` to `http://127.0.0.1:<forward>/x` for a
