@@ -85,6 +85,14 @@ the Dock icon bounces when an agent needs you while bigtty is in the
 background. Once you've seen it, it goes quiet until the agent needs you
 again.
 
+**Needs You**, at the top of the sidebar, lists everything waiting on you
+across every machine and session, most urgent first: a machine whose login
+waits on you (a Tailscale approval, a sign-in) or failed, then agents asking
+something you haven't seen, agents still waiting on an answer, and agents
+that finished while you were away; within each, whatever has waited longest
+leads. Click one to go there. **⇧⌘K** opens the whole list as a palette;
+⌫ (or the × on a row) dismisses an item until its agent's state changes.
+
 ## Browser panes
 
 A browser pane is a real herdr pane (tagged, running a small placeholder), so

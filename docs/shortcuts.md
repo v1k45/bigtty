@@ -16,7 +16,7 @@
 | ⌥⌘B · ⇧⌥⌘B · ⌘L | Split with browser · browser here · address bar |
 | ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
 | ⌘W · ⌥⌘W | Close pane · close tab |
-| ⇧⌘U | Next pane that needs you |
+| ⇧⌘U · ⇧⌘K | Next pane that needs you · everything that needs you |
 | ⇧⌘S · ⌃⌘N | Switch session · new session |
 | ⌥⌘K | Connect a machine |
 | ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |

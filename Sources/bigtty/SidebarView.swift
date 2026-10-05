@@ -56,6 +56,22 @@ struct SidebarModel: Equatable {
         let spaces: [Space]
     }
 
+    /// One thing on the Needs You list.
+    struct NeedsYou: Equatable {
+        let id: String
+        let kind: NeedsYouItem.Kind
+        let title: String
+        let line: String
+        let place: String
+        let age: String?
+        let symbol: String
+        let urgent: Bool
+        /// A login can't be dismissed, only dealt with.
+        let dismissable: Bool
+    }
+
+    /// Everything waiting on you, most urgent first, on every machine.
+    var needsYou: [NeedsYou] = []
     var machines: [Machine] = []
     var message: String?
 }
@@ -83,6 +99,10 @@ final class SidebarView: NSView {
     var onMoveSpace: ((String, Int) -> Void)?
     private let dropLine = NSView()
     var onToggleFiles: (() -> Void)?
+    /// A Needs You row clicked or dismissed (by id), or "more" clicked.
+    var onOpenNeedsYou: ((String) -> Void)?
+    var onDismissNeedsYou: ((String) -> Void)?
+    var onShowAllNeedsYou: (() -> Void)?
     /// Title-strip buttons, right of the traffic lights.
     private let hideButton = StripButton(symbol: "sidebar.left", tip: "Hide Sidebar (⌃⌘S)")
     private let filesButton = StripButton(symbol: "folder", tip: "Toggle File Viewer (⇧⌘E)")
@@ -300,7 +320,7 @@ final class SidebarView: NSView {
                 if let card = view as? SpaceCard { oldCards[card.space.id] = card }
             }
         }
-        var rows: [NSView] = []
+        var rows: [NSView] = needsYouRows()
         for machine in model.machines {
             if let kept = oldHeaders[machine.id], kept.machine == machine {
                 rows.append(kept)
@@ -329,6 +349,30 @@ final class SidebarView: NSView {
         for view in rows where view.superview !== list { list.addSubview(view) }
         list.subviews = rows
         layoutList()
+    }
+
+    /// Rows the sidebar shows of Needs You; the rest are a click (⇧⌘K) away.
+    private static let needsYouShown = 4
+
+    /// The Needs You section, at the top; nothing when nothing waits.
+    private func needsYouRows() -> [NSView] {
+        let all = model.needsYou
+        guard !all.isEmpty else { return [] }
+        let header = NeedsYouHeader(count: all.count, urgent: all.contains(where: \.urgent))
+        header.onClick = { [weak self] in self?.onShowAllNeedsYou?() }
+        var rows: [NSView] = [header]
+        for entry in all.prefix(Self.needsYouShown) {
+            let row = NeedsYouRow(entry: entry)
+            row.onClick = { [weak self] in self?.onOpenNeedsYou?(entry.id) }
+            row.onDismiss = { [weak self] in self?.onDismissNeedsYou?(entry.id) }
+            rows.append(row)
+        }
+        if all.count > Self.needsYouShown {
+            let more = NeedsYouMore(count: all.count - Self.needsYouShown)
+            more.onClick = { [weak self] in self?.onShowAllNeedsYou?() }
+            rows.append(more)
+        }
+        return rows
     }
 
     private func makeCard(_ space: SidebarModel.Space) -> SpaceCard {
@@ -1055,4 +1099,182 @@ extension NSView {
         pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         layer.add(pulse, forKey: "breathe")
     }
+}
+
+// MARK: - Needs You
+
+/// "NEEDS YOU 3 · ⇧⌘K" above the list.
+private final class NeedsYouHeader: NSView, SidebarRow {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+
+    var onClick: (() -> Void)?
+    private let title = NSTextField(labelWithString: "NEEDS YOU")
+    private let badge = NSTextField(labelWithString: "")
+    private let shortcut = NSTextField(labelWithString: "⇧⌘K")
+
+    init(count: Int, urgent: Bool) {
+        super.init(frame: .zero)
+        title.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        title.textColor = .secondaryLabelColor
+        badge.stringValue = "\(count)"
+        badge.font = .monospacedDigitSystemFont(ofSize: 9.5, weight: .bold)
+        badge.textColor = urgent ? .white : .secondaryLabelColor
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 7
+        badge.layer?.backgroundColor = urgent ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.1).cgColor
+        shortcut.font = .systemFont(ofSize: 10.5)
+        shortcut.textColor = .tertiaryLabelColor
+        shortcut.alignment = .right
+        for view in [title, badge, shortcut] { addSubview(view) }
+        toolTip = "Everything waiting on you, most urgent first (⇧⌘K)"
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    func height(forWidth _: CGFloat) -> CGFloat { 22 }
+
+    override func layout() {
+        super.layout()
+        let titleWidth = ceil(title.intrinsicContentSize.width) + 2
+        title.frame = NSRect(x: 10, y: 5, width: titleWidth, height: 14)
+        let badgeWidth = max(14, ceil(badge.intrinsicContentSize.width) + 8)
+        badge.frame = NSRect(x: 10 + titleWidth + 5, y: 4, width: badgeWidth, height: 14)
+        shortcut.frame = NSRect(x: bounds.width - 60, y: 5, width: 50, height: 14)
+    }
+
+    override func mouseDown(with _: NSEvent) { onClick?() }
+}
+
+/// One thing waiting on you: where, what it wants, and for how long.
+private final class NeedsYouRow: NSView, SidebarRow {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+
+    var onClick: (() -> Void)?
+    var onDismiss: (() -> Void)?
+    let entry: SidebarModel.NeedsYou
+    private let icon = NSImageView()
+    private let title = NSTextField(labelWithString: "")
+    private let age = NSTextField(labelWithString: "")
+    private let line = NSTextField(labelWithString: "")
+    private let closeIcon = CloseIcon()
+    private var hovering = false {
+        didSet {
+            updateBackground()
+            closeIcon.isHidden = !(hovering && entry.dismissable)
+            age.isHidden = !closeIcon.isHidden
+        }
+    }
+
+    init(entry: SidebarModel.NeedsYou) {
+        self.entry = entry
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        let tint: NSColor = entry.urgent ? .controlAccentColor : entry.kind == .finished ? .systemBlue : .secondaryLabelColor
+        icon.image = NSImage(systemSymbolName: entry.symbol, accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+        icon.contentTintColor = tint
+        title.stringValue = entry.title
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        title.textColor = .labelColor
+        title.lineBreakMode = .byTruncatingTail
+        age.stringValue = entry.age ?? ""
+        age.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        age.textColor = .tertiaryLabelColor
+        age.alignment = .right
+        line.stringValue = [entry.line, entry.place].filter { !$0.isEmpty }.joined(separator: " · ")
+        line.font = .systemFont(ofSize: 11)
+        line.textColor = entry.urgent ? NSColor.controlAccentColor.blended(withFraction: 0.35, of: .labelColor) : .secondaryLabelColor
+        line.lineBreakMode = .byTruncatingTail
+        for view in [icon, title, age, line] { addSubview(view) }
+        closeIcon.isHidden = true
+        closeIcon.toolTip = "Dismiss until it changes"
+        addSubview(closeIcon)
+        toolTip = "\(entry.title)\n\(line.stringValue)"
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(entry.title), \(line.stringValue)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    func height(forWidth _: CGFloat) -> CGFloat { 36 }
+
+    override func layout() {
+        super.layout()
+        let w = bounds.width
+        icon.frame = NSRect(x: 8, y: 4, width: 16, height: 16)
+        let ageWidth = max(26, ceil(age.intrinsicContentSize.width) + 2)
+        age.frame = NSRect(x: w - 8 - ageWidth, y: 4, width: ageWidth, height: 15)
+        closeIcon.frame = NSRect(x: w - 6 - 18, y: 3, width: 18, height: 18)
+        title.frame = NSRect(x: 29, y: 3, width: max(0, w - 29 - ageWidth - 12), height: 16)
+        line.frame = NSRect(x: 29, y: 18, width: max(0, w - 29 - 8), height: 15)
+    }
+
+    override func mouseEntered(with _: NSEvent) { hovering = true }
+    override func mouseExited(with _: NSEvent) { hovering = false }
+
+    private func updateBackground() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = hovering ? Theme.sidebarHover.cgColor : nil
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if !closeIcon.isHidden, closeIcon.frame.insetBy(dx: -3, dy: -3).contains(point) { return onDismiss?() ?? () }
+        onClick?()
+    }
+
+    override func menu(for _: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Go There", keyEquivalent: "") { [weak self] in self?.onClick?() })
+        if entry.dismissable {
+            menu.addItem(ClosureMenuItem(title: "Dismiss Until It Changes", keyEquivalent: "") { [weak self] in self?.onDismiss?() })
+        }
+        return menu
+    }
+}
+
+/// "+3 more · ⇧⌘K" under the shown rows.
+private final class NeedsYouMore: NSView, SidebarRow {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+
+    var onClick: (() -> Void)?
+    private let label = NSTextField(labelWithString: "")
+
+    init(count: Int) {
+        super.init(frame: .zero)
+        label.stringValue = "+\(count) more · ⇧⌘K"
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .tertiaryLabelColor
+        addSubview(label)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    func height(forWidth _: CGFloat) -> CGFloat { 18 }
+
+    override func layout() {
+        super.layout()
+        label.frame = NSRect(x: 29, y: 1, width: bounds.width - 37, height: 15)
+    }
+
+    override func mouseDown(with _: NSEvent) { onClick?() }
 }

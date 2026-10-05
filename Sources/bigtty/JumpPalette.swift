@@ -28,7 +28,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let detail: String
         let symbol: String
         let enabled: Bool
+        var alert = false
         let run: @MainActor () -> Void
+        /// ⌫ (empty field) or ⌘⌫ takes it off the list.
+        var dismiss: (@MainActor () -> Void)? = nil
     }
 
     private struct Item {
@@ -43,6 +46,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         var highlights: [NSRange] = []
         /// Terminal output lines show in a monospaced face.
         var monospaced = false
+        var dismiss: (@MainActor () -> Void)? = nil
     }
 
     private enum Row {
@@ -66,8 +70,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         choosing = choices.map(\.section).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         onPick = { target in if case let .perform(run) = target { run() } }
         items = choices.filter(\.enabled).map {
-            Item(section: $0.section, title: $0.title, detail: $0.detail, symbol: $0.symbol, alert: false,
-                 target: .perform($0.run), haystack: $0.detail.lowercased())
+            Item(section: $0.section, title: $0.title, detail: $0.detail, symbol: $0.symbol, alert: $0.alert,
+                 target: .perform($0.run), haystack: $0.detail.lowercased(), dismiss: $0.dismiss)
         }
         present(placeholder: placeholder)
     }
@@ -251,7 +255,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         rows = []
         for section in order {
             var group = all.filter { $0.section == section }
-            if query.isEmpty { group.sort { $0.alert && !$1.alert } }
+            if query.isEmpty, choosing == nil { group.sort { $0.alert && !$1.alert } }
             guard !group.isEmpty else { continue }
             rows.append(.header(section))
             rows += group.prefix(section == "Panes" ? 6 : section == "In Terminals" ? 8 : 12).map { .item($0) }
@@ -412,6 +416,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             pickSelected(); return true
         case #selector(NSResponder.cancelOperation(_:)): panel?.orderOut(nil); return true
+        case #selector(NSResponder.deleteToBeginningOfLine(_:)):
+            return dismissSelected()
+        case #selector(NSResponder.deleteBackward(_:)) where field.stringValue.isEmpty:
+            return dismissSelected()
         default: return false
         }
     }
@@ -424,6 +432,20 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         guard row >= 0, row < rows.count else { return }
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
+    }
+
+    /// Takes the selected item off the list, if it can be.
+    private func dismissSelected() -> Bool {
+        let row = table.selectedRow
+        guard row >= 0, case let .item(item) = rows[row], let dismiss = item.dismiss else { return false }
+        dismiss()
+        items.removeAll { $0.section == item.section && $0.title == item.title && $0.detail == item.detail }
+        filter()
+        guard !rows.isEmpty else { panel?.orderOut(nil); return true }
+        // The next item down takes its place (the one above at the end).
+        let next = rows.indices.first { $0 >= row && !isHeader(rows[$0]) } ?? rows.indices.last { !isHeader(rows[$0]) }
+        if let next { table.selectRowIndexes([next], byExtendingSelection: false) }
+        return true
     }
 
     @objc private func pickSelected() {
@@ -444,6 +466,17 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             case let .item(item): return "  \(index == table.selectedRow ? ">" : " ") \(item.title) — \(item.detail)"
             }
         }.joined(separator: "\n")
+    }
+
+    /// Debug hook: a key in the palette ("up", "down", "return", "delete").
+    func debugKey(_ key: String) {
+        switch key {
+        case "up": move(-1)
+        case "down": move(1)
+        case "return": pickSelected()
+        case "delete": _ = dismissSelected()
+        default: break
+        }
     }
 
     /// Debug hook: types into the palette's field.

@@ -266,6 +266,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             guard let self, let machine = self.manager.machine(id) else { return nil }
             return machine.isLocal ? self.sessionMenu() : self.remoteSessionMenu(machine)
         }
+        sidebar.onOpenNeedsYou = { [weak self] id in
+            guard let self, let entry = NeedsYouEntry.collect(self.manager).first(where: { $0.id == id }) else { return }
+            entry.open { self.onMachineProblem?($0) }
+        }
+        sidebar.onDismissNeedsYou = { [weak self] id in
+            guard let self else { return }
+            NeedsYouEntry.collect(self.manager).first { $0.id == id }?.dismiss()
+        }
+        sidebar.onShowAllNeedsYou = { NSApp.sendAction(#selector(AppDelegate.showNeedsYou(_:)), to: nil, from: nil) }
         sidebar.onMoveSpace = { [weak self] key, index in
             guard let self, let ref = SpaceRef(key: key), let machine = self.manager.machine(ref.machine) else { return }
             machine.store?.perform { try await $0.moveWorkspace(ref.workspace, to: index) }
@@ -701,6 +710,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func sidebarModel() -> SidebarModel {
         var model = SidebarModel()
+        model.needsYou = NeedsYouEntry.collect(manager).map {
+            .init(id: $0.id, kind: $0.kind, title: $0.title, line: $0.line, place: $0.place, age: $0.age,
+                  symbol: $0.symbol, urgent: $0.urgent, dismissable: $0.pane != nil)
+        }
         var number = 0
         for machine in visibleMachines {
             guard let store = machine.store, let attention = machine.attention, let spaceInfo = machine.spaceInfo,
