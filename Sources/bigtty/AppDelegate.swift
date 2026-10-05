@@ -314,15 +314,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// Brings a space forward: its own window in space mode, else the key window.
-    func showSpace(_ space: SpaceRef) {
+    /// Brings a space forward: its own window in space mode, else the key
+    /// window. With `tab`, that tab of it, in this window only.
+    func showSpace(_ space: SpaceRef, tab: String? = nil) {
         dismissedSpaces.remove(space)
         if windowPerSpace {
-            (window(for: space) ?? openWindow(pinnedTo: space)).window?.makeKeyAndOrderFront(nil)
+            let controller = window(for: space) ?? openWindow(pinnedTo: space)
+            controller.window?.makeKeyAndOrderFront(nil)
+            if let tab { controller.select(space, tab: tab) }
         } else {
             if windows.isEmpty { openWindow(pinnedTo: nil) }
             keyWindow?.window?.makeKeyAndOrderFront(nil)
-            keyWindow?.select(space)
+            keyWindow?.select(space, tab: tab)
         }
     }
 
@@ -775,25 +778,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         for item in menu.items where item.tag == Self.spaceItemTag { menu.removeItem(item) }
-        for machine in manager.all {
-            guard let store = machine.store, case .connected = store.state, !store.snapshot.workspaces.isEmpty else { continue }
-            let header = NSMenuItem.sectionHeader(title: machine.name)
-            header.tag = Self.spaceItemTag
-            menu.addItem(header)
-            for space in store.snapshot.workspaces {
-                let count = machine.attention?.count(inWorkspace: space.workspaceID) ?? 0
-                let title = count > 0 ? "\(space.label)  (\(count))" : space.label
-                let item = NSMenuItem(title: title, action: #selector(showSpaceFromMenu(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = SpaceRef(machine: machine.id, workspace: space.workspaceID).key
-                item.tag = Self.spaceItemTag
-                menu.addItem(item)
-            }
+        let shown = manager.activeLocal
+        let others = manager.all.filter { $0 !== shown }.compactMap(spaceMenuGroup)
+        for item in SpaceMenu.items(shown: spaceMenuGroup(shown), others: others, target: self, action: #selector(showSpaceFromMenu(_:))) {
+            item.tag = Self.spaceItemTag
+            menu.addItem(item)
         }
     }
 
-    @objc private func showSpaceFromMenu(_ sender: NSMenuItem) {
-        if let key = sender.representedObject as? String, let space = SpaceRef(key: key) { showSpace(space) }
+    /// A session's spaces for the Window menu, by the names the sidebar and
+    /// ⌘K show (so a menu search for one finds the jump), in herdr's order.
+    private func spaceMenuGroup(_ machine: Machine) -> SpaceMenu.Group? {
+        guard let store = machine.store, case .connected = store.state else { return nil }
+        let titles = machine.spaceInfo?.agentTitles ?? [:]
+        let spaces = store.snapshot.workspaces.map { space in
+            SpaceMenu.Space(
+                ref: SpaceRef(machine: machine.id, workspace: space.workspaceID),
+                name: MainWindowController.spaceName(space, store: store, agentTitles: titles),
+                waiting: machine.attention?.count(inWorkspace: space.workspaceID) ?? 0,
+                tabs: store.tabs(in: space.workspaceID).map { tab in
+                    SpaceMenu.Tab(id: tab.tabID, title: MainWindowController.tabTitle(tab, store: store, agentTitles: titles),
+                                  waiting: machine.attention?.count(inTab: tab.tabID) ?? 0)
+                }
+            )
+        }
+        return SpaceMenu.Group(title: SpaceMenu.groupTitle(machine: machine.name, session: machine.sessionName), spaces: spaces)
+    }
+
+    @objc func showSpaceFromMenu(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? SpaceMenu.Target else { return }
+        showSpace(target.space, tab: target.tab)
     }
 
     override var debugDescription: String {

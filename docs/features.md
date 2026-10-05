@@ -25,8 +25,8 @@ servers and browser panes keep going where they land.
   **Hold it there** a moment and the space blinks and opens, like a folder in
   Finder: keep dragging to drop the pane exactly where you want it (beside a
   pane, or along an edge of the whole tab).
-- **Pane ▸ Move Pane To** lists your spaces and their tabs, a new tab here and
-  a new space; **⌘K ▸ Move Pane to…** picks one in the palette.
+- **Pane ▸ Move Pane To…** (or **⌘K ▸ Move Pane to…**) picks one of your
+  spaces and their tabs, a new tab here or a new space in the palette.
 - **⌃⌥⌘1–9** sends the focused pane to space 1–9.
 
 bigtty follows the pane there; hold **⌥** while choosing or dropping to stay
@@ -68,6 +68,13 @@ own name for the space is never changed.
 sidebar, or right-click one and choose Move Up / Move Down, to put the spaces
 you use most on the keys you want. ⌃⌘⇥ goes back to the last space you were
 in; hold ⌃⌘ and keep tapping ⇥ to go further back.
+
+The **Window** menu lists every space by the same name: the session on screen
+under its own header ("This Mac · work"), every other session and machine in a
+submenu ("devbox · main"). A space with several tabs also lists them as
+"api › logs" (up to 8), and a badge counts what needs you. So menu search
+(Help ▸ Search, or Spotlight's menu actions) finds a space or tab by name, and
+picking one only shows it: nothing moves, and herdr's own focus stays put.
 
 Each card says how long its space has been quiet ("claude · idle · 3h"), and
 spaces with nothing for 12 hours fade until you hover or select them, so the
