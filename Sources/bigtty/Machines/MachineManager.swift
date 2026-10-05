@@ -250,6 +250,17 @@ final class MachineManager {
             guard let self, let machine else { return }
             // Just connected: list its sessions now rather than on the timer.
             if machine.status == .connected, self.remoteKnown[machine.id] == nil { self.refreshRemoteSessions(machine) }
+            // Back after being unreachable: its other sessions, down with
+            // it, retry now rather than waiting out their backoff.
+            if machine.status == .connected {
+                if self.connectedRemotes.insert(machine.id).inserted {
+                    for session in self.remoteSessions[machine.id] ?? [] where session.unreachableSince != nil {
+                        session.connect(byUser: false)
+                    }
+                }
+            } else {
+                self.connectedRemotes.remove(machine.id)
+            }
             self.changed()
         }
         remotes.append(machine)
@@ -307,6 +318,16 @@ final class MachineManager {
         return machine
     }
 
+    /// The network came back: every remote failing to connect tries again
+    /// now. Sessions of a remote share its target, so a remote retries
+    /// first and its sessions follow once it's in (see `attach`).
+    func retryUnreachable() {
+        for remote in remotes { remote.retryNow() }
+        for remote in remotes where remote.status != .connecting {
+            for session in remoteSessions[remote.id] ?? [] { session.retryNow() }
+        }
+    }
+
     /// Lists every connected remote's herdr sessions and connects the
     /// running ones, so their agents reach you too.
     func refreshRemoteSessions(_ only: Machine? = nil) {
@@ -324,6 +345,8 @@ final class MachineManager {
     }
 
     private var listing: Set<String> = []
+    /// Saved remotes connected as of their last change, by id.
+    private var connectedRemotes: Set<String> = []
     /// When each remote session's machine was made, by id.
     private var opened: [String: Date] = [:]
 

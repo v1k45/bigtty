@@ -147,6 +147,59 @@ import Testing
         #expect(!undone)
     }
 
+    func problem(_ id: String, host: String = "box", _ message: String = "ssh: Could not resolve hostname box",
+                 since: Date? = nil, saved: Bool = false, order: Int = 0) -> ConnectionProblem {
+        ConnectionProblem(machineID: id, host: host, message: message, since: since, isSaved: saved, order: order)
+    }
+
+    @Test func oneEntryPerUnreachableHostHoweverManySessions() {
+        // The screenshot: a host with three sessions, all failing.
+        let problems = [
+            problem("box", since: t0 + 30, saved: true, order: 1),
+            problem("box/dev", since: t0, order: 3),
+            problem("box/api", since: t0 + 60, order: 4),
+            problem("other", host: "other", "ssh: connect to host other port 22: Connection refused", since: t0, saved: true, order: 2),
+        ]
+        let hosts = NeedsYou.perHost(problems)
+        #expect(hosts.map(\.host) == ["box", "other"])
+        // The saved machine leads, unreachable since its first session went.
+        #expect(hosts[0].machineID == "box")
+        #expect(hosts[0].since == t0)
+        #expect(hosts[0].order == 1)
+    }
+
+    @Test func aSessionLeadsWhenTheSavedMachineIsFine() {
+        let hosts = NeedsYou.perHost([problem("box/api", order: 4), problem("box/dev", "other error", order: 3)])
+        #expect(hosts.count == 1)
+        #expect(hosts[0].machineID == "box/dev")
+        #expect(hosts[0].message == "other error")
+    }
+
+    @Test func retriesKeepAHostDismissedUntilTheErrorChangesOrItReconnects() {
+        var dismissed = DismissedUntilChanged<String>()
+        let first = problem("box", since: t0, saved: true)
+        dismissed.dismiss("box", in: first.state)
+        // Another failed retry: same error, same since.
+        let retried = problem("box", since: t0, saved: true)
+        let hiddenAfterRetry = dismissed.isDismissed("box", in: retried.state)
+        #expect(hiddenAfterRetry)
+        // Reconnected, then lost again: news again.
+        dismissed.dismiss("box", in: first.state)
+        let again = problem("box", since: t0 + 600, saved: true)
+        let hiddenAfterReconnect = dismissed.isDismissed("box", in: again.state)
+        #expect(!hiddenAfterReconnect)
+        // A different error: news again.
+        dismissed.dismiss("box", in: first.state)
+        let changed = problem("box", "ssh: connect to host box port 22: Operation timed out", since: t0, saved: true)
+        let hiddenAfterNewError = dismissed.isDismissed("box", in: changed.state)
+        #expect(!hiddenAfterNewError)
+    }
+
+    @Test func reconnectsBackOff() {
+        let delays = (1...8).map { NeedsYou.reconnectDelay(attempt: $0) }
+        #expect(delays == [5, 10, 30, 60, 120, 300, 300, 300])
+    }
+
     @Test func closedPanesAreForgotten() {
         var attention = Attention()
         _ = attention.update(panes: [pane("a", .working)], viewed: [], now: t0)
