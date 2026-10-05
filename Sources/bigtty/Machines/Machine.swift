@@ -314,6 +314,18 @@ final class Machine {
         }
     }
 
+    /// The network came back: if this one is failing to connect, start
+    /// over now, with the backoff reset. Leaves alone what the network
+    /// can't fix (a login, herdr missing) and an attempt in flight.
+    func retryNow() {
+        switch status {
+        case .failed, .reconnecting:
+            attempts = 0
+            connect(byUser: false)
+        default: break
+        }
+    }
+
     /// Starts herdr on the machine (it was installed but not running).
     func startServer() {
         guard let tunnel, let binary = probe?.herdrBinary else { return }

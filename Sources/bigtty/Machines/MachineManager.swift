@@ -318,6 +318,16 @@ final class MachineManager {
         return machine
     }
 
+    /// The network came back: every remote failing to connect tries again
+    /// now. Sessions of a remote share its target, so a remote retries
+    /// first and its sessions follow once it's in (see `attach`).
+    func retryUnreachable() {
+        for remote in remotes { remote.retryNow() }
+        for remote in remotes where remote.status != .connecting {
+            for session in remoteSessions[remote.id] ?? [] { session.retryNow() }
+        }
+    }
+
     /// Lists every connected remote's herdr sessions and connects the
     /// running ones, so their agents reach you too.
     func refreshRemoteSessions(_ only: Machine? = nil) {

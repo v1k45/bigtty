@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Spaces this app just created; their windows open in front.
     private var spacesToActivate: Set<SpaceRef> = []
     private var knownSpaces: Set<SpaceRef> = []
+    private var networkWatch: NetworkWatch?
 
     func applicationDidFinishLaunching(_: Notification) {
         NetworkWarmup.run()
@@ -38,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         watchGhosttyConfig()
         let endpoint = HerdrEndpoint(session: env["BIGTTY_SESSION"].flatMap { $0.isEmpty ? nil : $0 })
         manager = MachineManager(localEndpoint: endpoint)
+        networkWatch = NetworkWatch { [weak self] in self?.manager.retryUnreachable() }
         // View ▸ Enter Full Screen is ours; don't let AppKit add a second one.
         UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
         NSApp.mainMenu = MainMenu.build()
