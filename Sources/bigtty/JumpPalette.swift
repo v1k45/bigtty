@@ -28,7 +28,14 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let detail: String
         let symbol: String
         let enabled: Bool
+        var alert = false
         let run: @MainActor () -> Void
+        /// ⌘⌫ (or ⌫ before anything is typed) takes it off the list; ⌘Z
+        /// brings it back with `undismiss`.
+        var dismiss: (@MainActor () -> Void)? = nil
+        var undismiss: (@MainActor () -> Void)? = nil
+        /// Tells apart choices that read the same (two agents in a space).
+        var id: String? = nil
     }
 
     private struct Item {
@@ -43,6 +50,9 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         var highlights: [NSRange] = []
         /// Terminal output lines show in a monospaced face.
         var monospaced = false
+        var dismiss: (@MainActor () -> Void)? = nil
+        var undismiss: (@MainActor () -> Void)? = nil
+        var id: String? = nil
     }
 
     private enum Row {
@@ -60,14 +70,21 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
 
     /// Only these sections, in this order, while choosing (nil: jumping).
     private var choosing: [String]?
+    /// Something was typed since the palette opened: a ⌫ that empties the
+    /// field must not go on to dismiss an item.
+    private var typed = false
+    /// Dismissed items, latest last, with where they were, for ⌘Z.
+    private var dismissedItems: [(item: Item, index: Int)] = []
+    private var placeholder = ""
 
     /// The palette as a picker: just `choices`, no terminal search.
     func choose(_ choices: [Choice], placeholder: String) {
         choosing = choices.map(\.section).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         onPick = { target in if case let .perform(run) = target { run() } }
         items = choices.filter(\.enabled).map {
-            Item(section: $0.section, title: $0.title, detail: $0.detail, symbol: $0.symbol, alert: false,
-                 target: .perform($0.run), haystack: $0.detail.lowercased())
+            Item(section: $0.section, title: $0.title, detail: $0.detail, symbol: $0.symbol, alert: $0.alert,
+                 target: .perform($0.run), haystack: $0.detail.lowercased(), dismiss: $0.dismiss,
+                 undismiss: $0.undismiss, id: $0.id)
         }
         present(placeholder: placeholder)
     }
@@ -92,8 +109,11 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private func present(placeholder: String) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
+        self.placeholder = placeholder
         field.placeholderString = placeholder
         field.stringValue = ""
+        typed = false
+        dismissedItems = []
         filter()
         if let screen = NSApp.keyWindow?.screen ?? NSScreen.main {
             let frame = screen.visibleFrame
@@ -251,10 +271,12 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         rows = []
         for section in order {
             var group = all.filter { $0.section == section }
-            if query.isEmpty { group.sort { $0.alert && !$1.alert } }
+            if query.isEmpty, choosing == nil { group.sort { $0.alert && !$1.alert } }
             guard !group.isEmpty else { continue }
             rows.append(.header(section))
-            rows += group.prefix(section == "Panes" ? 6 : section == "In Terminals" ? 8 : 12).map { .item($0) }
+            // Choosing (Needs You, Move Pane to…) lists everything offered.
+            let cap = choosing != nil ? Int.max : section == "Panes" ? 6 : section == "In Terminals" ? 8 : 12
+            rows += group.prefix(cap).map { .item($0) }
         }
         // With a query, the best match leads regardless of section.
         if !query.isEmpty, let best = matched.first?.0, let at = rows.firstIndex(where: { row in
@@ -402,7 +424,11 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
 
     // MARK: - Keys
 
-    func controlTextDidChange(_: Notification) { filter() }
+    func controlTextDidChange(_: Notification) {
+        typed = true
+        field.placeholderString = placeholder
+        filter()
+    }
 
     func control(_: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
@@ -412,6 +438,13 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             pickSelected(); return true
         case #selector(NSResponder.cancelOperation(_:)): panel?.orderOut(nil); return true
+        // ⌘⌫ on an empty field; with text, it clears the text as usual.
+        case #selector(NSResponder.deleteToBeginningOfLine(_:)) where field.stringValue.isEmpty:
+            return dismissSelected()
+        // ⌫ only before anything was typed: one press too many after
+        // clearing a filter must not dismiss.
+        case #selector(NSResponder.deleteBackward(_:)) where field.stringValue.isEmpty && !typed:
+            return dismissSelected()
         default: return false
         }
     }
@@ -424,6 +457,42 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         guard row >= 0, row < rows.count else { return }
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
+    }
+
+    /// Takes the selected item off the list, if it can be.
+    private func dismissSelected() -> Bool {
+        let row = table.selectedRow
+        guard row >= 0, case let .item(item) = rows[row], let dismiss = item.dismiss,
+              let index = items.firstIndex(where: { Self.same($0, item) }) else { return false }
+        dismiss()
+        items.remove(at: index)
+        dismissedItems.append((item, index))
+        field.placeholderString = "Dismissed “\(item.title)” · ⌘Z to undo"
+        filter()
+        // The next item down takes its place (the one above at the end).
+        let next = rows.indices.first { $0 >= row && !isHeader(rows[$0]) } ?? rows.indices.last { !isHeader(rows[$0]) }
+        if let next { table.selectRowIndexes([next], byExtendingSelection: false) }
+        return true
+    }
+
+    /// ⌘Z: the last dismissed item comes back where it was. False if
+    /// there's nothing to undo (the field's own undo goes on).
+    func undoDismiss() -> Bool {
+        guard panel?.isVisible == true, field.stringValue.isEmpty, let last = dismissedItems.popLast() else { return false }
+        last.item.undismiss?()
+        items.insert(last.item, at: min(last.index, items.count))
+        field.placeholderString = dismissedItems.last.map { "Dismissed “\($0.item.title)” · ⌘Z to undo" } ?? placeholder
+        filter()
+        if let at = rows.firstIndex(where: { if case let .item(item) = $0 { Self.same(item, last.item) } else { false } }) {
+            table.selectRowIndexes([at], byExtendingSelection: false)
+            table.scrollRowToVisible(at)
+        }
+        return true
+    }
+
+    private static func same(_ a: Item, _ b: Item) -> Bool {
+        if let id = a.id { return id == b.id }
+        return b.id == nil && a.section == b.section && a.title == b.title && a.detail == b.detail
     }
 
     @objc private func pickSelected() {
@@ -446,9 +515,29 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         }.joined(separator: "\n")
     }
 
+    /// Debug hook: a key in the palette ("up", "down", "return", "delete",
+    /// "cmd-delete", "undo"), through the same handling as the real key.
+    func debugKey(_ key: String) {
+        let selector: Selector? = switch key {
+        case "up": #selector(NSResponder.moveUp(_:))
+        case "down": #selector(NSResponder.moveDown(_:))
+        case "return": #selector(NSResponder.insertNewline(_:))
+        case "delete": #selector(NSResponder.deleteBackward(_:))
+        case "cmd-delete": #selector(NSResponder.deleteToBeginningOfLine(_:))
+        default: nil
+        }
+        if key == "undo" { _ = undoDismiss(); return }
+        guard let selector, !control(field, textView: NSTextView(), doCommandBy: selector) else { return }
+        // Not taken by the palette: what the field would do itself.
+        if key == "delete" { debugType(String(field.stringValue.dropLast())) }
+        if key == "cmd-delete" { debugType("") }
+    }
+
     /// Debug hook: types into the palette's field.
     func debugType(_ text: String) {
         field.stringValue = text
+        typed = true
+        field.placeholderString = placeholder
         filter()
     }
 }
@@ -456,6 +545,13 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
 /// Borderless-looking panels still need to become key for typing.
 private final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// ⌘Z undoes a dismissal before the field's own undo.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers == "z", JumpPalette.shared.undoDismiss() { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 private final class PaletteCell: NSTableCellView {

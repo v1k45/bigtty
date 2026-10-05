@@ -181,6 +181,7 @@ enum MainMenu {
         item(tabs, "Jump To…", #selector(AppDelegate.showJump(_:)), "k")
         item(tabs, "Switch Session…", #selector(PaneActions.showSessionSwitcher(_:)), "s", [.command, .shift])
         item(tabs, "Next Pane That Needs You", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
+        item(tabs, "Needs You…", #selector(AppDelegate.showNeedsYou(_:)), "k", [.command, .shift])
         tabs.addItem(.separator())
         // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and
         // browsers; ⌘⇧] / ⌘⇧[ kept as alternates.

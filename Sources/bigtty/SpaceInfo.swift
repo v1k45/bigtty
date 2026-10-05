@@ -35,6 +35,8 @@ final class SpaceInfoCenter {
     /// Question text of blocked panes, read once per block.
     private var questions: [String: String] = [:]
     private var observers: [UUID: @MainActor () -> Void] = [:]
+    /// What a blocked pane's agent asks, once read.
+    func question(for paneID: String) -> String? { questions[paneID].flatMap { $0.isEmpty ? nil : $0 } }
     private var timer: Timer?
     private var refreshing = false
 
@@ -115,8 +117,14 @@ final class SpaceInfoCenter {
             }
             next[workspace.workspaceID] = item
         }
+        // Every blocked agent's question, seen or not, for Needs You (cards
+        // show one per space): you come back to a seen one to answer it.
+        let blocked = Set(store.snapshot.panes.filter { $0.agentStatus == .blocked }.map(\.paneID))
+        for pane in store.snapshot.panes where blocked.contains(pane.paneID) && questions[pane.paneID] == nil {
+            fetchQuestion(pane)
+        }
         // Forget questions of panes that are no longer blocked.
-        questions = questions.filter { attention.reason(for: $0.key) == .blocked }
+        questions = questions.filter { blocked.contains($0.key) }
         guard next != info else { return }
         info = next
         for handler in observers.values { handler() }

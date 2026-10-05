@@ -67,6 +67,17 @@ final class AttentionCenter: NSObject {
 
     func reason(for paneID: String) -> Attention.Reason? { attention.reason(for: paneID) }
 
+    /// Takes a pane off Needs You until its agent's state changes.
+    func dismiss(_ paneID: String) {
+        attention.dismiss(paneID)
+        publish()
+    }
+
+    func undismiss(_ paneID: String) {
+        attention.undismiss(paneID)
+        publish()
+    }
+
     func count(inTab tabID: String) -> Int { attention.count(inTab: tabID, panes: store.snapshot.panes) }
 
     func count(inWorkspace id: String) -> Int { attention.count(inWorkspace: id, panes: store.snapshot.panes) }

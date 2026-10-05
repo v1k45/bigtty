@@ -537,6 +537,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         JumpPalette.shared.debugType(sender as? String ?? "")
     }
 
+    /// Debug hook: a key in the open palette ("down", "return", "delete").
+    @objc func debugPaletteKey(_ sender: Any?) {
+        JumpPalette.shared.debugKey(sender as? String ?? "")
+    }
+
     @objc func showJump(_: Any?) {
         JumpPalette.shared.show(manager: manager) { [weak self] target in
             self?.jump(to: target)
@@ -729,6 +734,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         NSSound.beep()
     }
 
+    /// ⇧⌘K: everything waiting on you, most urgent first, on any machine.
+    @objc func showNeedsYou(_: Any?) {
+        var choices: [JumpPalette.Choice] = []
+        for entry in NeedsYouEntry.collect(manager) {
+            let detail = [entry.line, entry.place, entry.age ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+            let run: @MainActor () -> Void = { [weak self] in
+                entry.open { machine in self?.showProblem(machine) }
+            }
+            var choice = JumpPalette.Choice(
+                section: Self.needsYouSection(entry.kind), title: entry.title, detail: detail,
+                symbol: entry.symbol, enabled: true, alert: entry.urgent, run: run
+            )
+            choice.id = entry.id
+            if entry.dismissable {
+                choice.dismiss = { entry.dismiss() }
+                choice.undismiss = { entry.undismiss() }
+            }
+            choices.append(choice)
+        }
+        if choices.isEmpty {
+            choices = [JumpPalette.Choice(section: "Needs You", title: "Nothing needs you", detail: "", symbol: "checkmark", enabled: true, run: {})]
+        }
+        JumpPalette.shared.choose(choices, placeholder: "Needs you, most urgent first · ⌘⌫ dismisses")
+    }
+
+    private static func needsYouSection(_ kind: NeedsYouItem.Kind) -> String {
+        switch kind {
+        case .login: "Logins"
+        case .blocked: "Needs You"
+        case .waiting: "Waiting on You"
+        case .unreachable: "Can’t Reach"
+        case .finished: "Finished"
+        }
+    }
+
     // MARK: - Window menu lists every space, open or not
 
     private static let spaceItemTag = 7001
@@ -764,6 +804,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         out += "extensions: \(WebExtensions.status) \(WebExtensions.debugDetail)\n"
         out += JumpPalette.shared.debugRows + "\n"
+        out += "needs you:" + MainActor.assumeIsolated {
+            NeedsYouEntry.collect(manager).map { "\n  \($0.kind) \($0.title) — \($0.line) \($0.place) \($0.age ?? "")" }.joined()
+        } + "\n"
         for (i, window) in windows.enumerated() {
             let pinned = window.pinnedSpace?.key ?? "-"
             out += "--- window \(i) pinned=\(pinned) key=\(window.window?.isKeyWindow ?? false) visible=\(window.window?.isVisible ?? false)\n"

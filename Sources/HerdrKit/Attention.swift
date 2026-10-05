@@ -20,18 +20,27 @@ public struct Attention: Sendable, Equatable {
     public private(set) var blocked: Set<String> = []
     /// Blocked panes the user has already looked at.
     public private(set) var seenBlocked: Set<String> = []
+    /// When each pane's agent entered its current state (as far as this
+    /// client knows: panes there on connect count from then).
+    public private(set) var since: [String: Date] = [:]
+    /// Panes dismissed from Needs You, until their agent's state changes.
+    public private(set) var dismissed: Set<String> = []
 
     public init() {}
 
     /// Folds in a new snapshot and returns panes that newly need attention
     /// (for notifications). `viewed` panes never produce a transition.
-    public mutating func update(panes: [Pane], viewed: Set<String>) -> [Transition] {
+    public mutating func update(panes: [Pane], viewed: Set<String>, now: Date = Date()) -> [Transition] {
         var transitions: [Transition] = []
         var seen: [String: AgentStatus] = [:]
         for pane in panes {
             let old = lastStatus[pane.paneID]
             let new = pane.agentStatus
             seen[pane.paneID] = new
+            if old != new {
+                since[pane.paneID] = now
+                dismissed.remove(pane.paneID)
+            }
             if new == .blocked, old != .blocked, !viewed.contains(pane.paneID) {
                 transitions.append(Transition(paneID: pane.paneID, reason: .blocked))
             }
@@ -47,6 +56,8 @@ public struct Attention: Sendable, Equatable {
         blocked = Set(panes.filter { $0.agentStatus == .blocked }.map(\.paneID))
         seenBlocked.formIntersection(blocked)
         unseenDone.formIntersection(seen.keys)
+        since = since.filter { seen[$0.key] != nil }
+        dismissed.formIntersection(seen.keys)
         markViewed(viewed)
         return transitions
     }
@@ -56,13 +67,25 @@ public struct Attention: Sendable, Equatable {
         seenBlocked.formUnion(viewed.intersection(blocked))
     }
 
+    /// Takes a pane off Needs You (it stops needing attention) until its
+    /// agent's state changes.
+    public mutating func dismiss(_ paneID: String) {
+        dismissed.insert(paneID)
+    }
+
+    /// Undoes `dismiss`: the pane is back as it was.
+    public mutating func undismiss(_ paneID: String) {
+        dismissed.remove(paneID)
+    }
+
     public func reason(for paneID: String) -> Reason? {
+        if dismissed.contains(paneID) { return nil }
         if blocked.contains(paneID), !seenBlocked.contains(paneID) { return .blocked }
         if unseenDone.contains(paneID) { return .done }
         return nil
     }
 
-    public var needingAttention: Set<String> { blocked.subtracting(seenBlocked).union(unseenDone) }
+    public var needingAttention: Set<String> { blocked.subtracting(seenBlocked).union(unseenDone).subtracting(dismissed) }
 
     /// Panes in the order jump-to-unread visits them: blocked first, then
     /// finished, each in workspace/tab/pane order.

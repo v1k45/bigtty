@@ -35,7 +35,8 @@ nothing stops; herdr keeps running everything.
 Each space shows its branch, ports, what its agents are doing and how long
 it's been quiet. When one stops to ask something, its space quotes the
 question, its pane gets a ring and a notification finds you. **⇧⌘U** jumps
-there.
+there; the sidebar's **Needs You** section (and **⇧⌘K**) lists everything
+waiting on you across machines and sessions, most urgent first.
 
 ![An agent's question shown on its space, its pane ringed](docs/screenshots/attention.png)
 
@@ -107,7 +108,7 @@ connects to your default session. To update:
 |---|---|
 | **⌘N** · **⌘T** · **⌘D** | New space · tab · split |
 | **⌥⌘B** · **⌥⌘F** · **⌥⌘G** | Browser · files · git changes beside you |
-| **⌘K** · **⇧⌘U** | Jump anywhere · next agent that needs you |
+| **⌘K** · **⇧⌘U** · **⇧⌘K** | Jump anywhere · next agent that needs you · everything that needs you |
 | **⌘1–9** · **⌃⌘⇥** | Your spaces · back to the last one |
 | **⌥⌘K** · **⇧⌘S** | Connect a machine · switch session |
 
