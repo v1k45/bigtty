@@ -583,7 +583,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// Points this window at another machine: its panes go, its spaces come.
     func switchMachine(to target: Machine) {
-        if target.isLocal { manager.activeLocal = target } else { manager.show(target) }
+        // The manager hears last: telling it announces a change, and this
+        // window's observer must by then see the machine it moved to, not
+        // the gone one it's leaving (or it falls back again, forever).
+        defer { if target.isLocal { manager.activeLocal = target } else { manager.show(target) } }
         guard target !== machine else { return }
         for view in paneViews.values {
             view.terminal?.detach()
