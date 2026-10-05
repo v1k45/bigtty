@@ -20,7 +20,7 @@ enum SpaceMenu {
         let tabs: [Tab]
     }
 
-    /// One session: "This Mac · hq", "orb · main".
+    /// One session: "This Mac · work", "devbox · main".
     struct Group {
         let title: String
         let spaces: [Space]
