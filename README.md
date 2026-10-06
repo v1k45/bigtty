@@ -112,7 +112,7 @@ connects to your default session. To update:
 | **⌘1–9** · **⌃⌘⇥** | Your spaces · back to the last one |
 | **⌥⌘K** · **⇧⌘S** | Connect a machine · switch session |
 
-Drag a pane by its top edge to rearrange. Everything else:
+Drag a pane by the handle on its top edge to rearrange. Everything else:
 [shortcuts](docs/shortcuts.md).
 
 ## Learn more
