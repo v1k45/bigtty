@@ -272,10 +272,10 @@ final class PaneContainerView: NSView {
         hoverArea = area
     }
 
-    /// The pill shows while the pointer is near the top edge.
+    /// The pill shows while the pointer is over the band it drags by.
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        grip.showsPill = dragPayload != nil && point.y >= bounds.height - 28
+        grip.showsPill = dragPayload != nil && point.y >= bounds.height - PaneGrip.bandHeight
     }
 
     override func mouseExited(with _: NSEvent) { grip.showsPill = false }
@@ -283,6 +283,19 @@ final class PaneContainerView: NSView {
     /// Dragging inside a pane is for the pane (selection, the grip), never
     /// for moving the window.
     override var mouseDownCanMoveWindow: Bool { false }
+
+    /// The same under the hidden title bar (the top row of panes, the grip
+    /// included), where AppKit ignores `mouseDownCanMoveWindow` and drags
+    /// the window from everything but the rect each view claims here. This
+    /// is AppKit's own private hook (controls use it; so do iTerm2 and Zed).
+    /// Should a macOS drop it, nothing calls this and panes behave as before.
+    @objc(_opaqueRectForWindowMoveWhenInTitlebar)
+    func opaqueRectForWindowMoveWhenInTitlebar() -> NSRect {
+        Self.claimsTitlebarDrags ? bounds : .zero
+    }
+
+    /// Whether AppKit has the hook above to override.
+    static let claimsTitlebarDrags = NSView.instancesRespond(to: NSSelectorFromString("_opaqueRectForWindowMoveWhenInTitlebar"))
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

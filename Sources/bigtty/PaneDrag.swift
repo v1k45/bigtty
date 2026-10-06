@@ -68,8 +68,12 @@ final class PaneGrip: NSView, NSDraggingSource {
     required init?(coder _: NSCoder) { fatalError() }
 
     static let size = NSSize(width: 44, height: 12)
-    /// Height of the grabbable band along the pane's top edge.
-    static let bandHeight: CGFloat = 10
+    /// Height of the grabbable band along the pane's top edge; the pill
+    /// shows while the pointer is over it.
+    static let bandHeight: CGFloat = 16
+    /// How far the pointer moves before a press picks the pane up, so a
+    /// shaky click doesn't start a drag.
+    static let dragThreshold: CGFloat = 3
 
     /// Draw the pill (hover); the band is grabbable either way.
     var showsPill = false {
@@ -116,9 +120,13 @@ final class PaneGrip: NSView, NSDraggingSource {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
 
     override func mouseDown(with event: NSEvent) { downEvent = event }
+    override func mouseUp(with _: NSEvent) { downEvent = nil }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let down = downEvent, let payload = payload?() else { return }
+        guard let down = downEvent,
+              hypot(event.locationInWindow.x - down.locationInWindow.x,
+                    event.locationInWindow.y - down.locationInWindow.y) >= Self.dragThreshold,
+              let payload = payload?() else { return }
         downEvent = nil
         let item = NSPasteboardItem()
         item.setString(payload.string, forType: .bigttyPane)
