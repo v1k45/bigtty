@@ -19,6 +19,7 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     private let modeControl = NSSegmentedControl(labels: ["Files", "Changes"], trackingMode: .selectOne, target: nil, action: nil)
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
+    private let reloadButton = NSButton()
     private let treeButton = NSButton()
     /// The tree (or changes list) beside the file; a file opens without it.
     private var showsTree: Bool
@@ -91,6 +92,15 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
         addSubview(closeButton)
+        reloadButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Reload")?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        reloadButton.isBordered = false
+        reloadButton.bezelStyle = .regularSquare
+        reloadButton.contentTintColor = .secondaryLabelColor
+        reloadButton.toolTip = "Reload from Disk (⌘R)"
+        reloadButton.target = self
+        reloadButton.action = #selector(reloadClicked)
+        addSubview(reloadButton)
         treeButton.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Show Files")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         treeButton.isBordered = false
@@ -179,7 +189,8 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         let control = modeControl.fittingSize
         modeControl.frame = NSRect(x: treeButton.frame.maxX + 4, y: y, width: control.width, height: 22)
         closeButton.frame = NSRect(x: b.width - 30, y: y - 1, width: 24, height: 24)
-        titleLabel.frame = NSRect(x: modeControl.frame.maxX + 10, y: y + 3, width: max(0, closeButton.frame.minX - modeControl.frame.maxX - 16), height: 16)
+        reloadButton.frame = NSRect(x: closeButton.frame.minX - 24, y: y - 1, width: 24, height: 24)
+        titleLabel.frame = NSRect(x: modeControl.frame.maxX + 10, y: y + 3, width: max(0, reloadButton.frame.minX - modeControl.frame.maxX - 12), height: 16)
         let body = max(0, b.height - h)
         // Narrow panes give the file itself the room; the tree comes back when wider.
         let tree: CGFloat = !showsTree ? 0 : b.width < 420 ? min(b.width * 0.45, 180) : min(treeWidth, max(140, b.width * 0.35))
@@ -399,6 +410,15 @@ final class FilesPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 
     @objc private func closeClicked() { onClose?() }
+
+    @objc private func reloadClicked() { reloadFromDisk() }
+
+    /// ⌘R: reads the open file (or diff) again and refreshes the tree,
+    /// without waiting for the watcher or the remote poll.
+    func reloadFromDisk() {
+        shownModified = nil
+        reload()
+    }
 
     @objc private func toggleTree() {
         showsTree.toggle()

@@ -45,6 +45,13 @@ final class PaneContainerView: NSView {
     var terminal: HerdrTerminalView? { content as? HerdrTerminalView }
     var browser: BrowserPaneView? { content as? BrowserPaneView }
     var files: FilesPaneView? { content as? FilesPaneView }
+    /// The pane's side of ⌘F.
+    var finder: FindDriver? {
+        if let terminal { return terminal.finder }
+        if let browser { return browser.finder }
+        return files?.code.finder
+    }
+
     /// What this view was built for; a pane re-tagged as another kind is rebuilt.
     var hostKind: HostPaneKind? { browser != nil ? .browser : files?.kind }
 
@@ -184,6 +191,11 @@ final class PaneContainerView: NSView {
         // The whole top edge is the handle; the pill shows in its middle.
         grip.frame = NSRect(x: 0, y: b.height - PaneGrip.bandHeight, width: b.width, height: PaneGrip.bandHeight)
         pinMark.frame = NSRect(x: b.width - 22, y: 8, width: 14, height: 14) // bottom right: clear of browser toolbars
+        if let findBar, let finder {
+            let width = min(FindBar.width, b.width - 16)
+            let top = content.frame.maxY - finder.findBarInset - 8
+            findBar.frame = NSRect(x: content.frame.maxX - width - 8, y: top - FindBar.height, width: width, height: FindBar.height)
+        }
         let pill = zoomPill.fittingSize
         zoomPill.frame = NSRect(x: b.width - pill.width - 12, y: b.height - pill.height - 10, width: pill.width, height: pill.height)
         CATransaction.begin()
@@ -191,6 +203,62 @@ final class PaneContainerView: NSView {
         ring.frame = b
         dim.frame = b
         CATransaction.commit()
+    }
+
+    // MARK: - Find
+
+    private(set) var findBar: FindBar?
+
+    /// ⌘F: opens the bar (or focuses it) with the field selected.
+    func showFind() {
+        guard let finder else { return }
+        if findBar == nil {
+            let bar = FindBar(driver: finder)
+            bar.onClose = { [weak self] in self?.closeFind() }
+            addSubview(bar, positioned: .below, relativeTo: detached)
+            findBar = bar
+            if bar.query.isEmpty, !FindBar.lastQuery.isEmpty {
+                bar.query = FindBar.lastQuery
+                bar.search()
+            }
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+        }
+        findBar?.focus()
+    }
+
+    /// ⌘G / ⇧⌘G: the next match, opening the bar with the last search
+    /// if it isn't open.
+    func findNext(backwards: Bool) {
+        if findBar == nil {
+            guard !FindBar.lastQuery.isEmpty else { return showFind() }
+            showFind()
+            return
+        }
+        findBar?.findNext(backwards: backwards)
+    }
+
+    /// ⌘E: the selection becomes the search.
+    func useSelectionForFind() {
+        finder?.selectionForFind { [weak self] text in
+            guard let self, let text, !text.isEmpty else { return }
+            FindBar.lastQuery = text
+            if let findBar = self.findBar {
+                findBar.query = text
+                findBar.search()
+            } else {
+                self.showFind()
+            }
+        }
+    }
+
+    func closeFind() {
+        guard let findBar else { return }
+        let refocus = findBar.field.currentEditor() != nil
+        finder?.endFind()
+        findBar.removeFromSuperview()
+        self.findBar = nil
+        if refocus, let view = finder?.findFocusView { window?.makeFirstResponder(view) }
     }
 
     // MARK: - Drag and drop
@@ -218,7 +286,12 @@ final class PaneContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { needsLayout = true }
+        if window != nil { needsLayout = true; return }
+        // Layout rebuilds take panes out for a moment: only a pane that
+        // stays out loses its find bar.
+        DispatchQueue.main.async { [weak self] in
+            if let self, self.window == nil { self.closeFind() }
+        }
     }
 
     /// Hands a borrowed browser back rather than taking it down with us.

@@ -20,6 +20,8 @@
 | ⇧⌘S · ⌃⌘N | Switch session · new session |
 | ⌥⌘K | Connect a machine |
 | ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |
+| ⌘F · ⌘G / ⇧⌘G · ⌘E | Find in the pane (terminal scrollback, page, file) · next / previous match · find the selection |
+| ⌘R | Reload the browser page, or the open file from disk |
 | ⌘V | Paste (an image pastes as a file the agent can attach) |
 | ⌘, | Settings |
 | Hold ⌘Q | Quit (a quick press only shows the hint, so a slip doesn't close bigtty) |

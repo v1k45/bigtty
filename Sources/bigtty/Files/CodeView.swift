@@ -36,8 +36,8 @@ final class CodeView: NSView {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
+        // ⌘F opens the pane's find bar (`finder`), the same in every pane.
+        textView.usesFindBar = false
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
@@ -89,9 +89,19 @@ final class CodeView: NSView {
         gutter.needsDisplay = true
     }
 
+    private var finderStorage: CodeFinder?
+    /// ⌘F in the file viewer.
+    var finder: CodeFinder {
+        if let finderStorage { return finderStorage }
+        let finder = CodeFinder(code: self)
+        finderStorage = finder
+        return finder
+    }
+
     func showMessage(_ text: String) {
         path = nil
         textView.string = ""
+        finderStorage?.textChanged()
         message.stringValue = text
         message.isHidden = false
         needsLayout = true
@@ -120,6 +130,7 @@ final class CodeView: NSView {
         applyColors()
         if reload { textView.scroll(visible) } else { textView.scroll(.zero) }
         gutter.needsDisplay = true
+        finderStorage?.textChanged()
     }
 
     func showAttributed(_ text: NSAttributedString, identity: String) {
@@ -131,6 +142,7 @@ final class CodeView: NSView {
         applyColors()
         if reload { textView.scroll(visible) } else { textView.scroll(.zero) }
         gutter.needsDisplay = true
+        finderStorage?.textChanged()
     }
 
     /// Scrolls so `line` (1-based) is near the top and flashes it.
@@ -146,6 +158,89 @@ final class CodeView: NSView {
         textView.scrollRangeToVisible(range)
         textView.showFindIndicator(for: range)
         textView.setSelectedRange(NSRange(location: range.location, length: 0))
+    }
+}
+
+/// Find in the shown file or diff: every match marked, the current one
+/// stronger and scrolled to. Case-insensitive.
+@MainActor
+final class CodeFinder: FindDriver {
+    private weak var code: CodeView?
+    var onFindStatus: ((FindStatus) -> Void)?
+    var findBarInset: CGFloat { FilesPaneView.toolbarHeight }
+    var findsUpward: Bool { false }
+    var findFocusView: NSView { code?.textView ?? NSView() }
+    private var query = ""
+    private(set) var ranges: [NSRange] = []
+    private(set) var index: Int?
+
+    private static let matchColor = NSColor.systemYellow.withAlphaComponent(0.35)
+    private static let currentColor = NSColor.systemOrange.withAlphaComponent(0.75)
+
+    init(code: CodeView) {
+        self.code = code
+    }
+
+    func find(_ query: String) {
+        self.query = query
+        search(from: visibleStart, reveal: true)
+    }
+
+    func findNext(backwards: Bool) {
+        guard !ranges.isEmpty else { return search(from: visibleStart, reveal: true) }
+        let count = ranges.count
+        index = index.map { (backwards ? $0 - 1 + count : $0 + 1) % count } ?? (backwards ? count - 1 : 0)
+        mark()
+        reveal()
+    }
+
+    func endFind() {
+        query = ""
+        search(from: 0, reveal: false)
+    }
+
+    /// New contents (a reload, another file): search them, staying near
+    /// where the current match was.
+    func textChanged() {
+        guard !query.isEmpty else { return }
+        search(from: index.map { ranges[$0].location } ?? visibleStart, reveal: false)
+    }
+
+    func selectionForFind(_ done: @escaping (String?) -> Void) {
+        guard let textView = code?.textView else { return done(nil) }
+        let range = textView.selectedRange()
+        done(range.length > 0 ? (textView.string as NSString).substring(with: range) : nil)
+    }
+
+    private var visibleStart: Int {
+        guard let textView = code?.textView, let layout = textView.layoutManager, let container = textView.textContainer else { return 0 }
+        let glyphs = layout.glyphRange(forBoundingRect: textView.visibleRect, in: container)
+        return layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil).location
+    }
+
+    private func search(from location: Int, reveal shouldReveal: Bool) {
+        guard let textView = code?.textView else { return }
+        ranges = TextSearch.ranges(of: query, in: textView.string as NSString)
+        index = TextSearch.index(after: location, in: ranges)
+        mark()
+        if shouldReveal { reveal() }
+        onFindStatus?(query.isEmpty ? .idle : .matches(current: index, total: ranges.count))
+    }
+
+    private func mark() {
+        guard let textView = code?.textView, let layout = textView.layoutManager else { return }
+        let all = NSRange(location: 0, length: (textView.string as NSString).length)
+        layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: all)
+        for (i, range) in ranges.enumerated() where NSMaxRange(range) <= all.length {
+            layout.addTemporaryAttribute(.backgroundColor, value: i == index ? Self.currentColor : Self.matchColor, forCharacterRange: range)
+        }
+        onFindStatus?(query.isEmpty ? .idle : .matches(current: index, total: ranges.count))
+    }
+
+    private func reveal() {
+        guard let textView = code?.textView, let index, ranges.indices.contains(index) else { return }
+        textView.scrollRangeToVisible(ranges[index])
+        textView.showFindIndicator(for: ranges[index])
     }
 }
 

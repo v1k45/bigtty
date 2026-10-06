@@ -36,6 +36,15 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     static let toolbarHeight: CGFloat = 28
 
+    private var finderStorage: BrowserFinder?
+    /// ⌘F in the page.
+    var finder: BrowserFinder {
+        if let finderStorage { return finderStorage }
+        let finder = BrowserFinder(browser: self)
+        finderStorage = finder
+        return finder
+    }
+
     /// One cookie/storage store for every browser pane, persisted on disk.
     private static let dataStore = WKWebsiteDataStore.default()
 
@@ -455,10 +464,19 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     @objc private func goBack() { webView.goBack() }
     @objc private func goForward() { webView.goForward() }
+    /// The ↻ in the address bar: stops a load in progress, else reloads.
     @objc private func reloadPage() {
         if webView.isLoading {
             webView.stopLoading()
-        } else if webView.url == nil || !errorPage.isHidden, let url = Self.normalize(address.stringValue) {
+        } else {
+            reloadAgain()
+        }
+    }
+
+    /// ⌘R: loads the page again, even mid-load. After a failed load, the
+    /// address that failed.
+    func reloadAgain() {
+        if webView.url == nil || !errorPage.isHidden, let url = Self.normalize(address.stringValue) {
             navigate(to: url)
         } else {
             webView.reload()
@@ -561,7 +579,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         lastNavigationError = nil
     }
 
-    func webView(_: WKWebView, didFinish _: WKNavigation!) { finishLoad() }
+    func webView(_: WKWebView, didFinish _: WKNavigation!) {
+        finishLoad()
+        finderStorage?.pageLoaded()
+    }
 
     func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         lastNavigationError = error.localizedDescription

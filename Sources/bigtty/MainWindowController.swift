@@ -2228,6 +2228,54 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         if let workspaceID { confirmCloseSpace(workspaceID, store: store, agentTitles: machine.spaceInfo?.agentTitles ?? [:]) }
     }
 
+    // MARK: - Find and reload (Edit ▸ Find, View ▸ Reload)
+
+    /// The pane to search: the focused one, else the one holding the
+    /// keyboard (its find bar's field included).
+    private var findPane: PaneContainerView? {
+        if let pane = focusedPaneID.flatMap({ paneViews[$0] }) { return pane }
+        var view = window?.firstResponder as? NSView
+        while let current = view {
+            if let pane = current as? PaneContainerView { return pane }
+            view = current.superview
+        }
+        return nil
+    }
+
+    @objc func showFind(_: Any?) { findPane?.showFind() }
+    @objc func findNext(_: Any?) { findPane?.findNext(backwards: false) }
+    @objc func findPrevious(_: Any?) { findPane?.findNext(backwards: true) }
+    @objc func useSelectionForFind(_: Any?) { findPane?.useSelectionForFind() }
+
+    /// ⌘R: the browser page, or the open file read again from disk (or
+    /// over SSH).
+    @objc func reloadPane(_: Any?) {
+        if let browser = findPane?.browser {
+            browser.reloadAgain()
+        } else if let files = findPane?.files {
+            files.reloadFromDisk()
+        }
+    }
+
+    /// Debug hook: opens the find bar of the pane in focus and searches.
+    @objc func debugFind(_ sender: Any?) {
+        guard let query = sender as? String, let pane = findPane else { return }
+        pane.showFind()
+        pane.findBar?.query = query
+        pane.findBar?.search()
+    }
+
+    /// Debug hook: a browser pane on a URL, beside the focused pane.
+    @objc func debugOpenBrowser(_ sender: Any?) {
+        if let url = sender as? String { openBrowserPane(url: url) }
+    }
+
+    /// Debug hook: a file in the tab's files pane, beside the focused pane.
+    @objc func debugOpenFile(_ sender: Any?) {
+        guard let path = sender as? String, let pane = focusedPaneID else { return }
+        showInFiles(path: path, root: (path as NSString).deletingLastPathComponent, line: nil, beside: pane)
+    }
+
     // MARK: - Text size (View ▸ Bigger / Smaller / Actual Size)
 
     /// The browser pane in focus zooms its page; anywhere else the
@@ -2843,8 +2891,16 @@ final class PlaceholderView: NSView {
 
 extension MainWindowController: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(PaneActions.togglePin(_:)) {
+        switch item.action {
+        case #selector(PaneActions.togglePin(_:)):
             item.title = focusedPaneIsPinned ? "Unpin Pane" : "Pin Pane"
+        case #selector(PaneActions.reloadPane(_:)):
+            return findPane?.browser != nil || findPane?.files != nil
+        case #selector(PaneActions.showFind(_:)), #selector(PaneActions.findNext(_:)),
+             #selector(PaneActions.findPrevious(_:)), #selector(PaneActions.useSelectionForFind(_:)):
+            return findPane?.finder != nil
+        default:
+            break
         }
         return true
     }
