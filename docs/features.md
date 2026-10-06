@@ -104,6 +104,18 @@ click the header to collapse it (the space cards still quote each question).
 **⇧⌘K** opens the whole list as a palette. ⌘⌫ there (or the × on a row)
 dismisses an item until its state changes, and ⌘Z brings it back.
 
+## Find and reload
+
+**⌘F** opens the same find bar in every pane: Return / ⌘G for the next
+match, ⇧Return / ⇧⌘G for the previous one, Esc to close, with a match count.
+In a terminal it searches herdr's whole scrollback, not just the screen
+(case-sensitive, like herdr's own search): it starts at the newest match,
+Return walks back through older output and scrolls there, and the matches on
+screen stay marked as output arrives. Browser and file panes search
+case-insensitively and mark every match. **⌘R** reloads a browser page, and
+in a files pane reads the open file again from disk (or over SSH); the files
+toolbar has a ↻ for the same.
+
 ## Browser panes
 
 A browser pane is a real herdr pane (tagged, running a small placeholder), so

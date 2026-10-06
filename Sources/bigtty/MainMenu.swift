@@ -49,6 +49,11 @@ import AppKit
     func movePaneToSpaceByNumber(_ sender: Any?)
     func movePaneTo(_ sender: Any?)
     func togglePin(_ sender: Any?)
+    func showFind(_ sender: Any?)
+    func findNext(_ sender: Any?)
+    func findPrevious(_ sender: Any?)
+    func useSelectionForFind(_ sender: Any?)
+    func reloadPane(_ sender: Any?)
 }
 
 @MainActor
@@ -106,16 +111,17 @@ enum MainMenu {
         let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
         findItem.submenu = find
         edit.addItem(findItem)
-        for (title, key, flags, action) in [
-            ("Find…", "f", NSEvent.ModifierFlags.command, NSTextFinder.Action.showFindInterface),
-            ("Find Next", "g", [.command], .nextMatch),
-            ("Find Previous", "g", [.command, .shift], .previousMatch),
-            ("Use Selection for Find", "e", [.command], .setSearchString),
-        ] {
-            item(find, title, #selector(NSResponder.performTextFinderAction(_:)), key, flags).tag = action.rawValue
-        }
+        // The focused pane's find bar: the terminal's scrollback, the page,
+        // or the open file.
+        item(find, "Find…", #selector(PaneActions.showFind(_:)), "f")
+        item(find, "Find Next", #selector(PaneActions.findNext(_:)), "g")
+        item(find, "Find Previous", #selector(PaneActions.findPrevious(_:)), "g", [.command, .shift])
+        item(find, "Use Selection for Find", #selector(PaneActions.useSelectionForFind(_:)), "e")
 
         let view = submenu(main, "View")
+        // The browser page, or the file viewer's file from disk.
+        item(view, "Reload", #selector(PaneActions.reloadPane(_:)), "r")
+        view.addItem(.separator())
         item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
         item(view, "Toggle File Viewer", #selector(PaneActions.toggleFileViewer(_:)), "e", [.command, .shift])
         view.addItem(.separator())

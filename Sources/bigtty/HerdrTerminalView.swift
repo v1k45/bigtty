@@ -373,7 +373,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// The app menu gets first pick at ⌘ shortcuts, so ⌘D splits through
     /// herdr instead of hitting Ghostty's own split keybind.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.type == .keyDown, let menu = NSApp.mainMenu, menu.performKeyEquivalent(with: event) {
+        // View ▸ Reload is for browser and files panes; in a terminal ⌘R
+        // stays the terminal's.
+        let reload = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && event.charactersIgnoringModifiers == "r"
+        if event.type == .keyDown, !reload, let menu = NSApp.mainMenu, menu.performKeyEquivalent(with: event) {
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -571,11 +575,10 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     func terminalDidResize(_ size: TerminalGridMetrics) { grid = size }
 
-    /// The cell under the pointer. Uses Ghostty's own cell size and its
+    /// The grid's shape in points: Ghostty's own cell size and its
     /// top-left padding; an estimate from the view size drifts by a row
     /// toward the bottom of a tall pane, where Claude Code's expanders are.
-    private func cellPosition(of event: NSEvent) -> (column: Int, row: Int)? {
-        let point = convert(event.locationInWindow, from: nil)
+    private func cellMetrics() -> (columns: Int, rows: Int, cellWidth: CGFloat, cellHeight: CGFloat, padX: CGFloat, padY: CGFloat)? {
         let scale = window?.backingScaleFactor ?? 2
         let columns: Int, rows: Int, cellWidth: CGFloat, cellHeight: CGFloat
         if let grid, grid.columns > 0, grid.rows > 0, grid.cellWidthPixels > 0, grid.cellHeightPixels > 0 {
@@ -596,9 +599,36 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         // partial-cell leftover goes right and bottom.
         let padX = min(2, max(0, bounds.width - CGFloat(columns) * cellWidth))
         let padY = min(2, max(0, bounds.height - CGFloat(rows) * cellHeight))
-        let column = Int((point.x - padX) / cellWidth)
-        let row = Int((bounds.height - point.y - padY) / cellHeight)
-        return (min(max(column, 0), columns - 1), min(max(row, 0), rows - 1))
+        return (columns, rows, cellWidth, cellHeight, padX, padY)
+    }
+
+    /// The cell under the pointer.
+    private func cellPosition(of event: NSEvent) -> (column: Int, row: Int)? {
+        guard let m = cellMetrics() else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        let column = Int((point.x - m.padX) / m.cellWidth)
+        let row = Int((bounds.height - point.y - m.padY) / m.cellHeight)
+        return (min(max(column, 0), m.columns - 1), min(max(row, 0), m.rows - 1))
+    }
+
+    // MARK: - Find
+
+    /// ⌘F: searches herdr's scrollback.
+    private(set) lazy var finder = TerminalFinder(view: self)
+
+    var herdrClient: HerdrClient { HerdrClient(endpoint: endpoint) }
+
+    /// What the screen shows, to notice scrolling and new output.
+    var screenText: String? { session.readViewportText() }
+
+    var gridColumns: Int? { cellMetrics()?.columns }
+
+    /// The area of `count` cells from a viewport cell, in this view.
+    func cellsRect(column: Int, row: Int, count: Int) -> NSRect? {
+        guard let m = cellMetrics(), row >= 0, row < m.rows else { return nil }
+        let x = m.padX + CGFloat(column) * m.cellWidth
+        let y = bounds.height - m.padY - CGFloat(row + 1) * m.cellHeight
+        return NSRect(x: x, y: y, width: CGFloat(count) * m.cellWidth, height: m.cellHeight)
     }
 
     /// Debug hook: ⌘-clicks the middle of `word`'s first appearance on

@@ -40,6 +40,43 @@ struct LiveServerTests {
         try await client.closeWorkspace(pane.workspaceID)
         #expect(received.text.contains("btty-marker-42"))
     }
+
+    @Test func searchesAndScrollsScrollback() async throws {
+        let pane = try await client.createWorkspace(cwd: "/tmp", label: "btty-find", focus: false)
+        // Keep a terminal attached so the pane has a size and a screen.
+        let channel = TerminalChannel(endpoint: client.endpoint, terminalID: pane.terminalID)
+        try channel.start(columns: 80, rows: 20)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        try await client.sendText(paneID: pane.paneID, text: "for i in $(seq 1 300); do echo row $i mark$((i%50)); done\n")
+        var found: ScrollbackMatches?
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            found = try await client.searchScrollback(paneID: pane.paneID, query: "mark0", from: .end, backward: true)
+            if found?.total == 6 { break }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        let newest = try #require(found?.currentMatch)
+        #expect(found?.total == 6)
+        #expect(found?.currentGlobal == 5)
+
+        // Next (older) from the newest, then back to it.
+        let older = try await client.searchScrollback(paneID: pane.paneID, query: "mark0", from: newest.start, backward: true)
+        #expect(older.currentGlobal == 4)
+        let again = try await client.searchScrollback(
+            paneID: pane.paneID, query: "mark0", from: ScrollbackMatches.cursor(before: newest.start), backward: false
+        )
+        #expect(again.currentMatch == newest)
+
+        let first = try await client.searchScrollback(paneID: pane.paneID, query: "mark0", from: .init(row: 0, col: 0), backward: false)
+        let scroll = try #require(try await client.scrollInfo(paneID: pane.paneID))
+        let match = try #require(first.currentMatch)
+        let offset = try #require(scroll.offset(revealing: match.start.row))
+        let moved = try #require(try await client.scroll(paneID: pane.paneID, offsetFromBottom: offset))
+        #expect(moved.viewportLine(of: match.start.row) != nil)
+
+        channel.close()
+        try await client.closeWorkspace(pane.workspaceID)
+    }
 }
 
 func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {

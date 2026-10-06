@@ -30,6 +30,24 @@ import Testing
         }
     }
 
+    /// ⌘F, ⌘G, ⇧⌘G, ⌘E go to the focused pane's find bar; ⌘R reloads.
+    @Test func findAndReloadShortcuts() {
+        let find = menu("Edit")?.items.first { $0.title == "Find" }?.submenu
+        func item(_ menu: NSMenu?, _ title: String) -> NSMenuItem? { menu?.items.first { $0.title == title } }
+        #expect(item(find, "Find…")?.action == #selector(PaneActions.showFind(_:)))
+        #expect(item(find, "Find…")?.keyEquivalent == "f")
+        #expect(item(find, "Find Next")?.action == #selector(PaneActions.findNext(_:)))
+        #expect(item(find, "Find Previous")?.keyEquivalentModifierMask == [.command, .shift])
+        #expect(item(find, "Use Selection for Find")?.action == #selector(PaneActions.useSelectionForFind(_:)))
+        let reload = item(menu("View"), "Reload")
+        #expect(reload?.action == #selector(PaneActions.reloadPane(_:)))
+        #expect(reload?.keyEquivalent == "r")
+        #expect(reload?.keyEquivalentModifierMask == [.command])
+        // ⌘R is taken once.
+        let all = main.items.compactMap(\.submenu).flatMap { [$0] + submenus(of: $0) }.flatMap(\.items)
+        #expect(all.filter { $0.keyEquivalent == "r" && $0.keyEquivalentModifierMask == [.command] }.count == 1)
+    }
+
     @Test func movePaneToOpensThePicker() {
         let item = menu("Pane")?.items.first { $0.title.hasPrefix("Move Pane To") }
         #expect(item?.submenu == nil)
