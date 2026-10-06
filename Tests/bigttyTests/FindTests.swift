@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 @testable import bigtty
 import HerdrKit
 import Testing
@@ -87,5 +88,62 @@ import Testing
         view.finder.endFind()
         #expect(status == .idle)
         #expect(view.finder.ranges.isEmpty)
+    }
+}
+
+@Suite struct BrowserFindIndexTests {
+    @Test func walksAndWraps() {
+        #expect(BrowserFinder.nextIndex(nil, total: 5, step: .stay) == 0)
+        #expect(BrowserFinder.nextIndex(nil, total: 5, step: .back) == 4)
+        #expect(BrowserFinder.nextIndex(3, total: 5, step: .forward) == 4)
+        #expect(BrowserFinder.nextIndex(4, total: 5, step: .forward) == 0)
+        #expect(BrowserFinder.nextIndex(0, total: 5, step: .back) == 4)
+        // A longer query with fewer matches keeps the place, clamped.
+        #expect(BrowserFinder.nextIndex(4, total: 2, step: .stay) == 1)
+        #expect(BrowserFinder.nextIndex(2, total: 0, step: .forward) == nil)
+    }
+
+    /// `_WKFindOptions` bits, as WebKit defines them.
+    @Test func optionBits() {
+        #expect(BrowserFinder.FindOptions.caseInsensitive.rawValue == 1)
+        #expect(BrowserFinder.FindOptions.backwards.rawValue == 8)
+        #expect(BrowserFinder.FindOptions.wrapAround.rawValue == 16)
+        #expect(BrowserFinder.FindOptions.showOverlay.rawValue == 32)
+        #expect(BrowserFinder.FindOptions.showFindIndicator.rawValue == 64)
+        #expect(BrowserFinder.FindOptions.noIndexChange.rawValue == 256)
+    }
+}
+
+/// WebKit's find SPI on this macOS: present, and counting case-insensitively.
+/// A failure here means WebKit changed and browser find has fallen back to
+/// the public API (no count, no highlight-all).
+@MainActor @Suite struct WebKitFindTests {
+    final class Loaded: NSObject, WKNavigationDelegate {
+        var done = false
+        func webView(_: WKWebView, didFinish _: WKNavigation!) { done = true }
+    }
+
+    @Test func countsMatchesNatively() async throws {
+        _ = NSApplication.shared
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(BrowserFinder.hasNativeFind(webView))
+        guard BrowserFinder.hasNativeFind(webView) else { return }
+        let loaded = Loaded()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString("<p>Fox fox</p><p>a fox</p><p>dog</p>", baseURL: nil)
+        for _ in 0..<100 where !loaded.done { try await Task.sleep(nanoseconds: 50_000_000) }
+        #expect(loaded.done)
+
+        let callbacks = FindCallbacks()
+        // Counted only with the overlay on (see BrowserFinder.answered).
+        func count(_ query: String) async throws -> Int? {
+            var answer: Int?
+            callbacks.attach(to: webView) { answer = $0 }
+            BrowserFinder.findString(webView, query, options: BrowserFinder.FindOptions([.caseInsensitive, .wrapAround, .showOverlay]).rawValue, maxCount: 100)
+            for _ in 0..<100 where answer == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+            return answer
+        }
+        #expect(try await count("fox") == 3)
+        #expect(try await count("cat") == 0)
     }
 }

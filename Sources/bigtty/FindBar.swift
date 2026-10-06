@@ -6,6 +6,8 @@ enum FindStatus: Equatable {
     /// `current` is 0-based, or nil when the matches are counted but none
     /// is selected yet.
     case matches(current: Int?, total: Int)
+    /// Found, but the pane can't count (a browser without WebKit's find SPI).
+    case uncounted
     case unavailable(String)
 
     var label: String {
@@ -14,6 +16,7 @@ enum FindStatus: Equatable {
         case let .matches(_, total) where total == 0: "No matches"
         case let .matches(current?, total): "\(current + 1) of \(total)"
         case let .matches(nil, total): total == 1 ? "1 match" : "\(total) matches"
+        case .uncounted: "Found"
         case let .unavailable(reason): reason
         }
     }
@@ -122,7 +125,10 @@ final class FindBar: NSView, NSSearchFieldDelegate {
         close.frame = NSRect(x: b.width - 26, y: buttonY, width: 22, height: 22)
         down.frame = NSRect(x: close.frame.minX - 24, y: buttonY, width: 22, height: 22)
         up.frame = NSRect(x: down.frame.minX - 22, y: buttonY, width: 22, height: 22)
-        let countWidth: CGFloat = count.stringValue.isEmpty ? 0 : min(110, count.intrinsicContentSize.width + 4)
+        // Narrow panes keep the field usable; the count steps aside.
+        var countWidth: CGFloat = count.stringValue.isEmpty ? 0 : min(110, count.intrinsicContentSize.width + 4)
+        if up.frame.minX - countWidth - 16 < 80 { countWidth = 0 }
+        count.isHidden = countWidth == 0
         count.frame = NSRect(x: up.frame.minX - countWidth - 4, y: (b.height - 15) / 2, width: countWidth, height: 15)
         let fieldX: CGFloat = 6
         field.frame = NSRect(x: fieldX, y: (b.height - 22) / 2, width: max(40, count.frame.minX - fieldX - 6), height: 22)

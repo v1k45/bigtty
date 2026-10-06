@@ -1,10 +1,15 @@
 import AppKit
 import WebKit
 
-/// ⌘F in a browser pane. The page is searched by a script in the app's own
-/// content world (out of the page's reach), which marks matches with the
-/// CSS Custom Highlight API, so the page's DOM isn't touched and the bar
-/// can say "3 of 12" like the other panes. Case-insensitive.
+/// ⌘F in a browser pane, with WebKit's own find, as Safari does: every
+/// match highlighted (the page dims around them), the current one bounced,
+/// and a match count. Nothing goes into the page, so it can't see what you
+/// search for.
+///
+/// The highlights and count are WebKit SPI (`_findString:options:maxCount:`
+/// with `_WKFindDelegate`), the same calls DuckDuckGo's macOS browser makes.
+/// Each is checked before use: without them, find falls back to the public
+/// `find(_:configuration:)`, which selects matches but can't count them.
 @MainActor
 final class BrowserFinder: FindDriver {
     private weak var browser: BrowserPaneView?
@@ -12,8 +17,17 @@ final class BrowserFinder: FindDriver {
     var findBarInset: CGFloat { BrowserPaneView.toolbarHeight }
     var findsUpward: Bool { false }
     var findFocusView: NSView { browser?.webView ?? NSView() }
+
     private var query = ""
+    /// A search has found matches: later ones continue from the current one.
+    private var active = false
+    /// 0-based; WebKit's own match index isn't reliable, so it's tracked here.
+    private var index: Int?
+    private let callbacks = FindCallbacks()
+    /// Answers to older requests are dropped.
     private var generation = 0
+
+    static let maxMatches = 1000
 
     init(browser: BrowserPaneView) {
         self.browser = browser
@@ -21,22 +35,30 @@ final class BrowserFinder: FindDriver {
 
     func find(_ query: String) {
         self.query = query
-        run("return bttyFind.find(query)", ["query": query])
+        guard !query.isEmpty else {
+            reset()
+            onFindStatus?(.idle)
+            return
+        }
+        // Typing more keeps the current match where it can.
+        search(active ? [.showOverlay, .noIndexChange] : [.showOverlay], step: .stay)
     }
 
     func findNext(backwards: Bool) {
         guard !query.isEmpty else { return }
-        run("return bttyFind.step(back, query)", ["back": backwards, "query": query])
+        search(backwards ? [.showOverlay, .backwards] : [.showOverlay], step: backwards ? .back : .forward)
     }
 
     func endFind() {
         query = ""
-        run("return bttyFind.clear()", [:], report: false)
+        reset()
     }
 
     /// A new page loaded under the open bar: search it too.
     func pageLoaded() {
-        if !query.isEmpty { find(query) }
+        guard !query.isEmpty else { return }
+        reset()
+        search([.showOverlay], step: .stay)
     }
 
     func selectionForFind(_ done: @escaping (String?) -> Void) {
@@ -46,115 +68,150 @@ final class BrowserFinder: FindDriver {
         }
     }
 
-    private func run(_ body: String, _ arguments: [String: Any], report: Bool = true) {
+    // MARK: - Searching
+
+    private func reset() {
+        generation += 1
+        active = false
+        index = nil
+        hideOverlay()
+    }
+
+    private func hideOverlay() {
+        if let webView = browser?.webView, webView.responds(to: Self.hideFindUI) {
+            webView.perform(Self.hideFindUI)
+        }
+    }
+
+    private func search(_ options: FindOptions, step: FindStep, retried: Bool = false) {
         guard let webView = browser?.webView else { return }
         generation += 1
         let generation = generation
-        webView.callAsyncJavaScript(Self.script + "\n" + body, arguments: arguments, in: nil, in: BrowserPaneView.automationWorld) { [weak self] result in
+        var options = options.union([.caseInsensitive, .wrapAround, .showFindIndicator])
+        // The first search of a run doesn't always draw the overlay; it's
+        // repeated once with it (see `answered`), as DuckDuckGo does.
+        // (WebKit SPI, so any of this may change: a `WebKitFindTests` canary
+        // checks it still counts.)
+        if !active { options.remove(.showOverlay) }
+
+        guard Self.hasNativeFind(webView) else {
+            return publicFind(webView, backwards: options.contains(.backwards), generation: generation)
+        }
+        if options.contains(.noIndexChange) {
+            // Find starts from the selection: collapsed to its start, the
+            // same match is found again.
+            webView.evaluateJavaScript("try { window.getSelection().collapseToStart() } catch (_) {}", in: nil, in: BrowserPaneView.automationWorld) { _ in }
+        }
+        callbacks.attach(to: webView) { [weak self] matches in
+            guard let self, generation == self.generation else { return }
+            self.answered(matches, step: step, retried: retried)
+        }
+        Self.findString(webView, query, options: options.rawValue, maxCount: UInt(Self.maxMatches))
+    }
+
+    private func answered(_ matches: Int, step: FindStep, retried: Bool) {
+        guard matches > 0 else {
+            reset()
+            onFindStatus?(.matches(current: nil, total: 0))
+            return
+        }
+        index = Self.nextIndex(index, total: matches, step: step)
+        if !active, !retried {
+            // WebKit counts (and highlights every match) only with the
+            // overlay: again, on the same match, with it.
+            active = true
+            hideOverlay()
+            search([.showOverlay, .noIndexChange], step: .stay, retried: true)
+            return
+        }
+        active = true
+        onFindStatus?(.matches(current: index, total: matches))
+    }
+
+    /// Without the SPI: the match is selected and scrolled to, uncounted.
+    private func publicFind(_ webView: WKWebView, backwards: Bool, generation: Int) {
+        let configuration = WKFindConfiguration()
+        configuration.backwards = backwards
+        configuration.caseSensitive = false
+        configuration.wraps = true
+        webView.find(query, configuration: configuration) { [weak self] result in
             MainActor.assumeIsolated {
-                guard let self, report, generation == self.generation else { return }
-                switch result {
-                case let .success(value):
-                    let info = value as? [String: Any]
-                    let total = (info?["total"] as? NSNumber)?.intValue ?? 0
-                    let current = (info?["current"] as? NSNumber)?.intValue
-                    self.onFindStatus?(self.query.isEmpty ? .idle : .matches(current: current, total: total))
-                case .failure:
-                    self.onFindStatus?(.unavailable("Can’t search this page"))
-                }
+                guard let self, generation == self.generation else { return }
+                self.onFindStatus?(result.matchFound ? .uncounted : .matches(current: nil, total: 0))
             }
         }
     }
 
-    /// Defines `bttyFind` once per page (in the app's world).
-    static let script = """
-    if (!window.bttyFind) window.bttyFind = (() => {
-      const LIMIT = 5000;
-      let ranges = [], index = -1, sheet = null;
-      const skip = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA', 'SELECT', 'OPTION']);
-      function style() {
-        if (sheet || !window.CSSStyleSheet) return;
-        try {
-          sheet = new CSSStyleSheet();
-          sheet.replaceSync('::highlight(btty-find){background-color:rgba(255,214,10,.45);color:inherit}' +
-            '::highlight(btty-find-current){background-color:#ff9f0a;color:#000}');
-          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-        } catch (_) {}
-      }
-      function visible(el, cache) {
-        if (cache.has(el)) return cache.get(el);
-        let v = true;
-        if (el.checkVisibility) v = el.checkVisibility({ visibilityProperty: true, opacityProperty: false });
-        else { const r = el.getClientRects(); v = r.length > 0; }
-        cache.set(el, v);
-        return v;
-      }
-      function paint() {
-        if (!window.CSS || !CSS.highlights) return;
-        CSS.highlights.delete('btty-find');
-        CSS.highlights.delete('btty-find-current');
-        if (!ranges.length) return;
-        style();
-        CSS.highlights.set('btty-find', new Highlight(...ranges.filter((_, i) => i !== index)));
-        if (index >= 0) CSS.highlights.set('btty-find-current', new Highlight(ranges[index]));
-      }
-      function reveal() {
-        const range = ranges[index];
-        if (!range) return;
-        const el = range.startContainer.parentElement;
-        let rect = range.getBoundingClientRect();
-        if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth) {
-          if (el) el.scrollIntoView({ block: 'center', inline: 'nearest' });
-          rect = range.getBoundingClientRect();
-          if (rect.top < 0 || rect.bottom > innerHeight) window.scrollBy(0, rect.top - innerHeight / 2);
+    // MARK: - Index
+
+    enum FindStep { case stay, forward, back }
+
+    /// The current match after a search found `total`: the first on a new
+    /// search, kept on a refinement (clamped), one along (wrapping) on
+    /// next / previous.
+    nonisolated static func nextIndex(_ current: Int?, total: Int, step: FindStep) -> Int? {
+        guard total > 0 else { return nil }
+        guard let current else { return step == .back ? total - 1 : 0 }
+        switch step {
+        case .stay: return min(current, total - 1)
+        case .forward: return current + 1 < total ? current + 1 : 0
+        case .back: return current > 0 ? current - 1 : total - 1
         }
-      }
-      function status() { return { total: ranges.length, current: index >= 0 ? index : null }; }
-      function collect(query) {
-        ranges = [];
-        const needle = query.toLowerCase();
-        if (!needle || !document.body) return;
-        const cache = new Map();
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-          acceptNode(node) {
-            const parent = node.parentElement;
-            if (!parent || skip.has(parent.tagName) || !node.data.trim()) return NodeFilter.FILTER_REJECT;
-            return visible(parent, cache) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-          }
-        });
-        for (let node = walker.nextNode(); node && ranges.length < LIMIT; node = walker.nextNode()) {
-          const text = node.data.toLowerCase();
-          if (text.length !== node.data.length) continue;
-          for (let at = text.indexOf(needle); at >= 0 && ranges.length < LIMIT; at = text.indexOf(needle, at + needle.length)) {
-            const range = document.createRange();
-            range.setStart(node, at);
-            range.setEnd(node, at + needle.length);
-            ranges.push(range);
-          }
-        }
-      }
-      return {
-        find(query) {
-          collect(query);
-          // The first match on screen or below it.
-          index = ranges.findIndex(r => r.getBoundingClientRect().bottom >= 0);
-          if (index < 0 && ranges.length) index = 0;
-          paint(); reveal();
-          return status();
-        },
-        step(back, query) {
-          // The page may have changed since: drop matches that went away,
-          // and look again if none are left.
-          ranges = ranges.filter(r => r.startContainer.isConnected);
-          if (!ranges.length) { collect(query); index = -1; }
-          if (!ranges.length) return status();
-          if (index < 0) index = back ? ranges.length - 1 : 0;
-          else index = back ? (index - 1 + ranges.length) % ranges.length : (index + 1) % ranges.length;
-          paint(); reveal();
-          return status();
-        },
-        clear() { ranges = []; index = -1; paint(); return status(); }
-      };
-    })();
-    """
+    }
+
+    // MARK: - WebKit SPI
+
+    /// `_WKFindOptions`.
+    struct FindOptions: OptionSet {
+        let rawValue: UInt
+        static let caseInsensitive = Self(rawValue: 1 << 0)
+        static let backwards = Self(rawValue: 1 << 3)
+        static let wrapAround = Self(rawValue: 1 << 4)
+        static let showOverlay = Self(rawValue: 1 << 5)
+        static let showFindIndicator = Self(rawValue: 1 << 6)
+        static let noIndexChange = Self(rawValue: 1 << 8)
+    }
+
+    static let findStringSelector = NSSelectorFromString("_findString:options:maxCount:")
+    static let hideFindUI = NSSelectorFromString("_hideFindUI")
+    static let setFindDelegate = NSSelectorFromString("_setFindDelegate:")
+
+    static func hasNativeFind(_ webView: WKWebView) -> Bool {
+        webView.responds(to: findStringSelector) && webView.responds(to: setFindDelegate)
+    }
+
+    static func findString(_ webView: WKWebView, _ string: String, options: UInt, maxCount: UInt) {
+        typealias Find = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
+        let find = unsafeBitCast(webView.method(for: findStringSelector), to: Find.self)
+        find(webView, findStringSelector, string as NSString, options, maxCount)
+    }
+}
+
+/// `_WKFindDelegate`: how many matches a find found. (The web view holds
+/// its find delegate weakly; the finder keeps this alive.)
+@MainActor
+final class FindCallbacks: NSObject {
+    private var completion: ((Int) -> Void)?
+
+    /// Becomes the web view's find delegate for the next answer.
+    func attach(to webView: WKWebView, completion: @escaping (Int) -> Void) {
+        self.completion = completion
+        webView.perform(BrowserFinder.setFindDelegate, with: self)
+    }
+
+    @objc(_webView:didFindMatches:forString:withMatchIndex:)
+    func webView(_: WKWebView, didFindMatches matches: UInt, forString _: String, withMatchIndex _: Int) {
+        finish(Int(matches))
+    }
+
+    @objc(_webView:didFailToFindString:)
+    func webView(_: WKWebView, didFailToFindString _: String) {
+        finish(0)
+    }
+
+    private func finish(_ matches: Int) {
+        let completion = completion
+        self.completion = nil
+        completion?(matches)
+    }
 }
