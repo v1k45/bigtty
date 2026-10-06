@@ -40,8 +40,9 @@ final class BrowserFinder: FindDriver {
     }
 
     func selectionForFind(_ done: @escaping (String?) -> Void) {
-        browser?.webView.evaluateJavaScript("String(window.getSelection() || '')") { value, _ in
-            MainActor.assumeIsolated { done((value as? String).flatMap { $0.isEmpty ? nil : $0 }) }
+        // In the app's world: the page can't swap getSelection out.
+        browser?.webView.evaluateJavaScript("String(window.getSelection() || '')", in: nil, in: BrowserPaneView.automationWorld) { result in
+            MainActor.assumeIsolated { done((try? result.get() as? String).flatMap { $0.isEmpty ? nil : $0 }) }
         }
     }
 
