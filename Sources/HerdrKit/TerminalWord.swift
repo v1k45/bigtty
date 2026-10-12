@@ -90,13 +90,9 @@ public enum TerminalWord {
     private static func ok(_ c: Character) -> Bool { c.unicodeScalars.allSatisfy { allowed.contains($0) } }
 
     /// Whether a fragment from the neighbouring row can be more of the
-    /// word: it has a letter or digit, and isn't a URL of its own. A colon
-    /// ending the row is the sentence's (`…/pull/123: native …`) unless a
-    /// path or port follows (`https:` `//…`, `host:` `8080/…`).
+    /// word: it has a letter or digit, and isn't a URL of its own.
     private static func continues(_ fragment: String, after word: String) -> Bool {
-        if let last = word.last, ",;!?".contains(last) { return false }
-        if word.last == ":", let first = fragment.first, first != "/", !first.isNumber { return false }
-        return fragment.contains { $0.isLetter || $0.isNumber }
+        fragment.contains { $0.isLetter || $0.isNumber }
             && scheme(of: fragment) == nil
             && !(word.contains("://") && fragment.contains("://"))
     }
