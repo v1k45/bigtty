@@ -346,11 +346,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let cell = commandClickCell
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            var url = url
-            if let cell, let whole = self.word(atColumn: cell.column, row: cell.row),
-               whole.count > url.count, whole.contains(url.trimmingCharacters(in: CharacterSet(charactersIn: ".:,)"))) {
-                url = whole
-            }
+            let whole = cell.flatMap { self.word(atColumn: $0.column, row: $0.row) }
+            let url = TerminalWord.link(ghostty: url, whole: whole)
             if let onOpenURL = self.onOpenURL {
                 onOpenURL(url)
             } else if let link = URL(string: url), link.scheme != nil {
@@ -465,55 +462,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Where the ⌘-click that may open a link landed, while it's handled.
     private var commandClickCell: (column: Int, row: Int)?
 
-    /// The path-like word at a cell of the viewport, if it looks like a
-    /// file name (has a dot or a slash). A path the app wrapped onto more
-    /// rows (Claude Code breaks long lines a little short of the edge and
-    /// indents the rest) is read whole, from whichever row was clicked.
+    /// The path-like word at a cell of the viewport, read whole if it
+    /// wraps onto more rows; see `TerminalWord`.
     private func word(atColumn column: Int, row: Int) -> String? {
         guard let text = session.readViewportText() else { return nil }
-        let lines = text.components(separatedBy: "\n").map { Array($0) }
-        guard row < lines.count, column < lines[row].count else { return nil }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-/~+@:#"))
-        func ok(_ c: Character) -> Bool { c.unicodeScalars.allSatisfy { allowed.contains($0) } }
-        let chars = lines[row]
-        guard ok(chars[column]) else { return nil }
-        var start = column, end = column
-        while start > 0, ok(chars[start - 1]) { start -= 1 }
-        while end + 1 < chars.count, ok(chars[end + 1]) { end += 1 }
-        var word = String(chars[start...end])
-
-        // A row wrapped if its text runs to within a few columns of the edge.
-        let width = max(Int(grid?.columns ?? 0), lines.map(\.count).max() ?? 0)
-        let nearEdge = max(0, width - 12)
-        func lastText(_ line: [Character]) -> Int? { line.lastIndex { !$0.isWhitespace } }
-        func firstText(_ line: [Character]) -> Int? { line.firstIndex { !$0.isWhitespace } }
-        // Onward: the word ends its row, the row reaches the edge, and the
-        // next row (after its indent) starts with more of it.
-        var r = row, e = end
-        while r + 1 < lines.count, lastText(lines[r]) == e, e >= nearEdge,
-              let first = firstText(lines[r + 1]), ok(lines[r + 1][first]) {
-            let next = lines[r + 1]
-            var ne = first
-            while ne + 1 < next.count, ok(next[ne + 1]) { ne += 1 }
-            word += String(next[first...ne])
-            r += 1
-            e = ne
-        }
-        // Back: the word starts its row, and the row above ends at the edge
-        // in the middle of it.
-        r = row
-        var s = start
-        while r > 0, firstText(lines[r]) == s, let last = lastText(lines[r - 1]), last >= nearEdge, ok(lines[r - 1][last]) {
-            let previous = lines[r - 1]
-            var ps = last
-            while ps > 0, ok(previous[ps - 1]) { ps -= 1 }
-            word = String(previous[ps...last]) + word
-            r -= 1
-            s = ps
-        }
-        word = word.trimmingCharacters(in: CharacterSet(charactersIn: ".:,"))
-        guard word.count > 1, word.contains(".") || word.contains("/") else { return nil }
-        return word
+        return TerminalWord.at(column: column, row: row, lines: text.components(separatedBy: "\n"), width: Int(grid?.columns ?? 0))
     }
 
     /// Pointer motion, once per cell, for apps that track it (hover
