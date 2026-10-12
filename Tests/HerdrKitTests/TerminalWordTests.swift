@@ -102,4 +102,73 @@ struct TerminalWordTests {
         #expect(TerminalWord.trimmed("https://en.wikipedia.org/wiki/Foo_(bar)).") == "https://en.wikipedia.org/wiki/Foo_(bar)")
         #expect(TerminalWord.trimmed("https://example.com/a?b=1&c=2") == "https://example.com/a?b=1&c=2")
     }
+
+    /// A URL followed by a colon and prose, the prose running on past the
+    /// edge.
+    static let pull = "https://github.com/org/repo/pull/123"
+    static let described = "  - \(pull): native club soccer (EPL, La Liga, Serie A, Bundesliga, Ligue 1, UCL, MLS + every bound competition)"
+
+    /// `text` laid out in rows of `width`, with where each of its
+    /// characters landed. Soft-wrapped like a terminal, or word-wrapped like
+    /// an app: breaking at spaces, indenting the rows after the first, and
+    /// breaking a word longer than a row where the row ends.
+    static func layout(_ text: String, width: Int, wordWrap: Bool, indent: Int = 4) -> (lines: [String], cells: [(column: Int, row: Int)?]) {
+        var lines = [""]
+        var cells: [(column: Int, row: Int)?] = []
+        func newRow() { lines.append(wordWrap ? String(repeating: " ", count: indent) : "") }
+        func put(_ c: Character) {
+            if lines[lines.count - 1].count >= width { newRow() }
+            cells.append((lines[lines.count - 1].count, lines.count - 1))
+            lines[lines.count - 1].append(c)
+        }
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            if wordWrap, chars[i] == " ", i > 0, chars[i - 1] != " " {
+                // A space between words: break here if the next word won't fit.
+                var j = i + 1
+                while j < chars.count, chars[j] != " " { j += 1 }
+                let wordLength = j - i - 1
+                if lines[lines.count - 1].count + 1 + wordLength > width, wordLength <= width - indent {
+                    cells.append(nil)
+                    newRow()
+                    i += 1
+                    continue
+                }
+            }
+            put(chars[i])
+            i += 1
+        }
+        return (lines, cells)
+    }
+
+    @Test(arguments: 12 ... 120)
+    func aURLBeforeAColonAndWrappedProseOpensExactlyItself(width: Int) throws {
+        let start = try #require(Self.described.range(of: Self.pull)).lowerBound.utf16Offset(in: Self.described)
+        for wordWrap in [false, true] {
+            let (lines, cells) = Self.layout(Self.described, width: width, wordWrap: wordWrap)
+            // The URL and the colon after it.
+            for i in start ... start + Self.pull.count {
+                let cell = try #require(cells[i])
+                let word = TerminalWord.at(column: cell.column, row: cell.row, lines: lines, width: width)
+                #expect(word == Self.pull, "width \(width), word-wrapped: \(wordWrap), clicked \(i - start): \(lines)")
+            }
+        }
+    }
+
+    @Test func aWrapRightAfterTheColonDoesNotJoinTheProse() {
+        let lines = [
+            "  - https://github.com/org/repo/pull/123:",
+            "    native club soccer (EPL, La",
+            "    Liga, Serie A, Bundesliga, Ligue 1, UCL, MLS + every bound competition)",
+        ]
+        #expect(TerminalWord.at(column: 10, row: 0, lines: lines, width: 41) == Self.pull)
+        #expect(TerminalWord.link(ghostty: Self.pull + ":", whole: TerminalWord.at(column: 10, row: 0, lines: lines, width: 41)) == Self.pull)
+        let laid = [
+            "  - https://github.com/org/repo/pull/123: native club soccer (EPL, La",
+            "    Liga, Serie A, Bundesliga, Ligue 1, UCL, MLS + every bound competition)",
+        ]
+        #expect(TerminalWord.at(column: 10, row: 0, lines: laid, width: 80) == Self.pull)
+        #expect(TerminalWord.link(ghostty: Self.pull + ":", whole: Self.pull) == Self.pull)
+    }
 }
