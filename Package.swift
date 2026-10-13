@@ -19,6 +19,7 @@ let package = Package(
             dependencies: [
                 "HerdrKit",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "GhosttyKit", package: "libghostty-spm"),
             ],
             // Ghostty's theme collection (iTerm2-Color-Schemes, MIT), for
             // `theme = <name>` in the user's Ghostty config.
