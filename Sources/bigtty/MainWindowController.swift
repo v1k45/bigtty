@@ -1546,6 +1546,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         paneViews[id]?.terminal?.debugScroll(lines: lines)
     }
 
+    /// Debug hook: drag-selects a word in the focused terminal.
+    @objc func debugSelect(_ sender: Any?) {
+        guard let word = sender as? String, let id = focusedPaneID else { return }
+        paneViews[id]?.terminal?.debugSelect(word)
+    }
+
     /// Debug hook: behaves like ⌘-clicking a link in the focused terminal.
     /// Debug hook: pastes the image file at a path as if it were on the
     /// clipboard, through a private pasteboard.
