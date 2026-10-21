@@ -42,6 +42,18 @@ import Testing
         #expect(ranked.map(\.kind) == [.blocked, .waiting, .finished])
     }
 
+    @Test func messagesRankBetweenQuestionsAndWaitingAndDateFromTheMessage() {
+        var attention = Attention()
+        let start = [pane("ask", .idle), pane("note", .working), pane("seen", .idle)]
+        _ = attention.update(panes: start, viewed: [], now: t0)
+        _ = attention.notify("note", note: .init(title: nil, body: "hi", at: t0 + 20), viewed: [])
+        let later = [pane("ask", .blocked), pane("note", .working), pane("seen", .blocked)]
+        _ = attention.update(panes: later, viewed: ["seen"], now: t0 + 10)
+        let ranked = items(attention, later)
+        #expect(ranked.map(\.kind) == [.blocked, .notified, .waiting])
+        #expect(ranked[1].since == t0 + 20)
+    }
+
     @Test func idleAndWorkingAgentsAreLeftOut() {
         var attention = Attention()
         let panes = [pane("a", .idle), pane("b", .working), pane("c", .done)]

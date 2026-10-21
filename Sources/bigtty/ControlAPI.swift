@@ -13,6 +13,8 @@ final class ControlAPI {
     private let store: SessionStore
     /// The focused herdr pane of the key window, for `open` outside herdr.
     var focusedPane: () -> String? = { nil }
+    /// Needs You and notifications for the store's panes, for `notify.post`.
+    var attention: AttentionCenter?
 
     init(store: SessionStore) {
         self.store = store
@@ -28,6 +30,8 @@ final class ControlAPI {
             return try await open(params)
         case "files.open", "files.diff":
             return try openFiles(params, changes: method == "files.diff")
+        case "notify.post":
+            return try await postNotification(params)
         default:
             break
         }
@@ -273,6 +277,26 @@ final class ControlAPI {
         let state = HostPaneState(kind: changes ? .diff : .files, path: root, selection: selection, mode: mode.rawValue, line: line)
         let id = HostPaneStore.open(state, beside: beside, direction: .right, store: store)
         return ["id": .string(id), "root": .string(root)]
+    }
+
+    // MARK: - Notify
+
+    /// A message for the user from a pane's program: on Needs You, and a
+    /// macOS notification unless the pane is on screen.
+    private func postNotification(_ params: JSONValue) async throws -> JSONValue {
+        let body = params["body"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !body.isEmpty else { throw Failure(code: "invalid_params", message: "a message is required") }
+        guard let wanted = params["pane"]?.stringValue ?? params["caller_pane"]?.stringValue else {
+            throw Failure(code: "no_pane", message: "run inside a herdr pane, or pass --pane <id>")
+        }
+        guard let pane = store.pane(wanted), let attention else {
+            throw Failure(code: "not_found", message: "no pane \(wanted) in this herdr session")
+        }
+        let title = params["title"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Keep it to what a notification shows.
+        let (result, banners) = await attention.post(pane.paneID, title: title.map { String($0.prefix(200)) },
+                                                     body: String(body.prefix(1000)))
+        return ["pane": .string(pane.paneID), "result": .string(result.rawValue), "banners": .bool(banners)]
     }
 
     // MARK: - Helpers

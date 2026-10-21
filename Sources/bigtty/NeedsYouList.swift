@@ -27,6 +27,7 @@ struct NeedsYouEntry {
         switch kind {
         case .login: "lock"
         case .blocked: "exclamationmark.bubble"
+        case .notified: "bell"
         case .waiting: "hourglass"
         case .unreachable: "bolt.horizontal.circle"
         case .finished: "checkmark.circle"
@@ -34,7 +35,7 @@ struct NeedsYouEntry {
     }
 
     /// Calls for you now (accent-colored), rather than just being on the list.
-    var urgent: Bool { kind == .login || kind == .blocked }
+    var urgent: Bool { kind == .login || kind == .blocked || kind == .notified }
 
     /// Hosts' connection problems dismissed until the error changes or the
     /// host reconnects, by SSH target.
@@ -67,10 +68,12 @@ struct NeedsYouEntry {
                     MainWindowController.spaceName($0, store: store, agentTitles: info?.agentTitles ?? [:])
                 } ?? pane.workspaceID
                 let agent = pane.displayAgent ?? pane.agent ?? "agent"
+                let note = attention.attention.notes[paneID]
                 let line = switch item.kind {
                 case .blocked: info?.question(for: paneID).map { "\(agent): \($0)" } ?? "\(agent) needs you"
                 // Seen but unanswered: the question is why you came back.
                 case .waiting: info?.question(for: paneID).map { "\(agent): \($0)" } ?? "\(agent) · waiting for you"
+                case .notified: "\(pane.displayAgent ?? pane.agent ?? note?.title ?? "message"): \(note?.body ?? "")"
                 case .finished: "\(agent) finished"
                 case .login, .unreachable: ""
                 }

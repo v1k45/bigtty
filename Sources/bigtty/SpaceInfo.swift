@@ -98,6 +98,10 @@ final class SpaceInfoCenter {
                 item.line = question.map { "\(name(blocked)): \($0)" } ?? "\(name(blocked)) needs you"
                 item.lineIsAlert = true
                 if question == nil { fetchQuestion(blocked) }
+            } else if let noted = panes.first(where: { attention.reason(for: $0.paneID) == .notified }),
+                      let note = attention.attention.notes[noted.paneID] {
+                item.line = "\(noted.displayAgent ?? noted.agent ?? note.title ?? "message"): \(note.body)"
+                item.lineIsAlert = true
             } else if let done = agents.first(where: { attention.reason(for: $0.paneID) == .done }) {
                 item.line = "\(name(done)) finished"
             } else if let waiting = agents.first(where: { $0.agentStatus == .blocked }) {

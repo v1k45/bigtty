@@ -76,4 +76,69 @@ import Testing
         #expect(attention.queue(in: snapshot).map(\.paneID) == ["b", "a", "c"])
         #expect(attention.count(inTab: "w1:t1", panes: later) == 2)
     }
+
+    // MARK: - Messages (btty notify)
+
+    let note = Attention.Note(title: "Build", body: "tests passed")
+
+    @Test func aMessageWaitsUntilThePaneIsViewed() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .working)], viewed: [])
+        #expect(attention.notify("p1", note: note, viewed: []) == .init(paneID: "p1", reason: .notified))
+        #expect(attention.reason(for: "p1") == .notified)
+        #expect(attention.notes["p1"]?.body == "tests passed")
+        // Agent state changes don't clear it; looking at the pane does.
+        _ = attention.update(panes: [pane("p1", .idle)], viewed: [])
+        #expect(attention.reason(for: "p1") == .notified)
+        attention.markViewed(["p1"])
+        #expect(attention.reason(for: "p1") == nil)
+        #expect(attention.notes.isEmpty)
+    }
+
+    @Test func aMessageForAPaneOnScreenIsDropped() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .working)], viewed: [])
+        #expect(attention.notify("p1", note: note, viewed: ["p1"]) == nil)
+        #expect(attention.reason(for: "p1") == nil)
+        #expect(attention.needingAttention.isEmpty)
+    }
+
+    @Test func blockedOutranksAMessageAndAMessageOutranksAFinish() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .working), pane("p2", .working)], viewed: [])
+        _ = attention.notify("p1", note: note, viewed: [])
+        _ = attention.notify("p2", note: note, viewed: [])
+        _ = attention.update(panes: [pane("p1", .blocked), pane("p2", .done)], viewed: [])
+        #expect(attention.reason(for: "p1") == .blocked)
+        #expect(attention.reason(for: "p2") == .notified)
+        let snapshot = Snapshot(
+            version: "", protocol: 0, focusedWorkspaceID: nil, focusedTabID: nil, focusedPaneID: nil,
+            workspaces: [], tabs: [], panes: [pane("p2", .done), pane("p1", .blocked)]
+        )
+        #expect(attention.queue(in: snapshot).map(\.paneID) == ["p1", "p2"])
+    }
+
+    @Test func dismissingAMessageCanBeUndoneAndANewOneBringsItBack() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .working)], viewed: [])
+        _ = attention.notify("p1", note: note, viewed: [])
+        attention.dismiss("p1")
+        #expect(attention.reason(for: "p1") == nil)
+        #expect(attention.notes.isEmpty)
+        attention.undismiss("p1")
+        #expect(attention.reason(for: "p1") == .notified)
+        attention.dismiss("p1")
+        _ = attention.notify("p1", note: .init(title: nil, body: "again"), viewed: [])
+        #expect(attention.reason(for: "p1") == .notified)
+        #expect(attention.notes["p1"]?.body == "again")
+    }
+
+    @Test func aClosedPaneTakesItsMessageWithIt() {
+        var attention = Attention()
+        _ = attention.update(panes: [pane("p1", .working)], viewed: [])
+        _ = attention.notify("p1", note: note, viewed: [])
+        _ = attention.update(panes: [], viewed: [])
+        #expect(attention.notes.isEmpty)
+        #expect(attention.needingAttention.isEmpty)
+    }
 }
