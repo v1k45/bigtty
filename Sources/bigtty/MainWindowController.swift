@@ -1123,6 +1123,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 guard let self, let terminal, let id = self.paneID(showing: terminal) else { return }
                 self.openURL(url, from: id)
             }
+            // From the view in control only: a pane shown in two windows rings once.
+            terminal.onBell = { [weak self, weak terminal] in
+                guard let self, let terminal, terminal.mode == .control, let id = self.paneID(showing: terminal) else { return }
+                self.attention.bell(id)
+            }
+            terminal.onDesktopNotification = { [weak self, weak terminal] title, body in
+                guard let self, let terminal, terminal.mode == .control, let id = self.paneID(showing: terminal) else { return }
+                // OSC 9 has only a body; OSC 777 has both.
+                let message = body.isEmpty ? title : body
+                guard !message.isEmpty else { return }
+                let attention = self.attention
+                Task { _ = await attention.post(id, title: body.isEmpty ? nil : title, body: message) }
+            }
             content = terminal
         }
         let view = PaneContainerView(paneID: id, content: content)

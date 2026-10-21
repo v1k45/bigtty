@@ -213,7 +213,12 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 symbol = agent == nil ? "terminal" : "sparkle"
             }
             let reason = attention.reason(for: pane.paneID)
-            let status = reason == .blocked ? "needs you" : reason == .done ? "finished" : (agent != nil ? pane.agentStatus.rawValue : "")
+            let status = switch reason {
+            case .blocked: "needs you"
+            case .notified: "message"
+            case .done: "finished"
+            case nil: agent != nil ? pane.agentStatus.rawValue : ""
+            }
             items.append(Item(
                 section: agent != nil ? "Agents" : "Panes", title: title,
                 detail: [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · "),

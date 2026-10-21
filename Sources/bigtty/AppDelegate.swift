@@ -170,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if let api = controlAPIs[machine.id] { return api }
         guard let store = machine.store else { return nil }
         let api = ControlAPI(store: store)
+        api.attention = machine.attention
         api.focusedPane = { [weak self, weak machine] in
             let key = self?.windows.first { $0.window?.isKeyWindow == true && $0.machine === machine }
                 ?? self?.windows.first { $0.machine === machine }
@@ -768,6 +769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch kind {
         case .login: "Logins"
         case .blocked: "Needs You"
+        case .notified: "Messages"
         case .waiting: "Waiting on You"
         case .unreachable: "Can’t Reach"
         case .finished: "Finished"

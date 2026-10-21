@@ -6,7 +6,9 @@ import HerdrKit
 /// its own: herdr's frames are written into it, and its input goes back to
 /// herdr through a `TerminalChannel`.
 @MainActor
-final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, TerminalSurfaceTitleDelegate, TerminalSurfaceGridResizeDelegate {
+final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, TerminalSurfaceTitleDelegate, TerminalSurfaceGridResizeDelegate,
+    TerminalSurfaceBellDelegate, TerminalSurfaceDesktopNotificationDelegate
+{
     typealias Mode = TerminalChannel.Mode
 
     let paneID: String
@@ -31,6 +33,10 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     var onModeChange: ((Mode) -> Void)?
     /// A link in the terminal was opened (⌘-click).
     var onOpenURL: ((String) -> Void)?
+    /// The pane's program rang the bell, or asked for a desktop notification
+    /// (OSC 9, OSC 777): only if herdr passes them on in its frames.
+    var onBell: (() -> Void)?
+    var onDesktopNotification: ((_ title: String, _ body: String) -> Void)?
 
     init(pane: Pane, endpoint: HerdrEndpoint, controller: TerminalController) {
         paneID = pane.paneID
@@ -361,6 +367,12 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     /// herdr owns titles; the surface's own title changes are ignored.
     func terminalDidChangeTitle(_: String) {}
+
+    func terminalDidRingBell() { onBell?() }
+
+    func terminalDidRequestDesktopNotification(title: String, body: String) {
+        onDesktopNotification?(title, body)
+    }
 
     // MARK: - Input routing
 

@@ -8,6 +8,11 @@ usage:
   btty open <path>[:line]                show a file or folder in a files pane beside you
   btty diff [path]                       show the repository's changes (git diff vs HEAD)
   btty browser <command> [args] [--browser <id|pane>] [--json]
+  btty notify [--title T] [--pane <id>] <message>
+                                         ask for the user: Needs You, and a macOS notification
+                                         unless the pane is on screen ("-" reads stdin)
+  btty hooks <install|uninstall|status> claude
+                                         send Claude Code's notifications to bigtty
   btty pane-host <kind> <id> [title]     placeholder process for a bigtty pane
   btty version
 
@@ -72,7 +77,7 @@ struct Arguments {
     var flags: [String: String] = [:]
     var switches: Set<String> = []
 
-    static let valued: Set<String> = ["browser", "selector", "text", "url", "fn", "timeout", "target", "max-lines"]
+    static let valued: Set<String> = ["browser", "selector", "text", "url", "fn", "timeout", "target", "max-lines", "title", "pane", "settings"]
 
     init(_ args: [String]) {
         var i = 0
@@ -291,6 +296,117 @@ func files(command: String, _ args: [String]) {
     }
 }
 
+// MARK: - notify
+
+/// The caller's herdr session, for bigtty to pick its store.
+func callerParams() -> [String: JSONValue] {
+    let env = ProcessInfo.processInfo.environment
+    var params: [String: JSONValue] = [:]
+    if let pane = env["HERDR_PANE_ID"] { params["caller_pane"] = .string(pane) }
+    if let socket = env["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
+    return params
+}
+
+func notify(_ args: [String]) {
+    let parsed = Arguments(args)
+    if parsed.switches.contains("claude-hook") { claudeHook() }
+    if parsed.switches.contains("help") {
+        print("usage: btty notify [--title T] [--pane <id>] <message>   (\"-\" reads the message from stdin)")
+        exit(0)
+    }
+    var message = parsed.rest(from: 0)
+    if message == "-" { message = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self) }
+    guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        fail("usage: btty notify [--title T] [--pane <id>] <message>", code: 64)
+    }
+    var params = callerParams()
+    params["body"] = .string(message)
+    if let title = parsed.flags["title"] { params["title"] = .string(title) }
+    if let pane = parsed.flags["pane"] { params["pane"] = .string(pane) }
+    do {
+        let result = try ControlClient(timeout: 10).call("notify.post", params)
+        if parsed.switches.contains("json") {
+            print(result.jsonString)
+        } else if result["banners"]?.boolValue == false {
+            FileHandle.standardError.write(Data(
+                "btty: bigtty can't show macOS notifications (System Settings ▸ Notifications ▸ bigtty); it's on Needs You\n".utf8
+            ))
+        }
+    } catch HerdrError.connect {
+        fail("bigtty is not running (no socket at \(BigttyControl.socketPath))", code: 3)
+    } catch let HerdrError.server(code, message) {
+        fail("\(message) [\(code)]")
+    } catch {
+        fail("\(error)")
+    }
+}
+
+/// Claude Code's Notification hook: the event as JSON on stdin. It never
+/// fails Claude's turn: outside herdr, or with bigtty not running, it
+/// quietly does nothing.
+func claudeHook() -> Never {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    var params = callerParams()
+    guard params["caller_pane"] != nil,
+          let event = try? JSONDecoder().decode(JSONValue.self, from: input),
+          let message = event["message"]?.stringValue, !message.isEmpty
+    else { exit(0) }
+    params["body"] = .string(message)
+    params["title"] = .string(event["title"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? "Claude")
+    _ = try? ControlClient(timeout: 5).call("notify.post", params)
+    exit(0)
+}
+
+// MARK: - hooks
+
+func hooks(_ args: [String]) {
+    let parsed = Arguments(args)
+    let usage = "usage: btty hooks <install|uninstall|status> claude [--settings <path>]"
+    if parsed.switches.contains("help") {
+        print(usage)
+        exit(0)
+    }
+    guard parsed.positional.count == 2 else { fail(usage, code: 64) }
+    guard parsed.positional[1] == "claude" else { fail("only Claude Code hooks exist so far; \(usage)", code: 64) }
+    let url = parsed.flags["settings"].map { URL(fileURLWithPath: $0) } ?? ClaudeHooks.settingsURL()
+    // This btty, wherever it lives (bigtty.app/Contents/MacOS/btty, a dev build).
+    let btty = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath().path
+    let command = ClaudeHooks.command(btty: btty)
+    do {
+        switch parsed.positional[0] {
+        case "install":
+            switch try ClaudeHooks.update(url, { ClaudeHooks.install($0, command: command) }) {
+            case .unchanged: print("already installed in \(url.path)")
+            case let .written(backup):
+                print("installed in \(url.path)" + (backup.map { " (previous version: \($0.path))" } ?? ""))
+                print("Claude Code sessions started from now on send their notifications to bigtty.")
+            }
+        case "uninstall":
+            switch try ClaudeHooks.update(url, ClaudeHooks.uninstall) {
+            case .unchanged: print("not installed in \(url.path)")
+            case let .written(backup):
+                print("removed from \(url.path)" + (backup.map { " (previous version: \($0.path))" } ?? ""))
+            }
+        case "status":
+            var found: [String] = []
+            _ = try ClaudeHooks.update(url) { settings in
+                found = ClaudeHooks.installed(in: settings)
+                return (settings, false)
+            }
+            if found.isEmpty {
+                print("not installed in \(url.path); `btty hooks install claude` adds it")
+            } else {
+                print("installed in \(url.path)")
+                for command in found { print("  \(command)") }
+            }
+        default:
+            fail(usage, code: 64)
+        }
+    } catch {
+        fail("\(error)")
+    }
+}
+
 /// `nil` when no command was given at all.
 func command(_ args: [String]) -> String? { Arguments(args).positional.first }
 
@@ -322,6 +438,10 @@ case "browser":
     browser(Array(args.dropFirst()))
 case "open", "diff":
     files(command: args[0], Array(args.dropFirst()))
+case "notify":
+    notify(Array(args.dropFirst()))
+case "hooks":
+    hooks(Array(args.dropFirst()))
 case "help", "--help", "-h", nil:
     print(usageText)
 default:

@@ -78,6 +78,34 @@ final class AttentionCenter: NSObject {
         publish()
     }
 
+    /// What became of a message posted for a pane (`btty notify`).
+    enum PostResult: String {
+        /// In Needs You, with a macOS notification.
+        case notified
+        /// In Needs You; macOS notifications are off for the app (or Settings ▸ Notify).
+        case listed
+        /// The pane is on screen, so the user already sees it.
+        case viewed
+    }
+
+    /// A pane's program asks for the user: Needs You and a notification,
+    /// unless the pane is on screen. `banners` says whether macOS lets the
+    /// app show notifications at all.
+    func post(_ paneID: String, title: String?, body: String) async -> (PostResult, banners: Bool) {
+        let banners = await refreshAuthorization()
+        let note = Attention.Note(title: title, body: body)
+        guard let transition = attention.notify(paneID, note: note, viewed: currentlyViewed) else { return (.viewed, banners) }
+        notify(transition)
+        publish()
+        return (banners && Settings.notify != .never ? .notified : .listed, banners)
+    }
+
+    /// The terminal bell rang in a pane: on Needs You if you aren't looking, no banner.
+    func bell(_ paneID: String) {
+        guard attention.notify(paneID, note: .init(title: nil, body: "rang the bell"), viewed: currentlyViewed) != nil else { return }
+        publish()
+    }
+
     func count(inTab tabID: String) -> Int { attention.count(inTab: tabID, panes: store.snapshot.panes) }
 
     func count(inWorkspace id: String) -> Int { attention.count(inWorkspace: id, panes: store.snapshot.panes) }
@@ -105,6 +133,15 @@ final class AttentionCenter: NSObject {
         }
     }
 
+    /// Whether macOS lets the app post notifications now: the user may have
+    /// turned them on or off in System Settings since launch.
+    private func refreshAuthorization() async -> Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return false }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        notificationsAvailable = status == .authorized || status == .provisional
+        return notificationsAvailable
+    }
+
     private func notify(_ transition: Attention.Transition) {
         guard let pane = store.pane(transition.paneID) else { return }
         switch Settings.notify {
@@ -116,7 +153,7 @@ final class AttentionCenter: NSObject {
         // macOS shows the banner; and a Dock bounce when an agent needs you
         // while you're in another app.
         if !Settings.sound.isEmpty { NSSound(named: Settings.sound)?.play() }
-        if transition.reason == .blocked, !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+        if transition.reason != .done, !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         guard notificationsAvailable else { return }
         let workspace = store.workspace(pane.workspaceID)?.label ?? pane.workspaceID
         let agent = pane.displayAgent ?? pane.agent ?? "Agent"
@@ -126,12 +163,20 @@ final class AttentionCenter: NSObject {
             content.title = "\(agent) needs you"
         case .done:
             content.title = "\(agent) finished"
+        case .notified:
+            break
         }
         content.subtitle = machineName.map { "\(workspace) · \($0)" } ?? workspace
         content.body = pane.title ?? pane.terminalTitle ?? pane.displayName
+        if transition.reason == .notified, let note = attention.notes[pane.paneID] {
+            content.title = note.title.flatMap { $0.isEmpty ? nil : $0 } ?? pane.displayAgent ?? pane.agent ?? pane.displayName
+            content.body = note.body
+        }
         content.userInfo = ["pane_id": pane.paneID, "machine": machineName ?? "local"]
         content.threadIdentifier = pane.workspaceID
-        let request = UNNotificationRequest(identifier: "\(pane.paneID)-\(transition.reason)", content: content, trigger: nil)
+        // Each message is its own notification; agent states replace their last one.
+        let id = transition.reason == .notified ? "\(pane.paneID)-note-\(UUID().uuidString)" : "\(pane.paneID)-\(transition.reason)"
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 

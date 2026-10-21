@@ -9,6 +9,8 @@ public struct NeedsYouItem: Sendable, Equatable {
         case login
         /// An agent asks something you haven't looked at yet.
         case blocked
+        /// A program in a pane sent you a message (`btty notify`).
+        case notified
         /// An agent still waits on you, though you've seen it.
         case waiting
         /// A machine can't be reached (offline, herdr missing): worth
@@ -49,13 +51,15 @@ public enum NeedsYou {
             let kind: NeedsYouItem.Kind
             switch attention.reason(for: pane.paneID) {
             case .blocked: kind = .blocked
+            case .notified: kind = .notified
             case .done: kind = .finished
             case nil:
                 guard pane.agentStatus == .blocked, !attention.dismissed.contains(pane.paneID) else { return nil }
                 kind = .waiting
             }
             return NeedsYouItem(
-                kind: kind, machineID: machineID, paneID: pane.paneID, since: attention.since[pane.paneID],
+                kind: kind, machineID: machineID, paneID: pane.paneID,
+                since: kind == .notified ? attention.notes[pane.paneID]?.at : attention.since[pane.paneID],
                 order: [machineOrder, workspaceOrder[pane.workspaceID] ?? 0, tabOrder[pane.tabID] ?? 0]
             )
         }
