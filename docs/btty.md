@@ -29,7 +29,8 @@ btty notify --title "CI" "tests passed"
 The message goes on **Needs You** for the calling pane (`HERDR_PANE_ID`, or
 `--pane <id>`) and, unless you're looking at that pane, a macOS notification.
 If macOS notifications are off for bigtty, it still lands on Needs You and
-`btty` says so.
+`btty` says so. The agent skill tells agents about it, and to use it only when
+they're blocked, need a decision, or have finished a long task.
 
 ### Claude Code
 

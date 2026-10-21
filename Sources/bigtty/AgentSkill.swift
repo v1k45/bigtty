@@ -8,7 +8,7 @@ enum AgentSkill {
         """
         ---
         name: bigtty-browser
-        description: Open, read and drive web pages in a bigtty browser pane next to your terminal (the user sees it live). Use to check a dev server, verify a UI change, fill forms, read docs, or capture screenshots.
+        description: Open, read and drive web pages in a bigtty browser pane next to your terminal (the user sees it live). Use to check a dev server, verify a UI change, fill forms, read docs, or capture screenshots. Also `btty notify` to ping the user.
         ---
 
         # bigtty browser
@@ -43,6 +43,12 @@ enum AgentSkill {
 
         Add `--json` for machine-readable output and `--browser <id>` to pick a
         pane from `list`. Exit code 3 means bigtty isn't running.
+
+        ## Pinging the user
+
+        `btty notify "<message>"` puts a message on the user's Needs You list and
+        shows a macOS notification if they aren't looking at your pane. Use it
+        sparingly: when you're blocked, need a decision, or finished a long task.
         """
     }
 
