@@ -67,28 +67,42 @@ public final class TerminalChannel: @unchecked Sendable {
             process.standardError = FileHandle.nullDevice
         }
 
+        // A finished stream gives its descriptors back right away, not when
+        // this object goes: one kept alive by mistake must not hold them.
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard let self else { return }
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                try? handle.close()
                 return
             }
-            self.consume(data)
+            self?.consume(data)
         }
         process.terminationHandler = { [weak self] proc in
             guard let self else { return }
             let alreadyClosed = self.lock.withLock { () -> Bool in
                 defer { self.closed = true }
+                try? self.stdin?.close()
+                self.stdin = nil
                 return self.closed
             }
             if !alreadyClosed { self.onClosed?("exited (\(proc.terminationStatus))") }
         }
 
-        try process.run()
+        // Set before launch: herdr can exit (and the handler above run)
+        // before `run` returns.
         lock.withLock {
             self.process = process
             self.stdin = input.fileHandleForWriting
+        }
+        do {
+            try process.run()
+        } catch {
+            lock.withLock {
+                self.process = nil
+                self.stdin = nil
+            }
+            throw error
         }
     }
 
