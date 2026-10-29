@@ -183,10 +183,11 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let box = WeakBox<HerdrTerminalView>()
         box.value = self
         // Compared on the reader thread against the size last sent; the
-        // main thread only hears about a mismatch.
+        // main thread only hears about a mismatch. The channel's own
+        // callbacks hold it weakly, or it would never be freed.
         let expected = expectedSize
-        channel.onFrameSize = { columns, rows in
-            guard let want = expected.value, want.columns != columns || want.rows != rows else { return }
+        channel.onFrameSize = { [weak channel] columns, rows in
+            guard let channel, let want = expected.value, want.columns != columns || want.rows != rows else { return }
             DispatchQueue.main.async { box.value?.frameSize(columns: columns, rows: rows, from: channel) }
         }
         let id = ObjectIdentifier(channel)
@@ -233,15 +234,16 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         box.value = self
         let gate = gate!
         let first = OnceFlag()
-        probe.onFrame = { data in
+        // Weakly, as in `wire`: a probe herdr turns away must be freed.
+        probe.onFrame = { [weak probe] data in
             // Taking the pane back resizes it: hold for the redraw.
             if first.take() { gate.hold() }
             gate.feed(data)
-            DispatchQueue.main.async { box.value?.adopt(probe) }
+            DispatchQueue.main.async { if let probe { box.value?.adopt(probe) } }
         }
-        probe.onClosed = { _ in
+        probe.onClosed = { [weak probe] _ in
             DispatchQueue.main.async {
-                guard let self = box.value, self.reclaimProbe === probe else { return }
+                guard let self = box.value, let probe, self.reclaimProbe === probe else { return }
                 self.reclaimProbe = nil
             }
         }
