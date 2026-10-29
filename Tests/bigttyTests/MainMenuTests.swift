@@ -22,9 +22,13 @@ import Testing
     @Test func onlyWindowListsSpacesByName() {
         let window = menu("Window")
         #expect(window != nil)
+        // Services is AppKit's own. (Found here rather than as
+        // NSApp.servicesMenu, which stays the first menu ever given to it,
+        // and each test builds its own.)
+        let services = menu("bigtty")?.items.first { $0.title == "Services" }?.submenu
+        #expect(services != nil)
         for top in main.items.compactMap(\.submenu) where top !== window {
-            // Services is AppKit's own.
-            for menu in [top] + submenus(of: top) where menu !== NSApp.servicesMenu {
+            for menu in [top] + submenus(of: top) where menu !== services {
                 #expect(menu.delegate == nil, "\(top.title) ▸ \(menu.title) is filled from live state")
             }
         }

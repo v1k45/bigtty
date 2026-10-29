@@ -24,7 +24,6 @@ import Testing
         let herdr = try fakeHerdr(script)
         defer { try? FileManager.default.removeItem(atPath: herdr) }
         let endpoint = HerdrEndpoint(session: "btty-test", herdrBinary: herdr)
-        let before = openDescriptors()
         let ended = Counter()
         // Kept alive for the whole test, as a leaked channel would be.
         var channels: [TerminalChannel] = []
@@ -37,8 +36,12 @@ import Testing
         if close { channels.forEach { $0.close() } }
         if !close { try await waitUntil { ended.value == channels.count } }
         try await waitUntil { channels.allSatisfy { !$0.isRunning } }
-        try await waitUntil { openDescriptors() <= before }
-        #expect(openDescriptors() <= before)
+        // Only these pipes: the rest of the process (other suites running
+        // alongside) opens and closes descriptors of its own meanwhile.
+        let ends = channels.flatMap(\.pipeEnds)
+        #expect(ends.count == channels.count * 4)
+        try await waitUntil { !ends.contains(where: \.isOpen) }
+        #expect(ends.filter(\.isOpen).isEmpty)
         withExtendedLifetime(channels) {}
     }
 
@@ -47,10 +50,6 @@ import Testing
         try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
         return path
-    }
-
-    private func openDescriptors() -> Int {
-        (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0
     }
 
     private final class Counter: @unchecked Sendable {
