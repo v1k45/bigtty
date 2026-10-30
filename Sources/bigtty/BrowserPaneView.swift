@@ -1,23 +1,37 @@
 import AppKit
 import WebKit
 
-/// A browser pane: toolbar plus WKWebView. Its URL and title are kept in
-/// `HostPaneStore` so the page comes back after a restart, and the title is
-/// mirrored to herdr so other clients see what the pane shows.
+/// A browser pane: toolbar and tab strip around its pages. Its pages' URLs
+/// and titles are kept in `HostPaneStore`, so they come back after a
+/// restart, and the active page's is mirrored to herdr so other clients see
+/// what the pane shows. One herdr pane can hold many pages: herdr has no
+/// stacked panes, and a bigtty tab is already a herdr tab.
 @MainActor
-final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextFieldDelegate, WKScriptMessageHandler {
+final class BrowserPaneView: NSView, NSTextFieldDelegate {
     let hostID: String
-    let webView: WKWebView
+    private(set) var pages: [BrowserPage]
+    private(set) var activePage: BrowserPage
+    private let dataStore: WKWebsiteDataStore?
+    /// Set for a remote machine's panes: its `localhost` goes through SSH.
+    let localhostMapper: LocalhostMapper?
+    /// What ⇧⌘T brings back, last closed at the end.
+    private(set) var closed: [ClosedBrowserTab] = []
+    /// The page each calling terminal last used. Refs like @e5 belong to one
+    /// page, so an agent stays on its page even if you switch tabs under it.
+    private var callers: [String: String] = [:]
+
     private let back = HistoryButton()
     private let forward = HistoryButton()
     private let reload = NSButton()
     private let options = NSButton()
     private let closeButton = NSButton()
+    private let tabCount = NSButton()
+    private let strip = BrowserTabStrip()
     private var extensionObserver: NSObjectProtocol?
     /// Where an extension's popup points: the address bar. Extensions have
     /// no toolbar buttons (they'd crowd it); they're in the ⋯ menu.
     var extensionAnchor: NSView? { addressBox }
-    /// The pane's × button.
+    /// The pane's × button, and closing its last tab.
     var onClose: (() -> Void)?
     let address = AddressField()
     private let addressBox = AddressBox()
@@ -28,17 +42,19 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private let progress = NSView()
     private let automationStrip = AutomationStrip()
     private let errorPage = BrowserErrorPage()
-    private var automationHide: DispatchWorkItem?
-    private var observations: [NSKeyValueObservation] = []
 
-    /// The page's title or URL changed.
+    /// The pane's title or URL changed.
     var onStateChange: ((HostPaneState) -> Void)?
     /// The user clicked into the pane.
     var onFocus: (() -> Void)?
 
     static let toolbarHeight: CGFloat = 28
+    static let stripHeight: CGFloat = 24
     /// Below this the toolbar drops › and ↻.
     static let tightWidth: CGFloat = 200
+
+    /// The page showing.
+    var webView: WKWebView { activePage.webView }
 
     private var finderStorage: BrowserFinder?
     /// ⌘F in the page.
@@ -49,175 +65,48 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         return finder
     }
 
-    /// One cookie/storage store for every browser pane, persisted on disk.
-    private static let dataStore = WKWebsiteDataStore.default()
-
-    /// The installed Safari's version, for the user agent.
-    static let safariVersion: String = {
-        let info = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
-        return info?["CFBundleShortVersionString"] as? String ?? "26.0"
-    }()
-
-    /// Reports whether any audible media plays in the frame.
-    static let mediaHook = """
-    (() => {
-      const report = () => {
-        const playing = Array.from(document.querySelectorAll('video, audio')).some(m =>
-          !m.paused && !m.ended && !m.muted && m.volume > 0);
-        try { window.webkit.messageHandlers.bttyMedia.postMessage(playing); } catch (_) {}
-      };
-      for (const type of ['play', 'playing', 'pause', 'ended', 'volumechange', 'emptied'])
-        document.addEventListener(type, report, true);
-    })();
-    """
-
-    /// "Full screen in the pane": a page's full screen request makes the
-    /// element fill the web view instead of taking over the display. The
-    /// Fullscreen API is answered in-page (fullscreenElement, change events,
-    /// Esc to leave), and a frame asks its parent to fill with the frame.
-    static let paneFullscreen = """
-    (() => {
-      if (window.__bttyPaneFullscreen) return;
-      window.__bttyPaneFullscreen = true;
-      let current = null;
-      const cls = '__btty_fs';
-      const style = document.createElement('style');
-      style.textContent = `.${cls}{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;transform:none!important;z-index:2147483647!important;background-color:#000!important;object-fit:contain}`;
-      const fire = (el) => {
-        for (const type of ['fullscreenchange', 'webkitfullscreenchange'])
-          (el || document).dispatchEvent(new Event(type, { bubbles: true }));
-      };
-      const tellApp = (on) => {
-        if (window !== window.top) { window.parent.postMessage({ __bttyFullscreen: on }, '*'); return; }
-        try { window.webkit.messageHandlers.bttyFullscreen.postMessage(on); } catch (_) {}
-      };
-      function enter() {
-        const el = this;
-        if (!style.isConnected) (document.head || document.documentElement).appendChild(style);
-        if (current && current !== el) current.classList.remove(cls);
-        current = el;
-        el.classList.add(cls);
-        document.documentElement.style.setProperty('overflow', 'hidden', 'important');
-        fire(el); tellApp(true);
-        return Promise.resolve();
-      }
-      function exit() {
-        const el = current;
-        if (!el) return Promise.resolve();
-        el.classList.remove(cls);
-        current = null;
-        document.documentElement.style.removeProperty('overflow');
-        fire(el); tellApp(false);
-        return Promise.resolve();
-      }
-      for (const name of ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen'])
-        Element.prototype[name] = enter;
-      HTMLVideoElement.prototype.webkitEnterFullscreen = enter;
-      HTMLVideoElement.prototype.webkitEnterFullScreen = enter;
-      for (const name of ['exitFullscreen', 'webkitExitFullscreen', 'webkitCancelFullScreen'])
-        Document.prototype[name] = exit;
-      const get = (value) => ({ get: value, configurable: true });
-      for (const name of ['fullscreenElement', 'webkitFullscreenElement', 'webkitCurrentFullScreenElement'])
-        Object.defineProperty(Document.prototype, name, get(() => current));
-      for (const name of ['fullscreen', 'webkitIsFullScreen'])
-        Object.defineProperty(Document.prototype, name, get(() => !!current));
-      for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled'])
-        Object.defineProperty(Document.prototype, name, get(() => true));
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && current) exit(); }, true);
-      // A frame going full screen: fill with the frame itself.
-      window.addEventListener('message', (e) => {
-        if (!e.data || typeof e.data.__bttyFullscreen !== 'boolean') return;
-        const frame = Array.from(document.querySelectorAll('iframe')).find(f => f.contentWindow === e.source);
-        if (!frame) return;
-        if (e.data.__bttyFullscreen) enter.call(frame); else if (current === frame) exit();
-      });
-    })();
-    """
-
-    /// The page fills the pane (full screen in the pane): no toolbar.
-    private var pageFullscreen = false {
-        didSet { if pageFullscreen != oldValue { needsLayout = true } }
-    }
-
-    private var audibleFrames: [String: Bool] = [:]
-    /// Some frame is playing sound; shown on the tab.
-    private(set) var isAudible = false {
-        didSet {
-            guard isAudible != oldValue else { return }
-            pageChanged()
-            NotificationCenter.default.post(name: .bigttyAudioChanged, object: self)
-        }
-    }
-    /// Automation runs here, out of the page's reach.
-    static let automationWorld = WKContentWorld.world(name: "bigtty")
-
-    struct ConsoleEntry {
-        let level: String
-        let text: String
-        let date: Date
-    }
-
-    private(set) var console: [ConsoleEntry] = []
-    /// Resolved when the current navigation finishes (or fails).
-    private var loadWaiters: [CheckedContinuation<Void, Never>] = []
-    private(set) var lastNavigationError: String?
-
-    /// Set for a remote machine's panes: its `localhost` goes through SSH.
-    let localhostMapper: LocalhostMapper?
-
-    /// What the page is at, as the address bar shows it: forwarded remote
-    /// pages as their localhost, a failed load as the address that failed.
-    private var pageAddress: URL?
-    /// A navigation hasn't committed, so the page on screen isn't `pageAddress`
-    /// yet and there's nothing true to say about its security.
-    private var navigationPending = false
     private var securityState = BrowserAddress.Security.quiet
+
+    /// Some page is playing sound; shown on the herdr tab.
+    var isAudible: Bool { pages.contains(where: \.isAudible) }
 
     init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil, machineName: String? = nil) {
         self.hostID = hostID
+        self.dataStore = dataStore
         self.localhostMapper = localhostMapper
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = dataStore ?? Self.dataStore
-        let content = config.userContentController
-        content.addUserScript(WKUserScript(
-            source: AutomationScript.source, injectionTime: .atDocumentStart,
-            forMainFrameOnly: true, in: Self.automationWorld
-        ))
-        content.addUserScript(WKUserScript(
-            source: AutomationScript.consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true
-        ))
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Video full screen (YouTube's button, the page's requestFullscreen):
-        // inside the pane by default, or the whole display.
-        config.preferences.isElementFullscreenEnabled = true
-        if Settings.browserFullscreen == .pane {
-            content.addUserScript(WKUserScript(source: Self.paneFullscreen, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // Panes saved before tabs have one page, in `url`.
+        let tabs = state.tabs.flatMap { $0.isEmpty ? nil : $0 }
+            ?? [BrowserTabState(id: BrowserTabRules.newID(), url: state.url, title: state.title)]
+        let pages = tabs.map {
+            BrowserPage(tab: $0, history: localhostMapper == nil ? BrowserPageState.load($0.id) : nil,
+                        dataStore: dataStore, localhostMapper: localhostMapper)
         }
-        // Identify as the installed Safari: WebKit's default string lacks
-        // Safari's version, and sites then call the browser outdated.
-        config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Safari/605.1.15"
-        config.mediaTypesRequiringUserActionForPlayback = []
-        WebExtensions.configure(config)
-        // Which frames are playing sound, for the tab's speaker.
-        content.addUserScript(WKUserScript(source: Self.mediaHook, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        webView = WKWebView(frame: .zero, configuration: config)
+        self.pages = pages
+        activePage = pages.first { $0.id == state.activeTab } ?? pages[0]
         super.init(frame: .zero)
-
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyConsole")
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyMedia")
-        webView.configuration.userContentController.add(WeakMessageHandler(self), name: "bttyFullscreen")
-        webView.allowsBackForwardNavigationGestures = true
-        webView.setValue(false, forKey: "drawsBackground")
+        for page in pages { page.pane = self }
 
         configure(back, "chevron.left", "Back", #selector(goBackClicked))
         configure(forward, "chevron.right", "Forward", #selector(goForwardClicked))
-        configure(reload, "arrow.clockwise", "Reload", #selector(reloadPage))
+        configure(reload, "arrow.clockwise", "Reload", #selector(reloadClicked))
         configure(options, "ellipsis", "Options", #selector(showOptions))
-        configure(closeButton, "xmark", "Close Pane", #selector(closePane))
+        configure(closeButton, "xmark", "Close Pane", #selector(closeClicked))
         back.historyMenu = { [weak self] in self?.historyMenu(forward: false) }
         forward.historyMenu = { [weak self] in self?.historyMenu(forward: true) }
+        tabCount.isBordered = false
+        tabCount.wantsLayer = true
+        tabCount.layer?.cornerRadius = 4
+        tabCount.layer?.borderWidth = 1
+        tabCount.font = .systemFont(ofSize: 10, weight: .semibold)
+        tabCount.contentTintColor = .secondaryLabelColor
+        tabCount.target = self
+        tabCount.action = #selector(showTabs)
+        tabCount.isHidden = true
+        strip.isHidden = true
+        strip.onSelect = { [weak self] id in self?.page(id: id).map { self?.select($0) } }
+        strip.onClose = { [weak self] id in self?.page(id: id).map { self?.close($0) } }
+        strip.onNew = { [weak self] in self?.newTab() }
+        strip.tabMenu = { [weak self] id in self?.page(id: id).flatMap { self?.tabMenu($0) } }
         address.placeholderString = "Search or enter address"
         address.font = .systemFont(ofSize: 11.5)
         address.isBezeled = false
@@ -254,46 +143,18 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         progress.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
         progress.isHidden = true
         automationStrip.isHidden = true
-        automationStrip.onTakeOver = { [weak self] in self?.hideAutomation() }
+        automationStrip.onTakeOver = { [weak self] in self?.activePage.endAutomationNote() }
         errorPage.isHidden = true
-        errorPage.onReload = { [weak self] in self?.reloadPage() }
-        for view in [back, forward, addressBox, reload, options, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
+        errorPage.onReload = { [weak self] in self?.reloadAgain() }
+        for view in [back, forward, addressBox, reload, tabCount, options, closeButton, errorPage, strip, toolbarLine, progress, automationStrip] as [NSView] {
             addSubview(view)
         }
         wantsLayer = true
-
-        observations = [
-            webView.observe(\.url, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.pageChanged() }
-            },
-            webView.observe(\.title, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.pageChanged() }
-            },
-            webView.observe(\.canGoBack, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.updateButtons() }
-            },
-            webView.observe(\.canGoForward, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.updateButtons() }
-            },
-            webView.observe(\.isLoading, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.updateLoading() }
-            },
-            webView.observe(\.estimatedProgress, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.needsLayout = true }
-            },
-            webView.observe(\.hasOnlySecureContent, options: .new) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.updateSecurity() }
-            },
-        ]
-
-        if let url = state.url.flatMap(BrowserAddress.normalize) {
-            navigate(to: url)
-        }
-        updateButtons()
+        addSubview(activePage.webView, positioned: .below, relativeTo: errorPage)
+        refreshChrome()
         extensionObserver = NotificationCenter.default.addObserver(forName: .bigttyExtensionsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshExtensionButtons() }
         }
-        WebExtensions.tabOpened(self)
         refreshExtensionButtons()
     }
 
@@ -305,10 +166,17 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// there's nothing to lay out.
     func refreshExtensionButtons() {}
 
-    /// ⋯, or a right-click on the toolbar: the page's actions and each
-    /// extension (uBlock Origin Lite's popup opens under the address).
+    // MARK: - Menus
+
+    /// ⋯, or a right-click on the toolbar: the page's actions, tabs and
+    /// each extension (uBlock Origin Lite's popup opens under the address).
     func optionsMenu() -> NSMenu {
         let menu = NSMenu()
+        addOptions(to: menu)
+        return menu
+    }
+
+    private func addOptions(to menu: NSMenu) {
         menu.autoenablesItems = false
         func add(_ title: String, _ key: String = "", _ modifiers: NSEvent.ModifierFlags = [.command], enabled: Bool = true, _ action: @escaping () -> Void) {
             let item = ClosureMenuItem(title: title, keyEquivalent: key, action: action)
@@ -316,10 +184,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             item.isEnabled = enabled
             menu.addItem(item)
         }
-        let hasPage = pageAddress != nil
+        let page = activePage
+        let hasPage = !page.isBlank
         // ↻ is out of the way in the tightest panes, so it comes in here.
         if bounds.width < Self.tightWidth {
-            add("Reload Page", enabled: hasPage) { [weak self] in self?.reloadPage() }
+            add("Reload Page", enabled: hasPage) { [weak self] in self?.reloadClicked() }
         }
         add("Open in Default Browser", "o", [.command, .shift], enabled: hasPage) { [weak self] in self?.openInDefaultBrowser() }
         add("Copy Address", "c", [.command, .shift], enabled: hasPage) { [weak self] in self?.copyAddress() }
@@ -333,7 +202,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             return self?.zoomPercent ?? 100
         }
         menu.addItem(zoom)
-        let actions = WebExtensions.actions(for: self)
+        menu.addItem(.separator())
+        add("New Tab", "t") { [weak self] in self?.newTab() }
+        add("Reopen Closed Tab", "t", [.command, .shift], enabled: !closed.isEmpty) { [weak self] in self?.reopenClosed() }
+        let actions = WebExtensions.actions(for: page)
         if !actions.isEmpty {
             menu.addItem(.separator())
             for action in actions {
@@ -351,6 +223,34 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         add("Browser Settings…") {
             NSApp.sendAction(#selector(AppDelegate.showSettings(_:)), to: nil, from: nil)
         }
+    }
+
+    /// The count button: every tab, then New Tab. At the tightest width it
+    /// stands in for ⋯, so the options come along.
+    func tabsMenu() -> NSMenu {
+        let menu = NSMenu()
+        for page in pages {
+            let item = ClosureMenuItem(title: page.shownTitle) { [weak self] in self?.select(page) }
+            item.state = page === activePage ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        if bounds.width < Self.tightWidth {
+            addOptions(to: menu)
+        } else {
+            let new = ClosureMenuItem(title: "New Tab", keyEquivalent: "t") { [weak self] in self?.newTab() }
+            menu.addItem(new)
+        }
+        return menu
+    }
+
+    /// A right-click on a tab.
+    private func tabMenu(_ page: BrowserPage) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Close Tab") { [weak self] in self?.close(page) })
+        let others = ClosureMenuItem(title: "Close Other Tabs") { [weak self] in self?.closeOthers(page) }
+        others.isEnabled = pages.count > 1
+        menu.addItem(others)
         return menu
     }
 
@@ -358,16 +258,21 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         optionsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: options.bounds.height + 4), in: options)
     }
 
+    @objc private func showTabs() {
+        tabsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: tabCount.bounds.height + 4), in: tabCount)
+    }
+
     /// Where ‹ or › leads, nearest first.
     private func historyMenu(forward: Bool) -> NSMenu? {
-        let list = webView.backForwardList
+        let web = webView
+        let list = web.backForwardList
         let entries = forward ? list.forwardList : list.backList.reversed()
         guard !entries.isEmpty else { return nil }
         let menu = NSMenu()
         for entry in entries.prefix(20) {
             let shown = localhostMapper?.display(entry.url) ?? entry.url
             let title = entry.title.flatMap { $0.isEmpty ? nil : $0 } ?? shown.absoluteString
-            menu.addItem(ClosureMenuItem(title: title) { [weak self] in self?.webView.go(to: entry) })
+            menu.addItem(ClosureMenuItem(title: title) { web.go(to: entry) })
         }
         return menu
     }
@@ -375,7 +280,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         // The page has its own menu; the toolbar gets ours.
-        guard point.y >= bounds.height - Self.toolbarHeight else { return super.menu(for: event) }
+        guard point.y >= bounds.height - chromeHeight else { return super.menu(for: event) }
         return optionsMenu()
     }
 
@@ -392,41 +297,80 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         button.action = action
     }
 
+    // MARK: - Layout
+
+    private var showsStrip: Bool {
+        pages.count >= 2 && bounds.width >= BrowserTabRules.stripMinimumPaneWidth && !activePage.isFullscreen
+    }
+
+    /// Toolbar and tab strip together. The find bar sits under this, and a
+    /// right-click inside it opens the options.
+    var chromeHeight: CGFloat {
+        activePage.isFullscreen ? 0 : Self.toolbarHeight + (showsStrip ? Self.stripHeight : 0)
+    }
+
+    /// Where the page goes: everything under the chrome and the automation strip.
+    var pageFrame: NSRect {
+        let automation: CGFloat = activePage.automationText == nil || activePage.isFullscreen ? 0 : 26
+        return NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - chromeHeight - automation))
+    }
+
     override func layout() {
         super.layout()
         let b = bounds
         let theme = Theme.current
         layer?.backgroundColor = theme?.pane.cgColor
-        let h = pageFullscreen ? 0 : Self.toolbarHeight
-        for view in [back, forward, closeButton, options, addressBox, toolbarLine] as [NSView] { view.isHidden = pageFullscreen }
+        let full = activePage.isFullscreen
+        for view in [back, forward, closeButton, options, addressBox, toolbarLine] as [NSView] { view.isHidden = full }
         // Light and compact: ‹ › on the left, the address (with ↻ inside)
-        // in the middle, ⋯ and × on the right.
-        let y = b.height - h + (h - 20) / 2
+        // in the middle, ⋯ and × on the right. The toolbar is always on top
+        // and the same height: the strip below it stays out of the band that
+        // drags the pane.
+        let y = b.height - (full ? 0 : Self.toolbarHeight) + 4
         back.frame = NSRect(x: 6, y: y, width: 20, height: 20)
         forward.frame = NSRect(x: 26, y: y, width: 20, height: 20)
         closeButton.frame = NSRect(x: b.width - 26, y: y, width: 20, height: 20)
         options.frame = NSRect(x: b.width - 46, y: y, width: 20, height: 20)
-        // The tightest panes keep ‹, the address, ⋯ and ×; › and ↻ are in
-        // the right-click menus.
+        // The tightest panes keep ‹, the address, the count or ⋯, and ×;
+        // › and ↻ are in the right-click menus.
         let tight = b.width < Self.tightWidth
-        forward.isHidden = pageFullscreen || tight
-        reload.isHidden = pageFullscreen || tight
+        forward.isHidden = full || tight
+        reload.isHidden = full || tight
+        // With no room for the strip, a button counts the tabs. At the
+        // tightest it takes ⋯'s place, and its menu holds the options too.
+        let counted = pages.count >= 2 && b.width < BrowserTabRules.stripMinimumPaneWidth && !full
+        tabCount.isHidden = !counted
+        tabCount.title = "\(pages.count)"
+        tabCount.layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+        if tight, counted { options.isHidden = true }
+        tabCount.frame = NSRect(x: tight ? b.width - 44 : b.width - 66, y: y + 2, width: 16, height: 16)
+        let right: CGFloat = counted && !tight ? 74 : 52
         let fieldX: CGFloat = tight ? 30 : 52
-        let fieldWidth = max(40, b.width - fieldX - 52 - 4)
+        let fieldWidth = max(40, b.width - fieldX - right - 4)
         addressBox.frame = NSRect(x: fieldX, y: y, width: fieldWidth, height: 20)
         reload.frame = NSRect(x: addressBox.frame.maxX - 22, y: y, width: 20, height: 20)
         layoutAddress(tight: tight)
-        toolbarLine.frame = NSRect(x: 0, y: b.height - h, width: b.width, height: 0.5)
+        let chrome = chromeHeight
+        strip.isHidden = !showsStrip
+        strip.frame = NSRect(x: 0, y: b.height - Self.toolbarHeight - Self.stripHeight, width: b.width, height: Self.stripHeight)
+        toolbarLine.frame = NSRect(x: 0, y: b.height - chrome, width: b.width, height: 0.5)
         toolbarLine.layer?.backgroundColor = theme?.separator.cgColor
-        progress.frame = NSRect(x: 0, y: b.height - h - 1, width: b.width * max(0.05, webView.estimatedProgress), height: 2)
-        var top = b.height - h
-        if !automationStrip.isHidden {
-            automationStrip.frame = NSRect(x: 0, y: top - 26, width: b.width, height: 26)
-            top -= 26
+        progress.frame = NSRect(x: 0, y: b.height - chrome - 1, width: b.width * max(0.05, activePage.progress), height: 2)
+        let page = pageFrame
+        automationStrip.isHidden = page.height == b.height - chrome
+        automationStrip.frame = NSRect(x: 0, y: page.maxY, width: b.width, height: 26)
+        // Hidden pages keep the pane's size: an agent's screenshot of one
+        // should look like the page would.
+        for each in pages where each.hasWebView { each.webView.frame = page }
+        errorPage.frame = page
+        if chrome != laidOutChrome {
+            laidOutChrome = chrome
+            superview?.needsLayout = true
         }
-        webView.frame = NSRect(x: 0, y: 0, width: b.width, height: max(0, top))
-        errorPage.frame = webView.frame
     }
+
+    /// The find bar lines up under the chrome: its pane must hear of changes.
+    private var laidOutChrome: CGFloat = 0
 
     /// The box's contents, left to right: the machine (remote panes), the
     /// security slot, its words when there's room, then the field.
@@ -467,76 +411,237 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         if !editing { renderAddress() }
     }
 
+    // MARK: - Keeping the chrome current
+
+    /// The page's URL, title or sound changed: what's saved, and the tab.
+    func pageChanged(_ page: BrowserPage) {
+        if page === activePage, !isEditingAddress { renderAddress() }
+        refreshStrip()
+        saveState()
+    }
+
+    func pageAddressChanged(_ page: BrowserPage) {
+        guard page === activePage else { return }
+        if !isEditingAddress { renderAddress() }
+        updateSecurity()
+    }
+
+    /// Loading, progress, back/forward, a failure, an agent's strip.
+    func pageChromeChanged(_ page: BrowserPage) {
+        refreshStrip()
+        guard page === activePage else { return }
+        updateButtons()
+        updateLoading()
+        updateSecurity()
+        updateErrorPage()
+        automationStrip.text = page.automationText ?? ""
+        needsLayout = true
+    }
+
+    /// A load finished: an open find bar searches the new page too.
+    func pageLoaded(_ page: BrowserPage) {
+        if page === activePage { finderStorage?.pageLoaded() }
+        pageChromeChanged(page)
+    }
+
+    private func refreshChrome() {
+        renderAddress()
+        pageChromeChanged(activePage)
+    }
+
+    private func refreshStrip() {
+        strip.show(pages.map { page in
+            BrowserTabStrip.Tab(
+                id: page.id, title: page.shownTitle, tile: BrowserTabRules.tile(title: page.title, url: page.address),
+                loading: page.isLoading, audible: page.isAudible, driven: page.automationText != nil, active: page === activePage
+            )
+        })
+    }
+
     private func updateLoading() {
-        let loading = webView.isLoading
+        let loading = activePage.isLoading
         progress.isHidden = !loading
         reload.image = NSImage(systemSymbolName: loading ? "xmark" : "arrow.clockwise", accessibilityDescription: loading ? "Stop" : "Reload")?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
         reload.toolTip = loading ? "Stop" : "Reload"
-        if loading { errorPage.isHidden = true }
-        needsLayout = true
     }
 
-    /// Shows "claude is controlling this page · click @e3" for a few seconds
-    /// after each automation command, so it's clear who's driving.
-    func noteAutomation(_ text: String) {
-        automationStrip.text = text
-        if automationStrip.isHidden {
-            automationStrip.isHidden = false
+    private func updateButtons() {
+        back.isEnabled = activePage.canGoBack
+        forward.isEnabled = activePage.canGoForward
+    }
+
+    private func updateErrorPage() {
+        if let failure = activePage.failure {
+            errorPage.show(error: failure.error, url: failure.url)
+        } else {
+            errorPage.isHidden = true
+        }
+    }
+
+    /// Mirrors the tabs to the store, with `url` and `title` following the
+    /// active one, so herdr tags and everything else that reads them still work.
+    private func saveState() {
+        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
+        state.url = activePage.address?.absoluteString
+        state.title = activePage.title.isEmpty ? nil : activePage.title
+        state.audible = isAudible
+        state.tabs = pages.map(\.tabState)
+        state.activeTab = activePage.id
+        HostPaneStore.shared[hostID] = state
+        onStateChange?(state)
+    }
+
+    // MARK: - Tabs
+
+    func page(id: String) -> BrowserPage? { pages.first { $0.id == id } }
+
+    /// `--tab`: its number in the strip, or its id.
+    func page(matching wanted: String) -> BrowserPage? {
+        BrowserTabRules.index(matching: wanted, ids: pages.map(\.id)).map { pages[$0] }
+    }
+
+    /// Someone is using this pane, so an agent mustn't take the screen.
+    var isInUse: Bool {
+        guard let window, window.isKeyWindow, let responder = window.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: self)
+    }
+
+    /// The page a calling terminal last used here, if it's still open.
+    func page(forCaller caller: String) -> BrowserPage? { callers[caller].flatMap(page(id:)) }
+
+    func noteCaller(_ caller: String, on page: BrowserPage) { callers[caller] = page.id }
+
+    /// A page next to `after`, or at the end of the row, selected or not.
+    /// Unselected, it loads at once: it's a link someone wants to read.
+    @discardableResult
+    func newPage(url: URL? = nil, select selecting: Bool = true, after: BrowserPage? = nil, agent: Bool = false,
+                 popup: WKWebViewConfiguration? = nil) -> BrowserPage {
+        let tab = BrowserTabState(id: BrowserTabRules.newID(), url: url?.absoluteString, agent: agent ? true : nil)
+        let page = BrowserPage(tab: tab, dataStore: dataStore, localhostMapper: localhostMapper, popup: popup)
+        page.pane = self
+        pages.insert(page, at: after.flatMap { opener in pages.firstIndex { $0 === opener } }.map { $0 + 1 } ?? pages.count)
+        if selecting {
+            select(page)
+        } else {
+            _ = page.webView
+            refreshStrip()
+            saveState()
             needsLayout = true
         }
-        automationHide?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.hideAutomation() }
-        automationHide = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+        return page
     }
 
-    private func hideAutomation() {
-        automationStrip.isHidden = true
+    /// ⌘T: a blank tab, with the address ready.
+    func newTab() {
+        newPage()
+        focusAddressBar()
+    }
+
+    func select(_ page: BrowserPage) {
+        guard page !== activePage, pages.contains(where: { $0 === page }) else { return }
+        let hadKeyboard = (window?.firstResponder as? NSView)?.isDescendant(of: self) == true
+        if isEditingAddress { window?.makeFirstResponder(nil) }
+        finderStorage?.pageHidden()
+        activePage.saveHistory()
+        // A hidden page leaves the view tree; its pane keeps it, and
+        // `BrowserPage.keepAwake` covers one an agent is working in.
+        if activePage.hasWebView { activePage.webView.removeFromSuperview() }
+        activePage = page
+        let web = page.webView
+        web.frame = pageFrame
+        addSubview(web, positioned: .below, relativeTo: errorPage)
+        if hadKeyboard { window?.makeFirstResponder(web) }
+        if BrowserRegistry.shared.lastFocused == hostID { WebExtensions.tabActivated(page) }
+        finderStorage?.pageLoaded()
+        refreshChrome()
+        saveState()
+    }
+
+    /// ⌃⌥1–9.
+    func selectNumber(_ n: Int) -> Bool {
+        guard let index = BrowserTabRules.index(forNumber: n, count: pages.count) else { return false }
+        select(pages[index])
+        return true
+    }
+
+    /// ⇧⌘] and ⇧⌘[.
+    func cycleTabs(by offset: Int) {
+        guard let index = pages.firstIndex(where: { $0 === activePage }) else { return }
+        select(pages[(index + offset + pages.count) % pages.count])
+    }
+
+    /// Closes a tab; the last one closes the pane.
+    func close(_ page: BrowserPage) {
+        guard let index = pages.firstIndex(where: { $0 === page }) else { return }
+        guard pages.count > 1 else {
+            onClose?()
+            return
+        }
+        if !page.isBlank {
+            closed.append(ClosedBrowserTab(tab: page.tabState, index: index, history: page.historyData))
+            if closed.count > BrowserTabRules.closedLimit { closed.removeFirst() }
+        }
+        if page === activePage {
+            let rest = pages.filter { $0 !== page }
+            select(rest[BrowserTabRules.indexAfterClosing(index, count: pages.count)])
+        }
+        pages.removeAll { $0 === page }
+        forget(page)
+        refreshStrip()
+        saveState()
         needsLayout = true
     }
 
-    // MARK: - Navigation
-
-    func load(_ input: String) {
-        guard let url = BrowserAddress.normalize(input) else { return }
-        navigate(to: url)
+    private func forget(_ page: BrowserPage) {
+        page.close()
+        BrowserPageState.remove(page.id)
+        callers = callers.filter { $0.value != page.id }
     }
 
-    /// Loads a URL; on a remote machine, localhost first gets an SSH forward.
-    func navigate(to url: URL) {
-        showAddress(url)
-        guard let mapper = localhostMapper, LocalhostMapper.isLocalhost(url) else {
-            webView.load(URLRequest(url: url))
-            return
-        }
-        errorPage.isHidden = true
-        progress.isHidden = false
-        Task.detached {
-            let target = mapper.rewrite(url)
-            await MainActor.run {
-                if let target {
-                    self.webView.load(URLRequest(url: target))
-                } else {
-                    self.errorPage.show(error: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost), url: url)
-                    self.progress.isHidden = true
-                    self.needsLayout = true
-                }
-            }
+    func closeOthers(_ keep: BrowserPage) {
+        for page in pages where page !== keep { close(page) }
+    }
+
+    /// The pane is gone.
+    func closeAllPages() {
+        pages.forEach(forget)
+        closed.removeAll()
+    }
+
+    /// ⇧⌘T: the last closed tab, where it was, with its back/forward list.
+    func reopenClosed() {
+        guard let last = closed.popLast() else { return }
+        let page = BrowserPage(tab: last.tab, history: last.history, dataStore: dataStore, localhostMapper: localhostMapper)
+        page.pane = self
+        pages.insert(page, at: min(last.index, pages.count))
+        select(page)
+    }
+
+    /// ⌘-click and middle-click in a page.
+    func openLink(_ url: URL, from page: BrowserPage, background: Bool) {
+        newPage(url: url, select: !background, after: page, agent: page.openedByAgent)
+    }
+
+    /// A page asked for a window: WebKit loads it into the view we hand back.
+    /// A hidden page is an agent's, which mustn't take the screen.
+    func openPopup(_ configuration: WKWebViewConfiguration, from page: BrowserPage, background: Bool) -> BrowserPage? {
+        newPage(select: !background && page === activePage, after: page, agent: page.openedByAgent, popup: configuration)
+    }
+
+    /// A link from a terminal: the tab already on that page, else a new one.
+    func showLink(_ url: URL) {
+        if let existing = pages.first(where: { BrowserTabRules.samePage($0.address, url) }) {
+            select(existing)
+        } else if activePage.isBlank {
+            activePage.navigate(to: url)
+        } else {
+            newPage(url: url)
         }
     }
 
-    /// Links to the machine's localhost inside a page get the same forwarding.
-    func webView(_: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        if let mapper = localhostMapper, let url = action.request.url, action.targetFrame?.isMainFrame != false,
-           LocalhostMapper.isLocalhost(url), !mapper.isForwarded(url)
-        {
-            decisionHandler(.cancel)
-            navigate(to: url)
-            return
-        }
-        decisionHandler(.allow)
-    }
+    /// ⌘ held: each tab's shortcut on its tile.
+    func showTabHints(_ showing: Bool) { strip.showsHints = showing }
 
     // MARK: - Address bar
 
@@ -547,18 +652,10 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         address.currentEditor()?.selectAll(nil)
     }
 
-    /// The page moved on. What someone is typing is never touched: it's
-    /// only put back when they leave the field.
-    private func showAddress(_ url: URL?) {
-        pageAddress = url
-        if !isEditingAddress { renderAddress() }
-        updateSecurity()
-    }
-
     /// At rest: the host bright, the rest dim, shortened to fit. A local
     /// page's port is part of the bright part, since it names the site.
     private func renderAddress() {
-        guard let pageAddress else {
+        guard let pageAddress = activePage.address else {
             address.stringValue = ""
             return
         }
@@ -575,14 +672,14 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// here as it starts).
     private func addressGainedFocus() {
         address.textColor = .labelColor
-        address.stringValue = pageAddress?.absoluteString ?? ""
+        address.stringValue = activePage.address?.absoluteString ?? ""
         needsLayout = true
     }
 
     /// Left without Return: back to the page's address. With no page yet,
     /// what was typed stays, in case the click away was to go copy something.
     private func addressLostFocus() {
-        if pageAddress != nil { renderAddress() }
+        if !activePage.isBlank { renderAddress() }
         needsLayout = true
     }
 
@@ -590,7 +687,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// field; the next returns to the page. Nothing to undo goes straight there.
     func control(_: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard selector == #selector(cancelOperation(_:)) || selector == #selector(NSTextView.complete(_:)) else { return false }
-        let original = pageAddress?.absoluteString ?? ""
+        let original = activePage.address?.absoluteString ?? ""
         if textView.string != original {
             textView.string = original
             textView.selectAll(nil)
@@ -606,9 +703,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     }
 
     private func updateSecurity() {
-        let state = navigationPending || !errorPage.isHidden
-            ? BrowserAddress.Security.quiet
-            : BrowserAddress.security(of: pageAddress, onlySecureContent: webView.hasOnlySecureContent)
+        let state = activePage.security
         guard state != securityState else { return }
         securityState = state
         let (symbol, tip, tint): (String, String, NSColor) = switch state {
@@ -624,51 +719,51 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         needsLayout = true
     }
 
-    @objc private func goBackClicked() { webView.goBack() }
-    @objc private func goForwardClicked() { webView.goForward() }
-    /// The ↻ in the address bar: stops a load in progress, else reloads.
-    @objc private func reloadPage() {
-        if webView.isLoading {
-            webView.stopLoading()
-        } else {
-            reloadAgain()
-        }
-    }
+    // MARK: - The active page
 
-    /// ⌘R: loads the page again, even mid-load. After a failed load, the
-    /// address that failed.
-    func reloadAgain() {
-        if webView.url == nil || !errorPage.isHidden, let pageAddress {
-            navigate(to: pageAddress)
-        } else {
-            webView.reload()
-        }
-    }
-
-    /// ⇧⌘R: everything fetched again, for checking a dev server's assets.
-    func reloadWithoutCache() {
-        if webView.url == nil || !errorPage.isHidden { return reloadAgain() }
-        webView.reloadFromOrigin()
-    }
-
+    func load(_ input: String) { activePage.load(input) }
+    func navigate(to url: URL) { activePage.navigate(to: url) }
+    func reloadAgain() { activePage.reload() }
+    func reloadWithoutCache() { activePage.reloadWithoutCache() }
     func stopLoading() { webView.stopLoading() }
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
+    var isLoading: Bool { activePage.isLoading }
 
-    var isLoading: Bool { webView.isLoading }
+    @objc private func goBackClicked() { goBack() }
+    @objc private func goForwardClicked() { goForward() }
 
-    @objc private func closePane() { onClose?() }
+    /// The ↻ in the address bar: stops a load in progress, else reloads.
+    @objc private func reloadClicked() {
+        if isLoading { stopLoading() } else { reloadAgain() }
+    }
 
-    /// The real URL: a remote page's forwarded port reaches it from any
-    /// browser on this Mac, where its localhost wouldn't.
+    /// The pane's ×. ⇧⌘T only brings back single tabs, so a pane of several
+    /// asks first.
+    @objc private func closeClicked() {
+        guard pages.count > 1, let window else {
+            onClose?()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Close this pane and its \(pages.count) tabs?"
+        alert.informativeText = "Closed tabs can be reopened with ⇧⌘T, but a closed pane can’t."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Pane")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.onClose?() }
+        }
+    }
+
     func openInDefaultBrowser() {
-        if let url = webView.url { NSWorkspace.shared.open(url) }
+        if let url = activePage.realURL { NSWorkspace.shared.open(url) }
     }
 
     func copyAddress() {
-        guard let pageAddress else { return }
+        guard let url = activePage.address else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(pageAddress.absoluteString, forType: .string)
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 
     /// ⌘+ ⌘− (±1) and ⌘0 (0).
@@ -678,137 +773,11 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     private var zoomPercent: Int { Int((webView.pageZoom * 100).rounded()) }
 
-    private func updateButtons() {
-        back.isEnabled = webView.canGoBack
-        forward.isEnabled = webView.canGoForward
-    }
-
-    private func pageChanged() {
-        // Forwarded remote pages show (and save) their localhost address.
-        let shown = webView.url.map { localhostMapper?.display($0) ?? $0 }
-        if let shown, errorPage.isHidden { showAddress(shown) }
-        var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
-        state.url = shown?.absoluteString ?? state.url
-        state.title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
-        state.audible = isAudible
-        HostPaneStore.shared[hostID] = state
-        onStateChange?(state)
-        WebExtensions.tabChanged(self)
-    }
-
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         if ProcessInfo.processInfo.environment["BIGTTY_TRACE_BROWSER"] != nil {
             NSLog("bigtty-trace: browser \(hostID) superview=\(String(describing: superview)) \(Thread.callStackSymbols.prefix(8).joined(separator: " | "))")
         }
-    }
-
-    // MARK: - Console and load state
-
-    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.name == "bttyFullscreen" {
-            pageFullscreen = (message.body as? Bool) == true
-            return
-        }
-        if message.name == "bttyMedia" {
-            let frame = message.frameInfo.isMainFrame ? "main" : message.frameInfo.request.url?.absoluteString ?? "frame"
-            audibleFrames[frame] = (message.body as? Bool) == true ? true : nil
-            isAudible = !audibleFrames.isEmpty
-            return
-        }
-        guard let body = message.body as? [String: Any] else { return }
-        console.append(ConsoleEntry(
-            level: body["level"] as? String ?? "log", text: body["text"] as? String ?? "", date: Date()
-        ))
-        if console.count > 500 { console.removeFirst(console.count - 500) }
-    }
-
-    func clearConsole() { console.removeAll() }
-
-    /// After starting a load: waits for it to begin, then to finish, so the
-    /// caller sees the new page's URL and title.
-    func waitForNavigation(timeout: TimeInterval) async {
-        let start = Date()
-        while !webView.isLoading, webView.title?.isEmpty ?? true, Date().timeIntervalSince(start) < 1 {
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        await waitForLoad(timeout: max(0, timeout - Date().timeIntervalSince(start)))
-        // WebKit publishes the title a moment after the load finishes.
-        let titleDeadline = Date().addingTimeInterval(0.5)
-        while webView.title?.isEmpty ?? true, Date() < titleDeadline {
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-    }
-
-    /// Waits for the page to finish loading, up to `timeout` seconds.
-    func waitForLoad(timeout: TimeInterval) async {
-        guard webView.isLoading else { return }
-        await withCheckedContinuation { continuation in
-            loadWaiters.append(continuation)
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in self?.finishLoad() }
-        }
-    }
-
-    private func finishLoad() {
-        let waiters = loadWaiters
-        loadWaiters.removeAll()
-        for waiter in waiters { waiter.resume() }
-    }
-
-    func webView(_: WKWebView, didCommit _: WKNavigation!) {
-        navigationPending = false
-        updateSecurity()
-        pageFullscreen = false
-        // A new page: its old media is gone.
-        audibleFrames.removeAll()
-        isAudible = false
-    }
-
-    func webView(_: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
-        lastNavigationError = nil
-        navigationPending = true
-        updateSecurity()
-    }
-
-    func webView(_: WKWebView, didFinish _: WKNavigation!) {
-        finishLoad()
-        finderStorage?.pageLoaded()
-    }
-
-    func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        lastNavigationError = error.localizedDescription
-        navigationPending = false
-        updateSecurity()
-        finishLoad()
-    }
-
-    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        lastNavigationError = error.localizedDescription
-        navigationPending = false
-        finishLoad()
-        let nsError = error as NSError
-        guard nsError.code != NSURLErrorCancelled else {
-            // Stopped, or superseded: the page on screen is still this one.
-            pageChanged()
-            return updateSecurity()
-        }
-        let failing = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? pageAddress
-        errorPage.show(error: nsError, url: failing)
-        // Keep the address that failed, not the page underneath.
-        if let failing { showAddress(localhostMapper?.display(failing) ?? failing) }
-        updateSecurity()
-        needsLayout = true
-    }
-
-    // MARK: - WKUIDelegate
-
-    /// `target=_blank` and `window.open` load in this pane.
-    func webView(
-        _ webView: WKWebView, createWebViewWith _: WKWebViewConfiguration,
-        for action: WKNavigationAction, windowFeatures _: WKWindowFeatures
-    ) -> WKWebView? {
-        if action.targetFrame == nil { webView.load(action.request) }
-        return nil
     }
 
     // MARK: - Focus
@@ -817,16 +786,6 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let hit = super.hitTest(point)
         if hit != nil, [.leftMouseDown, .rightMouseDown].contains(NSApp.currentEvent?.type) { onFocus?() }
         return hit
-    }
-}
-
-/// WKUserContentController retains its handlers; this breaks the cycle.
-private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var target: WKScriptMessageHandler?
-    init(_ target: WKScriptMessageHandler) { self.target = target }
-
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        target?.userContentController(controller, didReceive: message)
     }
 }
 

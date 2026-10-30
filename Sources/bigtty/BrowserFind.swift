@@ -14,7 +14,7 @@ import WebKit
 final class BrowserFinder: FindDriver {
     private weak var browser: BrowserPaneView?
     var onFindStatus: ((FindStatus) -> Void)?
-    var findBarInset: CGFloat { BrowserPaneView.toolbarHeight }
+    var findBarInset: CGFloat { browser?.chromeHeight ?? BrowserPaneView.toolbarHeight }
     var findsUpward: Bool { false }
     var findFocusView: NSView { browser?.webView ?? NSView() }
 
@@ -54,6 +54,9 @@ final class BrowserFinder: FindDriver {
         reset()
     }
 
+    /// The tab under the open bar is about to change: clear its highlights.
+    func pageHidden() { reset() }
+
     /// A new page loaded under the open bar: search it too.
     func pageLoaded() {
         guard !query.isEmpty else { return }
@@ -63,7 +66,7 @@ final class BrowserFinder: FindDriver {
 
     func selectionForFind(_ done: @escaping (String?) -> Void) {
         // In the app's world: the page can't swap getSelection out.
-        browser?.webView.evaluateJavaScript("String(window.getSelection() || '')", in: nil, in: BrowserPaneView.automationWorld) { result in
+        browser?.webView.evaluateJavaScript("String(window.getSelection() || '')", in: nil, in: BrowserPage.automationWorld) { result in
             MainActor.assumeIsolated { done((try? result.get() as? String).flatMap { $0.isEmpty ? nil : $0 }) }
         }
     }
@@ -100,7 +103,7 @@ final class BrowserFinder: FindDriver {
         if options.contains(.noIndexChange) {
             // Find starts from the selection: collapsed to its start, the
             // same match is found again.
-            webView.evaluateJavaScript("try { window.getSelection().collapseToStart() } catch (_) {}", in: nil, in: BrowserPaneView.automationWorld) { _ in }
+            webView.evaluateJavaScript("try { window.getSelection().collapseToStart() } catch (_) {}", in: nil, in: BrowserPage.automationWorld) { _ in }
         }
         callbacks.attach(to: webView) { [weak self] matches in
             guard let self, generation == self.generation else { return }

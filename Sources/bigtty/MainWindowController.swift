@@ -108,6 +108,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 guard let self else { return false }
                 if self.sheetConsumes(event) { return true }
                 if self.paneKeyConsumes(event) { return true }
+                if self.pageTabKeyConsumes(event) { return true }
                 // Letting go of ⌃ or ⌘ ends a ⌃⌘Tab walk through recent spaces.
                 if event.type == .flagsChanged, Self.cycle != nil,
                    event.modifierFlags.intersection([.command, .control]) != [.command, .control] {
@@ -331,6 +332,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         for (id, view) in paneViews {
             let index = order.firstIndex(of: id)
             view.hintBadge = showing ? index.flatMap { $0 < 9 ? "\(Settings.paneKeys.symbols)\($0 + 1)" : nil } : nil
+            view.browser?.showTabHints(showing)
         }
         sidebar.update(sidebarModel())
     }
@@ -388,6 +390,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
               event.modifierFlags.intersection([.command, .option, .control, .shift]) == Settings.paneKeys.modifiers,
               let key = event.charactersIgnoringModifiers, let n = Int(key), (1...9).contains(n) else { return false }
         selectPaneByNumber(String(n))
+        return true
+    }
+
+    /// ⌃⌥1…⌃⌥9: the focused browser's page tabs. Caught here for the same
+    /// reason, and only with tabs to reach: a terminal app can have these.
+    private func pageTabKeyConsumes(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.control, .option],
+              let key = event.charactersIgnoringModifiers, let n = Int(key),
+              let browser = focusedBrowser, browser.pages.count > 1 else { return false }
+        if !browser.selectNumber(n) { NSSound.beep() }
         return true
     }
 
@@ -550,7 +563,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             pendingFocus = nil
             lastFocusedPane = target
             if let browser = view.browser {
-                if pendingAddressFocus, browser.webView.url == nil {
+                if pendingAddressFocus, browser.activePage.isBlank {
                     pendingAddressFocus = false
                     browser.focusAddressBar()
                 } else {
@@ -1462,7 +1475,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         if let browserPane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
            let browser = paneViews[browserPane.paneID]?.browser
         {
-            browser.load(url)
+            if let link = BrowserAddress.normalize(url) { browser.showLink(link) }
             return
         }
         HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.hostTag), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
@@ -2099,6 +2112,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// Asks first when an agent is still working or waiting in the pane.
     @objc func closePane(_: Any?) {
+        // ⌘W in a browser closes one page; the pane goes with its last.
+        if let browser = focusedBrowser, browser.pages.count > 1 { return browser.close(browser.activePage) }
         guard let id = focusedPaneID, let pane = store.pane(id) else { return }
         let busy = (pane.agent != nil || pane.displayAgent != nil) && (pane.agentStatus == .working || pane.agentStatus == .blocked)
         guard busy, let window else {
@@ -2163,6 +2178,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     @objc func newTab(_: Any?) {
+        // A focused browser takes ⌘T as a browser does.
+        if let focusedBrowser { return focusedBrowser.newTab() }
         guard let workspaceID else { return }
         tabID = nil
         store.perform { try await $0.createTab(workspaceID: workspaceID) }
@@ -2175,6 +2192,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     @objc func nextTab(_: Any?) { cycleTab(by: 1) }
     @objc func previousTab(_: Any?) { cycleTab(by: -1) }
+
+    @objc func nextPageTab(_: Any?) { cyclePageTab(by: 1) }
+    @objc func previousPageTab(_: Any?) { cyclePageTab(by: -1) }
+
+    /// ⇧⌘] and ⇧⌘[: page tabs if the focused browser has any, else tabs.
+    private func cyclePageTab(by offset: Int) {
+        if let browser = focusedBrowser, browser.pages.count > 1 {
+            browser.cycleTabs(by: offset)
+        } else {
+            cycleTab(by: offset)
+        }
+    }
 
     private func cycleTab(by offset: Int) {
         guard let workspaceID else { return }
@@ -2282,6 +2311,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func browserStop(_: Any?) { focusedBrowser?.stopLoading() }
     @objc func browserOpenInDefaultBrowser(_: Any?) { focusedBrowser?.openInDefaultBrowser() }
     @objc func browserCopyAddress(_: Any?) { focusedBrowser?.copyAddress() }
+    @objc func reopenClosedTab(_: Any?) { focusedBrowser?.reopenClosed() }
 
     /// Debug hook: opens the find bar of the pane in focus and searches.
     @objc func debugFind(_ sender: Any?) {
@@ -2933,6 +2963,12 @@ extension MainWindowController: NSMenuItemValidation {
         case #selector(PaneActions.browserReloadWithoutCache(_:)), #selector(PaneActions.browserOpenInDefaultBrowser(_:)),
              #selector(PaneActions.browserCopyAddress(_:)):
             return focusedBrowser != nil
+        case #selector(PaneActions.reopenClosedTab(_:)):
+            return focusedBrowser?.closed.isEmpty == false
+        case #selector(PaneActions.closePane(_:)):
+            item.title = (focusedBrowser?.pages.count ?? 0) > 1 ? "Close Page Tab" : "Close Pane"
+        case #selector(PaneActions.newTab(_:)):
+            item.title = focusedBrowser != nil ? "New Page Tab" : "New Tab"
         default:
             break
         }

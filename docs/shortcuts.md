@@ -12,7 +12,7 @@
 | ⌃⌘ arrows | Resize pane |
 | ⌥⌘P | Pin / unpin the pane (it follows you between spaces) |
 | ⌃⌥⌘1–9 · ⌘K ▸ Move Pane to… | Move the pane to space N · to any space or tab |
-| ⌘T · ⌥⌘T · ⌘N · ⇧⌘N | New tab · new browser tab · new space · new window |
+| ⌘T · ⌥⌘T · ⌘N · ⇧⌘N | New tab (a page tab in a browser) · new browser tab · new space · new window |
 | ⌥⌘B · ⇧⌥⌘B · ⌘L | Split with browser · browser here · address bar |
 | ⌥⌘F · ⇧⌥⌘F · ⌥⌘G | Split with files · files here · git changes |
 | ⌘W · ⌥⌘W | Close pane · close tab |
@@ -25,6 +25,8 @@
 | ⇧⌘R · ⌘. | Reload the page without its cache · stop loading |
 | ⌘← · ⌘→ | Back · forward in a browser page (the page gets the key first) |
 | ⇧⌘O · ⇧⌘C | Open the page in your default browser · copy its address |
+| ⌃⌥1–9 · ⇧⌘] / ⇧⌘[ | Page tab by number · next / previous page tab |
+| ⌘W · ⇧⌘T | Close the page tab (the pane with its last) · reopen a closed one |
 | ⌘V | Paste (an image pastes as a file the agent can attach) |
 | ⌘, | Settings |
 | Hold ⌘Q | Quit (a quick press only shows the hint, so a slip doesn't close bigtty) |

@@ -63,7 +63,7 @@ final class BrowserRegistry {
 
     func noteFocus(_ hostID: String) {
         lastFocused = hostID
-        if let view = views[hostID] { WebExtensions.tabActivated(view) }
+        if let view = views[hostID] { WebExtensions.tabActivated(view.activePage) }
     }
 
     /// Drops views whose herdr pane is gone.
@@ -71,13 +71,24 @@ final class BrowserRegistry {
         for (id, view) in views where !live.contains(id) && HostPaneStore.shared[id] == nil {
             view.removeFromSuperview()
             views.removeValue(forKey: id)
-            WebExtensions.tabClosed(view)
+            view.closeAllPages()
         }
         if let lastFocused, views[lastFocused] == nil { self.lastFocused = nil }
     }
 
     var all: [(id: String, view: BrowserPaneView)] {
         views.map { ($0.key, $0.value) }.sorted { $0.id < $1.id }
+    }
+
+    /// Every page with a web view, for extensions, which see each as a tab.
+    var livePages: [BrowserPage] { all.flatMap(\.view.pages).filter(\.hasWebView) }
+
+    /// The browser the user last touched.
+    var focused: BrowserPaneView? { lastFocused.flatMap { views[$0] } }
+
+    /// Writes each tab's back/forward list down, before quitting.
+    func saveHistory() {
+        for page in livePages { page.saveHistory() }
     }
 }
 

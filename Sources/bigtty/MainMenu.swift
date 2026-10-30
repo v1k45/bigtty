@@ -60,6 +60,9 @@ import AppKit
     func browserStop(_ sender: Any?)
     func browserOpenInDefaultBrowser(_ sender: Any?)
     func browserCopyAddress(_ sender: Any?)
+    func reopenClosedTab(_ sender: Any?)
+    func nextPageTab(_ sender: Any?)
+    func previousPageTab(_ sender: Any?)
 }
 
 /// The menu bar. A disabled item still swallows its key, which won't do for
@@ -118,6 +121,7 @@ enum MainMenu {
         item(file, "New Space in Folder…", #selector(PaneActions.newWorkspace(_:)), "n", [.command, .option])
         item(file, "New Tab", #selector(PaneActions.newTab(_:)), "t")
         item(file, "New Browser Tab", #selector(PaneActions.newBrowserTab(_:)), "t", [.command, .option])
+        main.contextual.append(item(file, "Reopen Closed Tab", #selector(PaneActions.reopenClosedTab(_:)), "t", [.command, .shift]))
         item(file, "New Window", #selector(AppDelegate.newWindow(_:)), "n", [.command, .shift])
         item(file, "New Session…", #selector(PaneActions.newSession(_:)), "n", [.command, .control])
         file.addItem(.separator())
@@ -231,11 +235,12 @@ enum MainMenu {
         main.contextual.append(item(tabs, "Forward", #selector(PaneActions.browserForward(_:)), arrow(.rightArrow)))
         tabs.addItem(.separator())
         // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and
-        // browsers; ⌘⇧] / ⌘⇧[ kept as alternates.
+        // browsers; ⌘⇧] / ⌘⇧[ kept as alternates, which walk a focused
+        // browser's page tabs first.
         item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "\t", [.control])
         item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "\t", [.control, .shift])
-        alternate(item(tabs, "Next Tab", #selector(PaneActions.nextTab(_:)), "]", [.command, .shift]))
-        alternate(item(tabs, "Previous Tab", #selector(PaneActions.previousTab(_:)), "[", [.command, .shift]))
+        alternate(item(tabs, "Next Tab", #selector(PaneActions.nextPageTab(_:)), "]", [.command, .shift]))
+        alternate(item(tabs, "Previous Tab", #selector(PaneActions.previousPageTab(_:)), "[", [.command, .shift]))
         let tabNumbers = NSMenu(title: "Tab")
         let tabNumbersItem = NSMenuItem(title: "Tab", action: nil, keyEquivalent: "")
         tabNumbersItem.submenu = tabNumbers

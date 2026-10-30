@@ -19,8 +19,9 @@ enum AgentSkill {
 
         ## Loop
 
-        1. `btty browser open http://localhost:3000` — opens a browser pane beside you
-           (or reuses this tab's browser). Prints `id  url  title`.
+        1. `btty browser open http://localhost:3000` — opens a browser pane beside you,
+           or a page tab of this tab's browser, and that tab stays yours: later
+           commands go to it even if the user switches tabs. Prints `id  url  title`.
         2. `btty browser snapshot -i` — interactive elements with refs:
            `- textbox "Email" [ref=e3]`, `- button "Sign in" [ref=e5]`.
            Drop `-i` for the full page structure and text.
@@ -30,7 +31,8 @@ enum AgentSkill {
 
         ## Commands
 
-        - `open [url] [--new]`, `navigate <url>`, `back`, `forward`, `reload`, `list`
+        - `open [url] [--background] [--new]`, `navigate <url>`, `back`, `forward`, `reload`, `list`
+        - `tab list`, `tab new [url] [--background]`, `tab switch <n|id>`, `tab close [n|id]`
         - `snapshot [-i] [--selector S]`
         - `click|dblclick|hover|highlight <target>`, `check|uncheck <target>`
         - `fill <target> <text>`, `type <target> <text>`, `press <key> [target]`
@@ -41,8 +43,9 @@ enum AgentSkill {
         - `screenshot [path]` → PNG path; read it to see the page
         - `console [--clear]` — console output and page errors since load
 
-        Add `--json` for machine-readable output and `--browser <id>` to pick a
-        pane from `list`. Exit code 3 means bigtty isn't running.
+        Add `--json` for machine-readable output, `--browser <id>` to pick a pane
+        from `list` and `--tab <n|id>` to pick a page tab from `tab list`. Tabs you
+        don't need any more are yours to close. Exit code 3 means bigtty isn't running.
 
         ## Pinging the user
 

@@ -130,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationWillTerminate(_: Notification) {
         controlServer?.stop()
+        BrowserRegistry.shared.saveHistory()
         // Terminal channels release control on deinit; herdr keeps the panes.
         windows.removeAll()
         for machine in manager.all { machine.disconnect() }
@@ -560,6 +561,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             showSpace(space)
         case let .pane(machineID, pane):
             if let machine = manager.machine(machineID) { reveal(pane, on: machine) }
+        case let .browserTab(machineID, pane, tab):
+            if let machine = manager.machine(machineID) { reveal(pane, on: machine) }
+            if let browser = pane.hostID.flatMap(BrowserRegistry.shared.existing), let page = browser.page(id: tab) { browser.select(page) }
         case let .machine(id):
             guard let machine = manager.machine(id) else { return }
             if machine.status == .connected, let first = machine.store?.snapshot.workspaces.first {

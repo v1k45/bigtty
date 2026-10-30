@@ -24,6 +24,10 @@ struct HostPaneState: Codable, Equatable {
     var showsTree: Bool?
     /// A browser pane is playing sound (shown on the tab and pane title).
     var audible: Bool?
+    /// A browser pane's page tabs. `url` and `title` mirror the active one:
+    /// herdr tags, remote placeholders and other Macs only know that page.
+    var tabs: [BrowserTabState]?
+    var activeTab: String?
     /// A line to reveal once (from `btty open file:line`); not persisted meaningfully.
     var line: Int?
     /// The herdr pane last seen hosting it, to re-tag after a server restart.
@@ -299,7 +303,9 @@ final class HostPaneStore {
 
     static func hostTitle(_ state: HostPaneState) -> String {
         switch state.kind {
-        case .browser: (state.audible == true ? "🔊 " : "🌐 ") + (state.title ?? state.url ?? "Browser")
+        case .browser:
+            (state.audible == true ? "🔊 " : "🌐 ") + (state.title ?? state.url ?? "Browser")
+                + (state.tabs.map { $0.count > 1 ? " +\($0.count - 1)" : "" } ?? "")
         case .files, .diff:
             (state.mode == "changes" || (state.mode == nil && state.kind == .diff) ? "± " : "📁 ")
                 + ((state.selection ?? state.path).map { ($0 as NSString).lastPathComponent } ?? "Files")

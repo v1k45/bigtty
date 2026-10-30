@@ -11,6 +11,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case machine(String)
         case space(SpaceRef)
         case pane(String, Pane)
+        /// One page tab of a browser pane.
+        case browserTab(String, Pane, String)
         case newSpace
         case connectMachine
         /// A herdr session on this Mac (nil: the default one).
@@ -219,9 +221,21 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             case .done: "finished"
             case nil: agent != nil ? pane.agentStatus.rawValue : ""
             }
+            let detail = [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · ")
+            // A browser of several tabs gets a row per page.
+            if kind == .browser, let tabs = HostPaneStore.shared[pane.hostID ?? ""]?.tabs, tabs.count > 1 {
+                for tab in tabs {
+                    let name = tab.title ?? tab.url ?? "New Tab"
+                    items.append(Item(
+                        section: "Panes", title: name, detail: detail, symbol: symbol, alert: false,
+                        target: .browserTab(machine.id, pane, tab.id),
+                        haystack: "\(name) \(tab.url ?? "") \(space)".lowercased()
+                    ))
+                }
+                continue
+            }
             items.append(Item(
-                section: agent != nil ? "Agents" : "Panes", title: title,
-                detail: [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · "),
+                section: agent != nil ? "Agents" : "Panes", title: title, detail: detail,
                 symbol: symbol, alert: reason == .blocked, target: .pane(machine.id, pane),
                 haystack: "\(title) \(agent ?? "") \(pane.terminalTitle ?? "") \(space) \(pane.foregroundCwd ?? pane.cwd ?? "")".lowercased()
             ))

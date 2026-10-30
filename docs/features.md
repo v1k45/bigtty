@@ -134,6 +134,15 @@ page. A remote pane names its machine, so its `localhost` isn't mistaken for
 this Mac's. Right-click ‹ or › for history. The ⋯ menu (or a right-click on the
 toolbar) holds the page's actions, zoom, extensions and browser settings.
 
+**Page tabs.** ⌘T in a browser opens a page tab, and the tab row appears at two.
+A narrow pane folds it into a count button. ⌘-click or middle-click opens a link
+in the background, and a page's new windows (OAuth popups too) are tabs. ⌘W
+closes a tab, ⇧⌘T brings it back, and ⌃⌥1–9 or ⇧⌘] / ⇧⌘[ move between tabs. Tabs
+come back after a restart with their back/forward lists and scroll position, and
+only the tab showing loads. Each page has a row in ⌘K. Terminal links reuse the
+tab already on that page, else open one. Other Macs on the same herdr session
+see the tab showing, not the rest.
+
 **Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
 15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
 unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.
