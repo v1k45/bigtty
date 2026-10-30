@@ -324,8 +324,8 @@ enum AutomationScript {
         }
       }
 
-      async function waitFor(options = {}) {
-        const deadline = Date.now() + (options.timeout || 10000);
+      // One check: the app polls, since a hidden tab's timers barely run.
+      function checkWait(options = {}) {
         const test = () => {
           if (options.selector) {
             const el = document.querySelector(options.selector);
@@ -339,11 +339,7 @@ enum AutomationScript {
           if (options.fn) return !!(0, eval)(options.fn);
           return true;
         };
-        while (Date.now() < deadline) {
-          try { if (test()) return true; } catch {}
-          await new Promise(r => setTimeout(r, 100));
-        }
-        throw new Error("timed out waiting for " + JSON.stringify(options));
+        try { return !!test(); } catch { return false; }
       }
 
       function highlight(target) {
@@ -355,7 +351,7 @@ enum AutomationScript {
         return true;
       }
 
-      globalThis.__btty = { snapshot, resolve, click, fill, type, press, hover, select, check, scroll, get, waitFor, highlight };
+      globalThis.__btty = { snapshot, resolve, click, fill, type, press, hover, select, check, scroll, get, checkWait, highlight };
     })();
     """#
 

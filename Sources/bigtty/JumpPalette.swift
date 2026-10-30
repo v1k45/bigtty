@@ -11,6 +11,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case machine(String)
         case space(SpaceRef)
         case pane(String, Pane)
+        /// One page tab of a browser pane.
+        case browserTab(String, Pane, String)
         case newSpace
         case connectMachine
         /// A herdr session on this Mac (nil: the default one).
@@ -53,6 +55,8 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         var dismiss: (@MainActor () -> Void)? = nil
         var undismiss: (@MainActor () -> Void)? = nil
         var id: String? = nil
+        /// Too many to list until something is typed.
+        var onlyWhenSearching = false
     }
 
     private enum Row {
@@ -102,6 +106,19 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         }
         TerminalIndex.shared.refresh(manager.all)
         present(placeholder: Self.jumpPlaceholder)
+    }
+
+    /// Pages from browser history, found by typing.
+    func addPages(_ pages: [BrowserVisit], open: @escaping @MainActor (URL) -> Void) {
+        guard choosing == nil else { return }
+        items += pages.compactMap { visit in
+            URL(string: visit.url).map { url in
+                let name = visit.title.isEmpty ? BrowserSuggestions.displayed(url) : visit.title
+                return Item(section: "History", title: name, detail: BrowserSuggestions.bare(BrowserSuggestions.displayed(url)), symbol: "clock", alert: false,
+                            target: .perform { open(url) }, haystack: "\(name) \(visit.url)".lowercased(), onlyWhenSearching: true)
+            }
+        }
+        filter()
     }
 
     private static let jumpPlaceholder = "Jump to a space, agent or pane, or search terminal output"
@@ -219,9 +236,21 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             case .done: "finished"
             case nil: agent != nil ? pane.agentStatus.rawValue : ""
             }
+            let detail = [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · ")
+            // A browser of several tabs gets a row per page.
+            if kind == .browser, let tabs = HostPaneStore.shared[pane.hostID ?? ""]?.tabs, tabs.count > 1 {
+                for tab in tabs {
+                    let name = tab.title ?? tab.url ?? "New Tab"
+                    items.append(Item(
+                        section: "Panes", title: name, detail: detail, symbol: symbol, alert: false,
+                        target: .browserTab(machine.id, pane, tab.id),
+                        haystack: "\(name) \(tab.url ?? "") \(space)".lowercased()
+                    ))
+                }
+                continue
+            }
             items.append(Item(
-                section: agent != nil ? "Agents" : "Panes", title: title,
-                detail: [space, agent ?? "", status].filter { !$0.isEmpty }.joined(separator: " · "),
+                section: agent != nil ? "Agents" : "Panes", title: title, detail: detail,
                 symbol: symbol, alert: reason == .blocked, target: .pane(machine.id, pane),
                 haystack: "\(title) \(agent ?? "") \(pane.terminalTitle ?? "") \(space) \(pane.foregroundCwd ?? pane.cwd ?? "")".lowercased()
             ))
@@ -235,7 +264,10 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         // item (folder, branch, machine) counts less.
         var matched: [(Item, Int)] = []
         for item in items {
-            guard !query.isEmpty else { matched.append((item, 0)); continue }
+            guard !query.isEmpty else {
+                if !item.onlyWhenSearching { matched.append((item, 0)) }
+                continue
+            }
             if let result = FuzzyMatch.matchWords(query, in: item.title) {
                 var hit = item
                 hit.highlights = Self.ranges(result.positions)
@@ -271,7 +303,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             }
         }
         // Waiting agents first within their section.
-        let order = choosing ?? ["Sessions", "Machines", "Spaces", "Agents", "Panes", "In Terminals", "Actions"]
+        let order = choosing ?? ["Sessions", "Machines", "Spaces", "Agents", "Panes", "History", "In Terminals", "Actions"]
         let all = matched.map(\.0) + terminal
         rows = []
         for section in order {
@@ -280,7 +312,7 @@ final class JumpPalette: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             guard !group.isEmpty else { continue }
             rows.append(.header(section))
             // Choosing (Needs You, Move Pane to…) lists everything offered.
-            let cap = choosing != nil ? Int.max : section == "Panes" ? 6 : section == "In Terminals" ? 8 : 12
+            let cap = choosing != nil ? Int.max : section == "Panes" ? 6 : ["In Terminals", "History"].contains(section) ? 8 : 12
             rows += group.prefix(cap).map { .item($0) }
         }
         // With a query, the best match leads regardless of section.

@@ -108,6 +108,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 guard let self else { return false }
                 if self.sheetConsumes(event) { return true }
                 if self.paneKeyConsumes(event) { return true }
+                if self.pageTabKeyConsumes(event) { return true }
                 // Letting go of ⌃ or ⌘ ends a ⌃⌘Tab walk through recent spaces.
                 if event.type == .flagsChanged, Self.cycle != nil,
                    event.modifierFlags.intersection([.command, .control]) != [.command, .control] {
@@ -331,6 +332,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         for (id, view) in paneViews {
             let index = order.firstIndex(of: id)
             view.hintBadge = showing ? index.flatMap { $0 < 9 ? "\(Settings.paneKeys.symbols)\($0 + 1)" : nil } : nil
+            view.browser?.showTabHints(showing)
         }
         sidebar.update(sidebarModel())
     }
@@ -391,18 +393,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         return true
     }
 
+    /// ⌃⌥1…⌃⌥9: the focused browser's page tabs. Caught here for the same
+    /// reason, and only with tabs to reach: a terminal app can have these.
+    private func pageTabKeyConsumes(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.control, .option],
+              let key = event.charactersIgnoringModifiers, let n = Int(key),
+              let browser = focusedBrowser, browser.pages.count > 1 else { return false }
+        if !browser.selectNumber(n) { NSSound.beep() }
+        return true
+    }
+
     /// Debug hook: "chars mods" (mods from o/c/m/s) as a key press through
-    /// the window's normal event path, e.g. "2 o" for ⌥2.
+    /// the window's normal event path, e.g. "2 o" for ⌥2. "return", "esc",
+    /// "down" and "up" name those keys.
     @objc func debugKey(_ sender: Any?) {
         let parts = (sender as? String)?.split(separator: " ").map(String.init) ?? []
-        guard let chars = parts.first, let window else { return }
+        guard let name = parts.first, let window else { return }
+        let named: [String: (String, UInt16)] = [
+            "return": ("\r", 36), "esc": ("\u{1b}", 53),
+            "down": (String(UnicodeScalar(UInt16(NSDownArrowFunctionKey))!), 125),
+            "up": (String(UnicodeScalar(UInt16(NSUpArrowFunctionKey))!), 126),
+        ]
+        let (chars, keyCode) = named[name] ?? (name, 0)
         var flags: NSEvent.ModifierFlags = []
         for ch in parts.count > 1 ? parts[1] : "" {
             switch ch { case "o": flags.insert(.option); case "c": flags.insert(.control); case "m": flags.insert(.command); case "s": flags.insert(.shift); default: break }
         }
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil, characters: chars,
-                                           charactersIgnoringModifiers: chars, isARepeat: false, keyCode: 0) else { return }
+                                           charactersIgnoringModifiers: chars, isARepeat: false, keyCode: keyCode) else { return }
         window.sendEvent(event)
     }
 
@@ -550,7 +570,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             pendingFocus = nil
             lastFocusedPane = target
             if let browser = view.browser {
-                if pendingAddressFocus, browser.webView.url == nil {
+                if pendingAddressFocus, browser.activePage.isBlank {
                     pendingAddressFocus = false
                     browser.focusAddressBar()
                 } else {
@@ -1350,6 +1370,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         drop(parts[0], on: parts[1] == "tab" ? .tabEdge(zone) : .pane(parts[1], zone))
     }
 
+    private func spaceLabel(ofPane id: String) -> String? {
+        store.pane(id).flatMap { store.workspace($0.workspaceID)?.label }
+    }
+
+    /// Open pages across this machine's spaces, and this space's dev servers.
+    private func suggestionSources(forPane id: String, hostID: String) -> BrowserSuggestionSources {
+        let workspace = store.pane(id)?.workspaceID
+        var sources = BrowserSuggestionSources()
+        sources.ports = workspace.flatMap { machine.spaceInfo?.info[$0]?.ports } ?? []
+        let showing = BrowserRegistry.shared.existing(hostID)?.activePage.id
+        for pane in store.snapshot.panes where pane.hostKind == .browser {
+            guard let host = pane.hostID, let state = HostPaneStore.shared[host] else { continue }
+            let place = store.workspace(pane.workspaceID)?.label ?? ""
+            for tab in state.tabs ?? [BrowserTabState(id: "", url: state.url, title: state.title)] where !(host == hostID && tab.id == showing) {
+                guard let url = tab.url else { continue }
+                sources.tabs.append(.init(pane: pane.paneID, tab: tab.id, url: url, title: tab.title ?? "", place: place, inThisSpace: pane.workspaceID == workspace))
+            }
+        }
+        return sources
+    }
+
+    private func showBrowserTab(pane id: String, tab: String) {
+        guard let pane = store.pane(id) else { return }
+        (NSApp.delegate as? AppDelegate)?.revealBrowserTab(machineID: machine.id, pane: pane, tab: tab)
+    }
+
+    /// Whose history this window's pages are.
+    var historyKey: String { BrowserRegistry.historyKey(machine) }
+
+    /// A page chosen from ⌘K: the focused browser, this tab's, or a new one.
+    func openPage(_ url: URL) {
+        if let focusedBrowser { return focusedBrowser.openTyped(url, newTab: !focusedBrowser.activePage.isBlank) }
+        guard let id = focusedPaneID else { return }
+        showInBrowser(url.absoluteString, from: id)
+    }
+
     private func makeBrowser(pane: Pane, hostID: String) -> BrowserPaneView {
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser, tokens: pane.tokens)
         state.paneID = pane.paneID
@@ -1367,6 +1423,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             self?.paneGainedFocus(id)
         }
         browser.onStateChange = { [weak self] state in self?.hostTitleChanged(paneID: id, hostID: hostID, state: state) }
+        browser.spaceName = { [weak self] in self?.spaceLabel(ofPane: id) }
+        browser.suggestionSources = { [weak self] in self?.suggestionSources(forPane: id, hostID: hostID) ?? .init() }
+        browser.onShowTab = { [weak self] pane, tab in self?.showBrowserTab(pane: pane, tab: tab) }
         // Tag panes made before addresses were shared with herdr, too.
         if state.url != nil, HostPaneState.read("btty_url", from: pane.tokens) != state.url { hostTitleChanged(paneID: id, hostID: hostID, state: state) }
         browser.onClose = { [weak self] in self?.store.perform { try await $0.closePane(id) } }
@@ -1458,11 +1517,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
             NSWorkspace.shared.open(link)
             return
         }
+        showInBrowser(url, from: paneID)
+    }
+
+    /// In the tab's browser pane, or a new one beside `paneID`.
+    private func showInBrowser(_ url: String, from paneID: String) {
         guard let tabID = store.pane(paneID)?.tabID else { return }
         if let browserPane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
            let browser = paneViews[browserPane.paneID]?.browser
         {
-            browser.load(url)
+            if let link = BrowserAddress.normalize(url) { browser.showLink(link) }
             return
         }
         HostPaneStore.open(HostPaneState(kind: .browser, url: url, machine: machine.hostTag), beside: paneID, direction: .right, store: store, remote: !machine.isLocal)
@@ -1652,13 +1716,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         HostPaneStore.open(HostPaneState(kind: .browser, machine: machine.hostTag), beside: target, direction: .right, store: store, remote: !machine.isLocal)
     }
 
-    /// ⌘L: the focused browser pane's address bar, or a new browser pane.
+    /// ⌘L: the address bar of the focused browser, else of this tab's
+    /// browser, else of a new one split off beside this pane.
     @objc func openLocation(_ sender: Any?) {
-        if let id = focusedPaneID, let browser = paneViews[id]?.browser {
-            browser.focusAddressBar()
-        } else {
-            newBrowserPane(sender)
-        }
+        if let id = focusedPaneID, let browser = paneViews[id]?.browser { return browser.focusAddressBar() }
+        guard let tabID, let pane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
+              let browser = paneViews[pane.paneID]?.browser
+        else { return newBrowserPane(sender) }
+        paneGainedFocus(pane.paneID)
+        browser.focusAddressBar()
     }
 
     private var pendingAddressFocus = false
@@ -2097,6 +2163,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     /// Asks first when an agent is still working or waiting in the pane.
     @objc func closePane(_: Any?) {
+        // ⌘W in a browser closes one page; the pane goes with its last.
+        if let browser = focusedBrowser, browser.pages.count > 1 { return browser.close(browser.activePage) }
         guard let id = focusedPaneID, let pane = store.pane(id) else { return }
         let busy = (pane.agent != nil || pane.displayAgent != nil) && (pane.agentStatus == .working || pane.agentStatus == .blocked)
         guard busy, let window else {
@@ -2161,6 +2229,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     }
 
     @objc func newTab(_: Any?) {
+        // A focused browser takes ⌘T as a browser does.
+        if let focusedBrowser { return focusedBrowser.newTab() }
         guard let workspaceID else { return }
         tabID = nil
         store.perform { try await $0.createTab(workspaceID: workspaceID) }
@@ -2173,6 +2243,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     @objc func nextTab(_: Any?) { cycleTab(by: 1) }
     @objc func previousTab(_: Any?) { cycleTab(by: -1) }
+
+    @objc func nextPageTab(_: Any?) { cyclePageTab(by: 1) }
+    @objc func previousPageTab(_: Any?) { cyclePageTab(by: -1) }
+
+    /// ⇧⌘] and ⇧⌘[: page tabs if the focused browser has any, else tabs.
+    private func cyclePageTab(by offset: Int) {
+        if let browser = focusedBrowser, browser.pages.count > 1 {
+            browser.cycleTabs(by: offset)
+        } else {
+            cycleTab(by: offset)
+        }
+    }
 
     private func cycleTab(by offset: Int) {
         guard let workspaceID else { return }
@@ -2270,6 +2352,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
+    // MARK: - The focused browser (Go ▸ Back and friends)
+
+    fileprivate var focusedBrowser: BrowserPaneView? { findPane?.browser }
+
+    @objc func browserBack(_: Any?) { focusedBrowser?.goBack() }
+    @objc func browserForward(_: Any?) { focusedBrowser?.goForward() }
+    @objc func browserReloadWithoutCache(_: Any?) { focusedBrowser?.reloadWithoutCache() }
+    @objc func browserStop(_: Any?) { focusedBrowser?.stopLoading() }
+    @objc func browserOpenInDefaultBrowser(_: Any?) { focusedBrowser?.openInDefaultBrowser() }
+    @objc func browserCopyAddress(_: Any?) { focusedBrowser?.copyAddress() }
+    @objc func reopenClosedTab(_: Any?) { focusedBrowser?.reopenClosed() }
+    @objc func browserShowInspector(_: Any?) { focusedBrowser?.showInspector() }
+
     /// Debug hook: opens the find bar of the pane in focus and searches.
     @objc func debugFind(_ sender: Any?) {
         guard let query = sender as? String, let pane = findPane else { return }
@@ -2299,7 +2394,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func changeTextSize(by step: Int) {
         if let id = focusedPaneID, let browser = paneViews[id]?.browser {
-            browser.webView.pageZoom = step == 0 ? 1 : min(3, max(0.5, browser.webView.pageZoom + CGFloat(step) * 0.1))
+            browser.zoom(by: step)
             return
         }
         let base = 13.0
@@ -2912,6 +3007,22 @@ extension MainWindowController: NSMenuItemValidation {
         case #selector(PaneActions.showFind(_:)), #selector(PaneActions.findNext(_:)),
              #selector(PaneActions.findPrevious(_:)), #selector(PaneActions.useSelectionForFind(_:)):
             return findPane?.finder != nil
+        case #selector(PaneActions.browserBack(_:)), #selector(PaneActions.browserForward(_:)):
+            // In the address bar or find bar these move the caret.
+            return focusedBrowser != nil && !(window?.firstResponder is NSTextView)
+        case #selector(PaneActions.browserStop(_:)):
+            return focusedBrowser?.isLoading == true
+        case #selector(PaneActions.browserReloadWithoutCache(_:)), #selector(PaneActions.browserOpenInDefaultBrowser(_:)),
+             #selector(PaneActions.browserCopyAddress(_:)):
+            return focusedBrowser != nil
+        case #selector(PaneActions.reopenClosedTab(_:)):
+            return focusedBrowser?.closed.isEmpty == false
+        case #selector(PaneActions.browserShowInspector(_:)):
+            return BrowserInspector.isAvailable && focusedBrowser?.activePage.isBlank == false
+        case #selector(PaneActions.closePane(_:)):
+            item.title = (focusedBrowser?.pages.count ?? 0) > 1 ? "Close Page Tab" : "Close Pane"
+        case #selector(PaneActions.newTab(_:)):
+            item.title = focusedBrowser != nil ? "New Page Tab" : "New Tab"
         default:
             break
         }

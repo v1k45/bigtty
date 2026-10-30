@@ -125,7 +125,9 @@ import Testing
 
     @Test func countsMatchesNatively() async throws {
         _ = NSApplication.shared
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 400), configuration: configuration)
         #expect(BrowserFinder.hasNativeFind(webView))
         guard BrowserFinder.hasNativeFind(webView) else { return }
         let loaded = Loaded()

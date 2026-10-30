@@ -37,29 +37,35 @@ final class ControlAPI {
         }
         guard method.hasPrefix("browser.") else { throw Failure(code: "unknown_method", message: method) }
         let (id, browser) = try resolveBrowser(params)
-        let web = browser.webView
-        let target = params["target"]?.stringValue
         let verb = String(method.dropFirst("browser.".count))
+        if verb.hasPrefix("tab.") { return try await tabCommand(String(verb.dropFirst(4)), id, browser, params) }
+        let page = try resolvePage(browser, params)
+        // A restored tab starts loading now; its page script comes with it.
+        let waking = !page.hasWebView && !page.isBlank
+        let web = page.webView
+        page.keepAwake()
+        if waking { await page.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30) }
+        let target = params["target"]?.stringValue
         if ["navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "scroll", "hover", "back", "forward", "reload", "eval"].contains(verb) {
             let who = callerAgent(params) ?? "An agent"
-            browser.noteAutomation("\(who) is controlling this page · \(verb)\(target.map { " " + $0 } ?? "")")
+            page.noteAutomation("\(who) is controlling this page · \(verb)\(target.map { " " + $0 } ?? "")")
         }
 
         switch method.dropFirst("browser.".count) {
         case "navigate":
             guard let url = params["url"]?.stringValue else { throw Failure(code: "invalid_params", message: "url required") }
-            browser.load(url)
-            await browser.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
-            return pageInfo(id, browser)
+            page.load(url)
+            await page.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
+            return pageInfo(id, page)
         case "back":
             web.goBack()
-            return await settle(id, browser)
+            return await settle(id, page)
         case "forward":
             web.goForward()
-            return await settle(id, browser)
+            return await settle(id, page)
         case "reload":
             web.reload()
-            return await settle(id, browser)
+            return await settle(id, page)
         case "snapshot":
             let options: JSONValue = [
                 "interactive": .bool(params["interactive"]?.boolValue ?? false),
@@ -67,7 +73,7 @@ final class ControlAPI {
                 "maxLines": params["max_lines"] ?? .null,
             ]
             let tree = try await automation(web, "return __btty.snapshot(options)", ["options": options])
-            var info = pageInfo(id, browser)
+            var info = pageInfo(id, page)
             if case var .object(o) = info {
                 o["snapshot"] = tree
                 info = .object(o)
@@ -76,7 +82,7 @@ final class ControlAPI {
         case "click", "dblclick":
             let count = method.hasSuffix("dblclick") ? 2 : (params["count"]?.intValue ?? 1)
             _ = try await automation(web, "return __btty.click(target, {count})", ["target": .string(try require(target)), "count": .number(Double(count))])
-            return await settle(id, browser)
+            return await settle(id, page)
         case "fill":
             _ = try await automation(web, "return __btty.fill(target, text)", ["target": .string(try require(target)), "text": params["text"] ?? ""])
             return true
@@ -86,7 +92,7 @@ final class ControlAPI {
         case "press":
             guard let key = params["key"]?.stringValue else { throw Failure(code: "invalid_params", message: "key required") }
             _ = try await automation(web, "return __btty.press(key, target)", ["key": .string(key), "target": target.map(JSONValue.string) ?? .null])
-            return await settle(id, browser)
+            return await settle(id, page)
         case "hover":
             return try await automation(web, "return __btty.hover(target)", ["target": .string(try require(target))])
         case "highlight":
@@ -119,25 +125,26 @@ final class ControlAPI {
         case "wait":
             if params["load"]?.boolValue == true || (params["selector"] == nil && params["text"] == nil && params["url"] == nil && params["fn"] == nil) {
                 try await Task.sleep(nanoseconds: 50_000_000)
-                await browser.waitForLoad(timeout: params["timeout"]?.doubleValue ?? 30)
-                return pageInfo(id, browser)
+                await page.waitForLoad(timeout: params["timeout"]?.doubleValue ?? 30)
+                return pageInfo(id, page)
             }
             let options: JSONValue = [
                 "selector": params["selector"] ?? .null, "text": params["text"] ?? .null,
                 "url": params["url"] ?? .null, "fn": params["fn"] ?? .null,
                 "gone": params["gone"] ?? false,
-                "timeout": .number((params["timeout"]?.doubleValue ?? 10) * 1000),
             ]
-            return try await automation(web, "return await __btty.waitFor(options)", ["options": options])
+            let wanted = ["selector", "text", "url", "fn"].compactMap { key in params[key]?.stringValue.map { "\(key) \($0)" } }.first
+            return try await waitUntil(page, options, for: wanted ?? "the page", timeout: params["timeout"]?.doubleValue ?? 10)
         case "screenshot":
             return try await screenshot(id, web, path: params["path"]?.stringValue)
         case "console":
-            let entries = browser.console.map { entry -> JSONValue in
+            let entries = page.console.map { entry -> JSONValue in
                 ["level": .string(entry.level), "text": .string(entry.text)]
             }
-            if params["clear"]?.boolValue == true { browser.clearConsole() }
+            if params["clear"]?.boolValue == true { page.clearConsole() }
             return .array(entries)
         case "focus":
+            browser.select(page)
             if let paneID = paneID(forHost: id) {
                 store.perform { try await $0.focusPane(paneID) }
             }
@@ -149,6 +156,66 @@ final class ControlAPI {
         default:
             throw Failure(code: "unknown_method", message: method)
         }
+    }
+
+    // MARK: - Tabs
+
+    private func tabCommand(_ verb: String, _ id: String, _ browser: BrowserPaneView, _ params: JSONValue) async throws -> JSONValue {
+        let caller = params["caller_pane"]?.stringValue
+        switch verb {
+        case "list":
+            let own = caller.flatMap(browser.page(forCaller:))
+            return .array(browser.pages.enumerated().map { index, page in
+                [
+                    "index": .number(Double(index + 1)),
+                    "tab": .string(page.id),
+                    "url": .string(page.address?.absoluteString ?? ""),
+                    "title": .string(page.title),
+                    "active": .bool(page === browser.activePage),
+                    "yours": .bool(page === own),
+                ]
+            })
+        case "new":
+            let url = try params["url"]?.stringValue.map(address)
+            let background = params["background"]?.boolValue == true || browser.isInUse
+            let page = browser.newPage(url: url, select: !background, agent: true)
+            if let caller { browser.noteCaller(caller, on: page) }
+            page.keepAwake()
+            if url != nil { await page.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30) }
+            return pageInfo(id, page)
+        case "switch":
+            let page = try resolvePage(browser, params)
+            browser.select(page)
+            return pageInfo(id, page)
+        case "close":
+            browser.close(try resolvePage(browser, params))
+            return true
+        default:
+            throw Failure(code: "unknown_method", message: "browser.tab.\(verb)")
+        }
+    }
+
+    private func address(_ input: String) throws -> URL {
+        guard let url = BrowserAddress.normalize(input) else { throw Failure(code: "invalid_params", message: "not an address: \(input)") }
+        return url
+    }
+
+    /// `--tab`, else the tab this terminal last used, else the one showing.
+    /// Refs from a snapshot belong to one page, so a command stays on the
+    /// agent's tab even when someone switches tabs under it.
+    private func resolvePage(_ browser: BrowserPaneView, _ params: JSONValue) throws -> BrowserPage {
+        let caller = params["caller_pane"]?.stringValue
+        let page: BrowserPage
+        if let wanted = params["tab"]?.stringValue {
+            guard let named = browser.page(matching: wanted) else {
+                throw Failure(code: "not_found", message: "no tab \(wanted); see `btty browser tab list`")
+            }
+            page = named
+        } else {
+            page = caller.flatMap(browser.page(forCaller:)) ?? browser.activePage
+        }
+        if let caller { browser.noteCaller(caller, on: page) }
+        return page
     }
 
     // MARK: - Targets
@@ -206,15 +273,16 @@ final class ControlAPI {
     private func browserList() -> [JSONValue] {
         browserPanes.compactMap { pane -> JSONValue? in
             guard let id = pane.hostID else { return nil }
-            let web = BrowserRegistry.shared.existing(id)?.webView
+            let browser = BrowserRegistry.shared.existing(id)
             let state = HostPaneStore.shared[id]
             return [
                 "id": .string(id),
                 "pane": .string(pane.paneID),
                 "workspace": .string(store.workspace(pane.workspaceID)?.label ?? pane.workspaceID),
-                "url": .string(web?.url?.absoluteString ?? state?.url ?? ""),
-                "title": .string(web?.title ?? state?.title ?? ""),
+                "url": .string(browser?.activePage.address?.absoluteString ?? state?.url ?? ""),
+                "title": .string(browser?.activePage.title ?? state?.title ?? ""),
                 "focused": .bool(BrowserRegistry.shared.lastFocused == id),
+                "tabs": .number(Double(browser?.pages.count ?? state?.tabs?.count ?? 1)),
             ]
         }
     }
@@ -226,22 +294,47 @@ final class ControlAPI {
         let forceNew = params["new"]?.boolValue ?? false
         if !forceNew, params["browser"] != nil || callerTabBrowser(params) != nil {
             let (id, browser) = try resolveBrowser(params)
-            if !url.isEmpty { browser.load(url) }
-            await browser.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
-            return pageInfo(id, browser)
+            let page = try openInTab(url, browser, params)
+            page.keepAwake()
+            await page.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
+            return pageInfo(id, page)
         }
         guard let beside = params["caller_pane"]?.stringValue.flatMap({ store.pane($0)?.paneID }) ?? focusedPane() else {
             throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in bigtty")
         }
         let direction: SplitDirection = params["direction"]?.stringValue == "down" ? .down : .right
-        let normalized = BrowserPaneView.normalize(url)?.absoluteString
+        let normalized = BrowserAddress.normalize(url)?.absoluteString
         let id = HostPaneStore.open(
             HostPaneState(kind: .browser, url: normalized), beside: beside, direction: direction, store: store
         )
         let browser = BrowserRegistry.shared.view(for: id)
         BrowserRegistry.shared.noteFocus(id)
-        await browser.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
-        return pageInfo(id, browser)
+        let page = browser.activePage
+        page.openedByAgent = true
+        if let caller = params["caller_pane"]?.stringValue { browser.noteCaller(caller, on: page) }
+        await page.waitForNavigation(timeout: params["timeout"]?.doubleValue ?? 30)
+        return pageInfo(id, page)
+    }
+
+    /// `btty browser open` in a pane that exists: the agent's own tab if it
+    /// has one, a lone blank tab, else a new tab, so a page on screen is
+    /// never replaced. It comes to the front unless someone is using the pane.
+    private func openInTab(_ url: String, _ browser: BrowserPaneView, _ params: JSONValue) throws -> BrowserPage {
+        guard !url.isEmpty else { return try resolvePage(browser, params) }
+        let target = try address(url)
+        let background = params["background"]?.boolValue == true || browser.isInUse
+        let caller = params["caller_pane"]?.stringValue
+        let lone = browser.pages.count == 1 && browser.activePage.isBlank ? browser.activePage : nil
+        guard let page = try (params["tab"] != nil ? resolvePage(browser, params) : caller.flatMap(browser.page(forCaller:))) ?? lone else {
+            let page = browser.newPage(url: target, select: !background, agent: true)
+            if let caller { browser.noteCaller(caller, on: page) }
+            return page
+        }
+        page.openedByAgent = true
+        page.navigate(to: target)
+        if !background { browser.select(page) }
+        if let caller { browser.noteCaller(caller, on: page) }
+        return page
     }
 
     // MARK: - Files
@@ -301,28 +394,44 @@ final class ControlAPI {
 
     // MARK: - Helpers
 
-    private func pageInfo(_ id: String, _ browser: BrowserPaneView) -> JSONValue {
+    private func pageInfo(_ id: String, _ page: BrowserPage) -> JSONValue {
         var info: [String: JSONValue] = [
             "id": .string(id),
-            "url": .string(browser.webView.url?.absoluteString ?? ""),
-            "title": .string(browser.webView.title ?? ""),
+            "tab": .string(page.id),
+            "url": .string(page.webView.url?.absoluteString ?? ""),
+            "title": .string(page.title),
         ]
         if let pane = paneID(forHost: id) { info["pane"] = .string(pane) }
-        if let error = browser.lastNavigationError { info["error"] = .string(error) }
+        if let error = page.lastNavigationError { info["error"] = .string(error) }
         return .object(info)
     }
 
     /// After an action that may navigate, let the navigation start and finish.
-    private func settle(_ id: String, _ browser: BrowserPaneView) async -> JSONValue {
+    private func settle(_ id: String, _ page: BrowserPage) async -> JSONValue {
         try? await Task.sleep(nanoseconds: 150_000_000)
-        await browser.waitForLoad(timeout: 15)
-        return pageInfo(id, browser)
+        await page.waitForLoad(timeout: 15)
+        return pageInfo(id, page)
+    }
+
+    /// Polls from here, not in the page: a hidden tab's timers barely run,
+    /// and a navigation mid-wait would take a page-side loop with it.
+    private func waitUntil(_ page: BrowserPage, _ options: JSONValue, for wanted: String, timeout: TimeInterval) async throws -> JSONValue {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            page.keepAwake()
+            let met = try? await automation(page.webView, "return __btty.checkWait(options)", ["options": options])
+            if met?.boolValue == true { return true }
+            guard Date() < deadline else {
+                throw Failure(code: "script_error", message: "timed out waiting for \(wanted)")
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     private func automation(_ web: WKWebView, _ body: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         do {
             let result = try await web.callAsyncJavaScript(
-                body, arguments: arguments.mapValues(\.anyValue), in: nil, contentWorld: BrowserPaneView.automationWorld
+                body, arguments: arguments.mapValues(\.anyValue), in: nil, contentWorld: BrowserPage.automationWorld
             )
             return JSONValue(any: result)
         } catch {

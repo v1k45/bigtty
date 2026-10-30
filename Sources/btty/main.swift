@@ -7,7 +7,7 @@ btty — drive bigtty from a shell or an agent
 usage:
   btty open <path>[:line]                show a file or folder in a files pane beside you
   btty diff [path]                       show the repository's changes (git diff vs HEAD)
-  btty browser <command> [args] [--browser <id|pane>] [--json]
+  btty browser <command> [args] [--browser <id|pane>] [--tab <n|id>] [--json]
   btty notify [--title T] [--pane <id>] <message>
                                          ask for the user: Needs You, and a macOS notification
                                          unless the pane is on screen ("-" reads stdin)
@@ -17,8 +17,14 @@ usage:
   btty version
 
 browser commands (targets are refs from `snapshot`, like @e3, or CSS selectors):
-  open [url] [--new] [--down]   open in this tab's browser pane, or split a new one
-  list                          browser panes: id, pane, url, title
+  open [url] [--background]     open in a tab of this tab's browser pane: your own
+                                tab if you have one, else a new one
+       [--new] [--down]         split a new browser pane instead
+  list                          browser panes: id, pane, url, title, tabs
+  tab list                      page tabs: number, id, url, title (* showing, > yours)
+  tab new [url] [--background]  open a page tab and make it yours
+  tab switch <n|id>             show a page tab
+  tab close [n|id]              close a page tab (default: yours, or the one showing)
   snapshot [-i] [--selector S]  page structure with refs (-i: interactive only)
   click <target>                also: dblclick, hover, highlight
   fill <target> <text>          replace a field's value
@@ -77,7 +83,7 @@ struct Arguments {
     var flags: [String: String] = [:]
     var switches: Set<String> = []
 
-    static let valued: Set<String> = ["browser", "selector", "text", "url", "fn", "timeout", "target", "max-lines", "title", "pane", "settings"]
+    static let valued: Set<String> = ["browser", "tab", "selector", "text", "url", "fn", "timeout", "target", "max-lines", "title", "pane", "settings"]
 
     init(_ args: [String]) {
         var i = 0
@@ -133,7 +139,15 @@ func printResult(_ command: String, _ result: JSONValue, json: Bool) {
         for item in items {
             let focused = item["focused"]?.boolValue == true ? "*" : " "
             let fields = ["id", "pane", "workspace", "url", "title"].map { item[$0]?.stringValue ?? "" }
-            print("\(focused) " + fields.joined(separator: "\t"))
+            let tabs = item["tabs"]?.intValue ?? 1
+            print("\(focused) " + fields.joined(separator: "\t") + (tabs > 1 ? "\t(\(tabs) tabs)" : ""))
+        }
+    case "tab":
+        guard case let .array(items) = result else { return printResult("", result, json: false) }
+        for item in items {
+            let mark = (item["active"]?.boolValue == true ? "*" : " ") + (item["yours"]?.boolValue == true ? ">" : " ")
+            let fields = ["tab", "url", "title"].map { item[$0]?.stringValue ?? "" }
+            print("\(mark) \(item["index"]?.intValue ?? 0)\t" + fields.joined(separator: "\t"))
         }
     case "console":
         guard case let .array(entries) = result else { return }
@@ -169,6 +183,8 @@ func browser(_ args: [String]) {
     // Which herdr session the caller runs in, for bigtty to pick its store.
     if let socket = ProcessInfo.processInfo.environment["HERDR_SOCKET_PATH"] { params["caller_socket"] = .string(socket) }
     if let browser = parsed.flags["browser"] { params["browser"] = .string(browser) }
+    if let tab = parsed.flags["tab"] { params["tab"] = .string(tab) }
+    if parsed.switches.contains("background") { params["background"] = true }
     if let timeout = parsed.flags["timeout"].flatMap(Double.init) { params["timeout"] = .number(timeout) }
     let method: String
     switch command {
@@ -179,6 +195,15 @@ func browser(_ args: [String]) {
         if parsed.switches.contains("down") { params["direction"] = "down" }
     case "list", "back", "forward", "reload", "focus", "close":
         method = "browser.\(command)"
+    case "tab":
+        let verb = parsed.arg(1, "list|new|switch|close")
+        guard ["list", "new", "switch", "close"].contains(verb) else {
+            fail("unknown tab command \(verb); see `btty browser --help`", code: 64)
+        }
+        method = "browser.tab.\(verb)"
+        if verb == "new", parsed.positional.count > 2 { params["url"] = .string(parsed.rest(from: 2)) }
+        if verb == "switch" { params["tab"] = .string(parsed.arg(2, "tab")) }
+        if verb == "close", parsed.positional.count > 2 { params["tab"] = .string(parsed.positional[2]) }
     case "navigate", "goto":
         method = "browser.navigate"
         params["url"] = .string(parsed.arg(1, "url"))

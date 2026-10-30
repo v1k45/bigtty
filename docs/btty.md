@@ -4,7 +4,7 @@
 teaches your agents to use it:
 
 ```sh
-btty browser open localhost:3000     # beside the agent, or this tab's browser
+btty browser open localhost:3000     # beside the agent, or a tab of this tab's browser
 btty browser snapshot -i             # - textbox "Email" [ref=e3] …
 btty browser fill @e3 me@example.com
 btty browser click @e5
@@ -18,6 +18,24 @@ Also `type`, `press`, `select`, `check`, `scroll`, `hover`, `get`, `eval`,
 `console`, `navigate`, `back`, `forward`, `reload`, `list`, `close`, and
 `--json`. Commands go over a user-only socket; the page script runs in an
 isolated JavaScript world.
+
+### Page tabs
+
+`btty browser open` never replaces the page on screen: it uses the agent's own
+tab if it has one, else opens a new one, and leaves the pane alone while you're
+using it (`--background` always does; `--new` splits a new pane).
+
+```sh
+btty browser tab list                # number, id, url, title
+btty browser tab new localhost:3000 --background
+btty browser tab switch 2            # show it
+btty browser tab close t3f09a1c2
+btty browser get title --tab 2       # any command, any tab
+```
+
+Each terminal keeps to the tab it last used, so an agent's refs stay valid when
+you switch tabs under it. A hidden tab keeps running, slowly, and at full speed
+for 30 seconds after each command.
 
 ## Notifications
 

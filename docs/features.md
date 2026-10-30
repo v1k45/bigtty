@@ -125,6 +125,41 @@ restarts. It identifies as Safari, plays media with a speaker on its tab, and
 video full screen fills the pane (or the display, if you prefer). Terminal
 links open in the tab's browser pane or in your default browser (a setting).
 
+The address bar shows the host bright and the path dim, with a lock that only
+speaks up when you should care: amber for plain http (local dev servers are
+fine) or insecure content on an https page. Long addresses lose the path first,
+then the start of the host, so the real site always shows. `:3000` means
+localhost. Esc puts the page's address back, and a second Esc returns to the
+page. A remote pane names its machine, so its `localhost` isn't mistaken for
+this Mac's. Right-click ‹ or › for history. The ⋯ menu (or a right-click on the
+toolbar) holds the page's actions, zoom, history, extensions and browser
+settings. ⌥⌘I opens Web Inspector in its own window.
+
+**Page tabs.** ⌘T in a browser opens a page tab, and the tab row appears at two.
+A narrow pane folds it into a count button. ⌘-click or middle-click opens a link
+in the background, and a page's new windows (OAuth popups too) are tabs. ⌘W
+closes a tab, ⇧⌘T brings it back, and ⌃⌥1–9 or ⇧⌘] / ⇧⌘[ move between tabs. Tabs
+come back after a restart with their back/forward lists and scroll position, and
+only the tab showing loads. Each page has a row in ⌘K. Terminal links reuse the
+tab already on that page, else open one. Other Macs on the same herdr session
+see the tab showing, not the rest.
+
+**Address bar.** As you type, the bar offers the page you're heading to, then
+open tabs in any space (choosing one jumps there and loads nothing), this
+space's dev servers, your history and a search. A blank field shows dev servers,
+this space's tabs and recent pages. Pages you've been to complete inline, ↑ and
+↓ choose a row, ⌘⏎ opens it in a new tab, and ⌘⌫ removes a history row. Nothing
+you type leaves the Mac before Return: there are no search suggestions.
+
+**History.** bigtty remembers pages you open, for 90 days, in a file only you
+can read. It stays on this Mac and each machine's pages stay separate, so a
+remote `localhost` is never offered for this Mac. Pages agents open or navigate
+to aren't kept, unless you type an address in their tab, and `btty` can't read
+history. Logins and fragments are dropped, and so is a query holding something
+like a token. **Settings ▸ Browser** turns it off or clears it (last hour, last
+day, everything); clearing also removes saved back/forward lists and the closed
+tabs list. ⌘K finds history as you type.
+
 **Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
 15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
 unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.

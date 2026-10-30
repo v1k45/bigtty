@@ -9,8 +9,7 @@ import WebKit
 enum WebExtensions {
     /// Where unpacked extensions live, one folder each.
     static var folder: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("bigtty/Extensions", isDirectory: true)
+        AppPaths.support.appendingPathComponent("Extensions", isDirectory: true)
     }
 
     /// The shared controller, for web view configurations; nil before macOS 15.4.
@@ -46,28 +45,28 @@ enum WebExtensions {
         WebExtensionHost.shared.loadAll()
     }
 
-    static func tabOpened(_ pane: BrowserPaneView) {
+    static func tabOpened(_ pane: BrowserPage) {
         guard #available(macOS 15.4, *) else { return }
         WebExtensionHost.shared.tabOpened(pane)
     }
 
-    static func tabClosed(_ pane: BrowserPaneView) {
+    static func tabClosed(_ pane: BrowserPage) {
         guard #available(macOS 15.4, *) else { return }
         WebExtensionHost.shared.tabClosed(pane)
     }
 
-    static func tabActivated(_ pane: BrowserPaneView) {
+    static func tabActivated(_ pane: BrowserPage) {
         guard #available(macOS 15.4, *) else { return }
         WebExtensionHost.shared.tabActivated(pane)
     }
 
-    static func tabChanged(_ pane: BrowserPaneView) {
+    static func tabChanged(_ pane: BrowserPage) {
         guard #available(macOS 15.4, *) else { return }
         WebExtensionHost.shared.tabChanged(pane)
     }
 
     /// Loaded extensions with a toolbar action: name, icon, and a click.
-    static func actions(for pane: BrowserPaneView) -> [(name: String, icon: NSImage?, badge: String, perform: () -> Void)] {
+    static func actions(for pane: BrowserPage) -> [(name: String, icon: NSImage?, badge: String, perform: () -> Void)] {
         guard #available(macOS 15.4, *) else { return [] }
         return WebExtensionHost.shared.actions(for: pane)
     }
@@ -149,7 +148,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
 
     override init() {
         // Persistent storage per extension (settings, filter choices).
-        controller = WKWebExtensionController(configuration: .default())
+        controller = WKWebExtensionController(configuration: AppPaths.isTestRun ? .nonPersistent() : .default())
         super.init()
         controller.delegate = self
     }
@@ -179,7 +178,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
                     context.isInspectable = true
                     try controller.load(context)
                     status.append("\(ext.displayName ?? dir.lastPathComponent) \(ext.version ?? "")")
-                    for pane in BrowserRegistry.shared.all.map(\.view) { controller.didOpenTab(pane) }
+                    for page in BrowserRegistry.shared.livePages { controller.didOpenTab(page) }
                     if !ext.errors.isEmpty {
                         NSLog("bigtty: extension \(dir.lastPathComponent) warnings: \(ext.errors)")
                     }
@@ -195,22 +194,22 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
 
     // MARK: Tabs
 
-    func tabOpened(_ pane: BrowserPaneView) { controller.didOpenTab(pane) }
+    func tabOpened(_ pane: BrowserPage) { controller.didOpenTab(pane) }
 
-    func tabClosed(_ pane: BrowserPaneView) { controller.didCloseTab(pane, windowIsClosing: false) }
+    func tabClosed(_ pane: BrowserPage) { controller.didCloseTab(pane, windowIsClosing: false) }
 
-    func tabActivated(_ pane: BrowserPaneView) {
+    func tabActivated(_ pane: BrowserPage) {
         let previous = window.active
         guard previous !== pane else { return }
         window.active = pane
         controller.didActivateTab(pane, previousActiveTab: previous)
     }
 
-    func tabChanged(_ pane: BrowserPaneView) {
+    func tabChanged(_ pane: BrowserPage) {
         controller.didChangeTabProperties([.URL, .title, .loading], for: pane)
     }
 
-    func actions(for pane: BrowserPaneView) -> [(name: String, icon: NSImage?, badge: String, perform: () -> Void)] {
+    func actions(for pane: BrowserPage) -> [(name: String, icon: NSImage?, badge: String, perform: () -> Void)] {
         controller.extensionContexts.compactMap { context in
             guard let action = context.action(for: pane) else { return nil }
             let name = context.webExtension.displayName ?? "Extension"
@@ -237,8 +236,8 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
         for _: WKWebExtensionContext, completionHandler: @escaping ((any Error)?) -> Void
     ) {
         guard let web = action.popupWebView,
-              let pane = (action.associatedTab as? BrowserPaneView) ?? window.active,
-              let anchor = pane.extensionAnchor
+              let page = (action.associatedTab as? BrowserPage) ?? window.active,
+              let anchor = page.pane?.extensionAnchor
         else {
             completionHandler(nil)
             return
@@ -284,8 +283,12 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
         _: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration,
         for _: WKWebExtensionContext, completionHandler: @escaping ((any WKWebExtensionTab)?, (any Error)?) -> Void
     ) {
-        // The dashboard (settings) and similar pages: in the default browser
-        // can't load extension URLs, so a browser pane beside the active one.
+        // The dashboard (settings) and similar pages: the default browser
+        // can't load extension URLs, so a tab beside the active one, or with
+        // no browser yet, a pane.
+        if let pane = BrowserRegistry.shared.focused ?? BrowserRegistry.shared.all.first?.view {
+            return completionHandler(pane.newPage(url: configuration.url, select: configuration.shouldBeActive), nil)
+        }
         if let url = configuration.url {
             NotificationCenter.default.post(name: .bigttyExtensionOpenURL, object: url.absoluteString)
         }
@@ -308,18 +311,18 @@ extension Notification.Name {
     static let bigttyExtensionOpenURL = Notification.Name("BigttyExtensionOpenURL")
 }
 
-/// Every browser pane, as one window of tabs.
+/// Every page of every browser pane, as one window of tabs.
 @available(macOS 15.4, *)
 @MainActor
 final class ExtensionWindow: NSObject, WKWebExtensionWindow {
-    weak var active: BrowserPaneView?
+    weak var active: BrowserPage?
 
     func tabs(for _: WKWebExtensionContext) -> [any WKWebExtensionTab] {
-        BrowserRegistry.shared.all.map(\.view)
+        BrowserRegistry.shared.livePages
     }
 
     func activeTab(for _: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
-        active ?? BrowserRegistry.shared.lastFocused.flatMap { BrowserRegistry.shared.existing($0) }
+        active ?? BrowserRegistry.shared.focused?.activePage
     }
 
     func windowType(for _: WKWebExtensionContext) -> WKWebExtension.WindowType { .normal }
@@ -328,15 +331,15 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
 }
 
 @available(macOS 15.4, *)
-extension BrowserPaneView: WKWebExtensionTab {
+extension BrowserPage: WKWebExtensionTab {
     func window(for _: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
         WebExtensionHost.shared.windowObject
     }
 
     func webView(for _: WKWebExtensionContext) -> WKWebView? { webView }
-    func url(for _: WKWebExtensionContext) -> URL? { webView.url }
-    func title(for _: WKWebExtensionContext) -> String? { webView.title }
-    func isLoadingComplete(for _: WKWebExtensionContext) -> Bool { !webView.isLoading }
+    func url(for _: WKWebExtensionContext) -> URL? { realURL }
+    func title(for _: WKWebExtensionContext) -> String? { title }
+    func isLoadingComplete(for _: WKWebExtensionContext) -> Bool { !isLoading }
     func isSelected(for _: WKWebExtensionContext) -> Bool { WebExtensionHost.shared.windowObject.active === self }
 
     func loadURL(_ url: URL, for _: WKWebExtensionContext, completionHandler: @escaping ((any Error)?) -> Void) {
