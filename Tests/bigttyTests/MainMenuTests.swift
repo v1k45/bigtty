@@ -48,6 +48,29 @@ import Testing
         #expect(all.filter { $0.keyEquivalent == "r" && $0.keyEquivalentModifierMask == [.command] }.count == 1)
     }
 
+    /// A disabled item swallows its key, so these pass through instead:
+    /// ⌘← in a terminal or a text field isn't "Back".
+    @Test func browserKeysPassThroughWhenTheyDontApply() {
+        let keys: [(String, NSEvent.ModifierFlags)] = [
+            (String(Character(UnicodeScalar(UInt16(NSLeftArrowFunctionKey))!)), [.command]),
+            (String(Character(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!)), [.command]),
+            ("R", [.command, .shift]), (".", [.command]), ("O", [.command, .shift]), ("C", [.command, .shift]),
+        ]
+        for (key, modifiers) in keys {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0)!
+            #expect((main as? MenuBar)?.contextual.contains { MenuBar.key($0, matches: event) } == true, "\(key)")
+            #expect(!main.performKeyEquivalent(with: event), "\(key)")
+        }
+    }
+
+    @Test func browserKeysTakenOnce() {
+        let all = main.items.compactMap(\.submenu).flatMap { [$0] + submenus(of: $0) }.flatMap(\.items)
+        for item in (main as? MenuBar)?.contextual ?? [] {
+            #expect(all.filter { $0.keyEquivalent == item.keyEquivalent && $0.keyEquivalentModifierMask == item.keyEquivalentModifierMask }.count == 1, "\(item.title)")
+        }
+    }
+
     @Test func movePaneToOpensThePicker() {
         let item = menu("Pane")?.items.first { $0.title.hasPrefix("Move Pane To") }
         #expect(item?.submenu == nil)

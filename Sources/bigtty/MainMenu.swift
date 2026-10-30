@@ -54,12 +54,46 @@ import AppKit
     func findPrevious(_ sender: Any?)
     func useSelectionForFind(_ sender: Any?)
     func reloadPane(_ sender: Any?)
+    func browserBack(_ sender: Any?)
+    func browserForward(_ sender: Any?)
+    func browserReloadWithoutCache(_ sender: Any?)
+    func browserStop(_ sender: Any?)
+    func browserOpenInDefaultBrowser(_ sender: Any?)
+    func browserCopyAddress(_ sender: Any?)
+}
+
+/// The menu bar. A disabled item still swallows its key, which won't do for
+/// the browser's keys: ⌘← is the start of the line in a terminal or a text
+/// field. They pass through unless their action applies right now.
+@MainActor
+final class MenuBar: NSMenu {
+    /// Items whose key belongs to someone else when they're disabled.
+    var contextual: [NSMenuItem] = []
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        nonisolated(unsafe) let (menu, key) = (self, event)
+        return MainActor.assumeIsolated { menu.passesOn(key) } ? false : super.performKeyEquivalent(with: event)
+    }
+
+    private func passesOn(_ event: NSEvent) -> Bool {
+        contextual.first { Self.key($0, matches: event) }.map { !Self.applies($0) } ?? false
+    }
+
+    static func key(_ item: NSMenuItem, matches event: NSEvent) -> Bool {
+        event.modifierFlags.intersection([.command, .option, .control, .shift]) == item.keyEquivalentModifierMask
+            && event.charactersIgnoringModifiers?.lowercased() == item.keyEquivalent
+    }
+
+    private static func applies(_ item: NSMenuItem) -> Bool {
+        guard let action = item.action, let target = NSApp.target(forAction: action) else { return false }
+        return (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? true
+    }
 }
 
 @MainActor
 enum MainMenu {
     static func build() -> NSMenu {
-        let main = NSMenu()
+        let main = MenuBar()
 
         let appMenu = submenu(main, "bigtty")
         appMenu.addItem(withTitle: "About bigtty", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
@@ -89,6 +123,8 @@ enum MainMenu {
         file.addItem(.separator())
         item(file, "Connect Machine…", #selector(AppDelegate.connectMachine(_:)), "k", [.command, .option])
         item(file, "Open Location…", #selector(PaneActions.openLocation(_:)), "l")
+        main.contextual.append(item(file, "Open in Default Browser", #selector(PaneActions.browserOpenInDefaultBrowser(_:)), "o", [.command, .shift]))
+        main.contextual.append(item(file, "Copy Address", #selector(PaneActions.browserCopyAddress(_:)), "c", [.command, .shift]))
         file.addItem(.separator())
         item(file, "Rename Space…", #selector(PaneActions.renameSpace(_:)), "")
         file.addItem(.separator())
@@ -121,6 +157,8 @@ enum MainMenu {
         let view = submenu(main, "View")
         // The browser page, or the file viewer's file from disk.
         item(view, "Reload", #selector(PaneActions.reloadPane(_:)), "r")
+        main.contextual.append(item(view, "Reload Without Cache", #selector(PaneActions.browserReloadWithoutCache(_:)), "r", [.command, .shift]))
+        main.contextual.append(item(view, "Stop", #selector(PaneActions.browserStop(_:)), "."))
         view.addItem(.separator())
         item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
         item(view, "Toggle File Viewer", #selector(PaneActions.toggleFileViewer(_:)), "e", [.command, .shift])
@@ -186,6 +224,11 @@ enum MainMenu {
         item(tabs, "Switch Session…", #selector(PaneActions.showSessionSwitcher(_:)), "s", [.command, .shift])
         item(tabs, "Next Pane That Needs You", #selector(AppDelegate.jumpToNextUnread(_:)), "u", [.command, .shift])
         item(tabs, "Needs You…", #selector(AppDelegate.showNeedsYou(_:)), "k", [.command, .shift])
+        tabs.addItem(.separator())
+        // The focused browser page. In a page the keys go to the page
+        // first, so line-start still works in its text fields.
+        main.contextual.append(item(tabs, "Back", #selector(PaneActions.browserBack(_:)), arrow(.leftArrow)))
+        main.contextual.append(item(tabs, "Forward", #selector(PaneActions.browserForward(_:)), arrow(.rightArrow)))
         tabs.addItem(.separator())
         // Tabs inside the space: ⌃Tab / ⌃⇧Tab and ⌃1–9, like cmux and
         // browsers; ⌘⇧] / ⌘⇧[ kept as alternates.

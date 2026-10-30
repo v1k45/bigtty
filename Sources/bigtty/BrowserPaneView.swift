@@ -8,20 +8,22 @@ import WebKit
 final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextFieldDelegate, WKScriptMessageHandler {
     let hostID: String
     let webView: WKWebView
-    private let back = NSButton()
-    private let forward = NSButton()
+    private let back = HistoryButton()
+    private let forward = HistoryButton()
     private let reload = NSButton()
-    private let external = NSButton()
+    private let options = NSButton()
     private let closeButton = NSButton()
     private var extensionObserver: NSObjectProtocol?
     /// Where an extension's popup points: the address bar. Extensions have
-    /// no toolbar buttons (they'd crowd it); they're in the toolbar's
-    /// right-click menu.
+    /// no toolbar buttons (they'd crowd it); they're in the ⋯ menu.
     var extensionAnchor: NSView? { addressBox }
     /// The pane's × button.
     var onClose: (() -> Void)?
-    private let address = NSTextField()
-    private let addressBox = NSView()
+    let address = AddressField()
+    private let addressBox = AddressBox()
+    let security = NSButton()
+    private let securityWords = NSTextField(labelWithString: "Not secure")
+    let machineName = NSTextField(labelWithString: "")
     private let toolbarLine = NSView()
     private let progress = NSView()
     private let automationStrip = AutomationStrip()
@@ -35,6 +37,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     var onFocus: (() -> Void)?
 
     static let toolbarHeight: CGFloat = 28
+    /// Below this the toolbar drops › and ↻.
+    static let tightWidth: CGFloat = 200
 
     private var finderStorage: BrowserFinder?
     /// ⌘F in the page.
@@ -161,7 +165,15 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// Set for a remote machine's panes: its `localhost` goes through SSH.
     let localhostMapper: LocalhostMapper?
 
-    init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil) {
+    /// What the page is at, as the address bar shows it: forwarded remote
+    /// pages as their localhost, a failed load as the address that failed.
+    private var pageAddress: URL?
+    /// A navigation hasn't committed, so the page on screen isn't `pageAddress`
+    /// yet and there's nothing true to say about its security.
+    private var navigationPending = false
+    private var securityState = BrowserAddress.Security.quiet
+
+    init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil, machineName: String? = nil) {
         self.hostID = hostID
         self.localhostMapper = localhostMapper
         let config = WKWebViewConfiguration()
@@ -199,26 +211,44 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         webView.allowsBackForwardNavigationGestures = true
         webView.setValue(false, forKey: "drawsBackground")
 
-        configure(back, "chevron.left", "Back", #selector(goBack))
-        configure(forward, "chevron.right", "Forward", #selector(goForward))
+        configure(back, "chevron.left", "Back", #selector(goBackClicked))
+        configure(forward, "chevron.right", "Forward", #selector(goForwardClicked))
         configure(reload, "arrow.clockwise", "Reload", #selector(reloadPage))
-        configure(external, "safari", "Open in Default Browser", #selector(openExternally))
+        configure(options, "ellipsis", "Options", #selector(showOptions))
         configure(closeButton, "xmark", "Close Pane", #selector(closePane))
+        back.historyMenu = { [weak self] in self?.historyMenu(forward: false) }
+        forward.historyMenu = { [weak self] in self?.historyMenu(forward: true) }
         address.placeholderString = "Search or enter address"
         address.font = .systemFont(ofSize: 11.5)
-        address.textColor = .secondaryLabelColor
         address.isBezeled = false
         address.drawsBackground = false
         address.focusRingType = .none
         address.alignment = .left
-        address.lineBreakMode = .byTruncatingTail
+        // Shortened to fit by `renderAddress`, and scrolled while typing.
+        address.lineBreakMode = .byClipping
         address.cell?.usesSingleLineMode = true
+        address.cell?.isScrollable = true
         address.delegate = self
         address.target = self
         address.action = #selector(addressEntered)
+        address.onBeginFocus = { [weak self] in self?.addressGainedFocus() }
+        address.onEndFocus = { [weak self] in self?.addressLostFocus() }
         addressBox.wantsLayer = true
         addressBox.layer?.cornerRadius = 6
-        addressBox.addSubview(address)
+        addressBox.onClick = { [weak self] in self?.focusAddressBar() }
+        security.isBordered = false
+        security.imagePosition = .imageOnly
+        security.isHidden = true
+        securityWords.font = .systemFont(ofSize: 11.5)
+        securityWords.textColor = .systemOrange
+        securityWords.isHidden = true
+        self.machineName.font = .systemFont(ofSize: 10.5, weight: .medium)
+        self.machineName.textColor = .secondaryLabelColor
+        self.machineName.lineBreakMode = .byTruncatingTail
+        self.machineName.stringValue = machineName ?? ""
+        self.machineName.toolTip = machineName.map { "This page is on \($0)" }
+        self.machineName.isHidden = machineName == nil
+        for view in [address, security, securityWords, self.machineName] as [NSView] { addressBox.addSubview(view) }
         toolbarLine.wantsLayer = true
         progress.wantsLayer = true
         progress.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
@@ -227,7 +257,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         automationStrip.onTakeOver = { [weak self] in self?.hideAutomation() }
         errorPage.isHidden = true
         errorPage.onReload = { [weak self] in self?.reloadPage() }
-        for view in [back, forward, addressBox, reload, external, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
+        for view in [back, forward, addressBox, reload, options, closeButton, webView, errorPage, toolbarLine, progress, automationStrip] as [NSView] {
             addSubview(view)
         }
         wantsLayer = true
@@ -251,9 +281,12 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             webView.observe(\.estimatedProgress, options: .new) { [weak self] _, _ in
                 MainActor.assumeIsolated { self?.needsLayout = true }
             },
+            webView.observe(\.hasOnlySecureContent, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.updateSecurity() }
+            },
         ]
 
-        if let url = state.url.flatMap(Self.normalize) {
+        if let url = state.url.flatMap(BrowserAddress.normalize) {
             navigate(to: url)
         }
         updateButtons()
@@ -272,19 +305,34 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// there's nothing to lay out.
     func refreshExtensionButtons() {}
 
-    /// Right-click on the toolbar or the address: the page's actions and
-    /// each extension (uBlock Origin Lite's popup opens under the address).
-    private func toolbarMenu() -> NSMenu {
+    /// ⋯, or a right-click on the toolbar: the page's actions and each
+    /// extension (uBlock Origin Lite's popup opens under the address).
+    func optionsMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem(title: "Reload Page", keyEquivalent: "") { [weak self] in self?.reloadPage() })
-        menu.addItem(ClosureMenuItem(title: "Open in Default Browser", keyEquivalent: "") { [weak self] in self?.openExternally() })
-        if let url = webView.url {
-            menu.addItem(ClosureMenuItem(title: "Copy Address", keyEquivalent: "") { [weak self] in
-                let shown = self?.localhostMapper?.display(url) ?? url
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(shown.absoluteString, forType: .string)
-            })
+        menu.autoenablesItems = false
+        func add(_ title: String, _ key: String = "", _ modifiers: NSEvent.ModifierFlags = [.command], enabled: Bool = true, _ action: @escaping () -> Void) {
+            let item = ClosureMenuItem(title: title, keyEquivalent: key, action: action)
+            item.keyEquivalentModifierMask = modifiers
+            item.isEnabled = enabled
+            menu.addItem(item)
         }
+        let hasPage = pageAddress != nil
+        // ↻ is out of the way in the tightest panes, so it comes in here.
+        if bounds.width < Self.tightWidth {
+            add("Reload Page", enabled: hasPage) { [weak self] in self?.reloadPage() }
+        }
+        add("Open in Default Browser", "o", [.command, .shift], enabled: hasPage) { [weak self] in self?.openInDefaultBrowser() }
+        add("Copy Address", "c", [.command, .shift], enabled: hasPage) { [weak self] in self?.copyAddress() }
+        add("Reload Without Cache", "r", [.command, .shift], enabled: hasPage) { [weak self] in self?.reloadWithoutCache() }
+        add("Find in Page…", "f", enabled: hasPage) {
+            NSApp.sendAction(#selector(PaneActions.showFind(_:)), to: nil, from: nil)
+        }
+        let zoom = NSMenuItem()
+        zoom.view = ZoomMenuRow(percent: zoomPercent) { [weak self] step in
+            self?.zoom(by: step)
+            return self?.zoomPercent ?? 100
+        }
+        menu.addItem(zoom)
         let actions = WebExtensions.actions(for: self)
         if !actions.isEmpty {
             menu.addItem(.separator())
@@ -300,9 +348,27 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
             }
         }
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "Browser Settings…", keyEquivalent: "") {
+        add("Browser Settings…") {
             NSApp.sendAction(#selector(AppDelegate.showSettings(_:)), to: nil, from: nil)
-        })
+        }
+        return menu
+    }
+
+    @objc private func showOptions() {
+        optionsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: options.bounds.height + 4), in: options)
+    }
+
+    /// Where ‹ or › leads, nearest first.
+    private func historyMenu(forward: Bool) -> NSMenu? {
+        let list = webView.backForwardList
+        let entries = forward ? list.forwardList : list.backList.reversed()
+        guard !entries.isEmpty else { return nil }
+        let menu = NSMenu()
+        for entry in entries.prefix(20) {
+            let shown = localhostMapper?.display(entry.url) ?? entry.url
+            let title = entry.title.flatMap { $0.isEmpty ? nil : $0 } ?? shown.absoluteString
+            menu.addItem(ClosureMenuItem(title: title) { [weak self] in self?.webView.go(to: entry) })
+        }
         return menu
     }
 
@@ -310,7 +376,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let point = convert(event.locationInWindow, from: nil)
         // The page has its own menu; the toolbar gets ours.
         guard point.y >= bounds.height - Self.toolbarHeight else { return super.menu(for: event) }
-        return toolbarMenu()
+        return optionsMenu()
     }
 
     @available(*, unavailable)
@@ -332,25 +398,24 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         let theme = Theme.current
         layer?.backgroundColor = theme?.pane.cgColor
         let h = pageFullscreen ? 0 : Self.toolbarHeight
-        for view in [back, forward, closeButton, reload, external, addressBox, toolbarLine] as [NSView] { view.isHidden = pageFullscreen }
+        for view in [back, forward, closeButton, options, addressBox, toolbarLine] as [NSView] { view.isHidden = pageFullscreen }
         // Light and compact: ‹ › on the left, the address (with ↻ inside)
-        // in the middle, extensions, ↗ and × on the right.
+        // in the middle, ⋯ and × on the right.
         let y = b.height - h + (h - 20) / 2
         back.frame = NSRect(x: 6, y: y, width: 20, height: 20)
         forward.frame = NSRect(x: 26, y: y, width: 20, height: 20)
         closeButton.frame = NSRect(x: b.width - 26, y: y, width: 20, height: 20)
-        external.frame = NSRect(x: b.width - 46, y: y, width: 20, height: 20)
-        // Narrow panes keep ‹, the address and ×; the rest steps aside.
-        let roomy = b.width >= 300, tight = b.width < 200
+        options.frame = NSRect(x: b.width - 46, y: y, width: 20, height: 20)
+        // The tightest panes keep ‹, the address, ⋯ and ×; › and ↻ are in
+        // the right-click menus.
+        let tight = b.width < Self.tightWidth
         forward.isHidden = pageFullscreen || tight
-        external.isHidden = pageFullscreen || !roomy
-        let right: CGFloat = roomy ? 52 : 30
+        reload.isHidden = pageFullscreen || tight
         let fieldX: CGFloat = tight ? 30 : 52
-        let fieldWidth = max(40, b.width - fieldX - right - 4)
+        let fieldWidth = max(40, b.width - fieldX - 52 - 4)
         addressBox.frame = NSRect(x: fieldX, y: y, width: fieldWidth, height: 20)
-        addressBox.layer?.backgroundColor = theme?.field.withAlphaComponent(0.55).cgColor
-        address.frame = NSRect(x: 8, y: 2, width: fieldWidth - 34, height: 16)
         reload.frame = NSRect(x: addressBox.frame.maxX - 22, y: y, width: 20, height: 20)
+        layoutAddress(tight: tight)
         toolbarLine.frame = NSRect(x: 0, y: b.height - h, width: b.width, height: 0.5)
         toolbarLine.layer?.backgroundColor = theme?.separator.cgColor
         progress.frame = NSRect(x: 0, y: b.height - h - 1, width: b.width * max(0.05, webView.estimatedProgress), height: 2)
@@ -361,6 +426,45 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         }
         webView.frame = NSRect(x: 0, y: 0, width: b.width, height: max(0, top))
         errorPage.frame = webView.frame
+    }
+
+    /// The box's contents, left to right: the machine (remote panes), the
+    /// security slot, its words when there's room, then the field.
+    private func layoutAddress(tight: Bool) {
+        let box = addressBox.bounds
+        let editing = isEditingAddress
+        var x: CGFloat = 8
+        // Telling a remote localhost from this Mac's matters more than the lock.
+        if !machineName.stringValue.isEmpty {
+            let room = box.width >= 170
+            machineName.isHidden = !room
+            if room {
+                let width = min(machineName.intrinsicContentSize.width + 2, box.width / 3)
+                machineName.frame = NSRect(x: x, y: 3, width: width, height: 14)
+                x += width + 5
+            }
+        }
+        let state = editing ? BrowserAddress.Security.quiet : securityState
+        // A warning always stays; the quiet lock goes first.
+        let slot = state.isWarning || (state == .secure && !tight)
+        security.isHidden = !slot
+        if slot {
+            security.frame = NSRect(x: x - 2, y: 3, width: 14, height: 14)
+            x += 15
+        }
+        let words = state == .insecure && box.width >= 280
+        securityWords.isHidden = !words
+        if words {
+            let width = securityWords.intrinsicContentSize.width + 2
+            securityWords.frame = NSRect(x: x, y: 2, width: width, height: 16)
+            x += width + 3
+        }
+        let right: CGFloat = tight ? 6 : 26
+        address.frame = NSRect(x: x, y: 2, width: max(10, box.width - x - right), height: 16)
+        addressBox.layer?.backgroundColor = Theme.current?.field.withAlphaComponent(editing ? 0.9 : 0.55).cgColor
+        addressBox.layer?.borderWidth = editing ? 1 : 0
+        addressBox.layer?.borderColor = Theme.current?.accentLine.cgColor
+        if !editing { renderAddress() }
     }
 
     private func updateLoading() {
@@ -394,32 +498,14 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     // MARK: - Navigation
 
-    /// Turns what someone typed into a URL: full URLs as-is, bare hosts
-    /// (`localhost:3000`, `example.com`) get a scheme, anything else searches.
-    static func normalize(_ input: String) -> URL? {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        if let url = URL(string: text), let scheme = url.scheme, ["http", "https", "file", "about"].contains(scheme) {
-            return url
-        }
-        let looksLikeHost = !text.contains(" ") && (text.contains(".") || text.hasPrefix("localhost") || text.contains(":"))
-        if looksLikeHost {
-            let local = text.hasPrefix("localhost") || text.hasPrefix("127.") || text.hasPrefix("0.0.0.0")
-            return URL(string: (local ? "http://" : "https://") + text)
-        }
-        var components = URLComponents(string: "https://duckduckgo.com/")!
-        components.queryItems = [URLQueryItem(name: "q", value: text)]
-        return components.url
-    }
-
     func load(_ input: String) {
-        guard let url = Self.normalize(input) else { return }
+        guard let url = BrowserAddress.normalize(input) else { return }
         navigate(to: url)
     }
 
     /// Loads a URL; on a remote machine, localhost first gets an SSH forward.
     func navigate(to url: URL) {
-        address.stringValue = url.absoluteString
+        showAddress(url)
         guard let mapper = localhostMapper, LocalhostMapper.isLocalhost(url) else {
             webView.load(URLRequest(url: url))
             return
@@ -452,9 +538,66 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         decisionHandler(.allow)
     }
 
+    // MARK: - Address bar
+
+    var isEditingAddress: Bool { address.currentEditor() != nil }
+
     func focusAddressBar() {
         window?.makeFirstResponder(address)
         address.currentEditor()?.selectAll(nil)
+    }
+
+    /// The page moved on. What someone is typing is never touched: it's
+    /// only put back when they leave the field.
+    private func showAddress(_ url: URL?) {
+        pageAddress = url
+        if !isEditingAddress { renderAddress() }
+        updateSecurity()
+    }
+
+    /// At rest: the host bright, the rest dim, shortened to fit. A local
+    /// page's port is part of the bright part, since it names the site.
+    private func renderAddress() {
+        guard let pageAddress else {
+            address.stringValue = ""
+            return
+        }
+        let font = address.font ?? .systemFont(ofSize: 11.5)
+        let shown = BrowserAddress.fit(BrowserAddress.shown(pageAddress), width: address.bounds.width - 5) {
+            ($0 as NSString).size(withAttributes: [.font: font]).width
+        }
+        let text = NSMutableAttributedString(string: shown.site, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        text.append(NSAttributedString(string: shown.rest, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+        address.attributedStringValue = text
+    }
+
+    /// The exact URL goes in for editing (the field editor picks up what's
+    /// here as it starts).
+    private func addressGainedFocus() {
+        address.textColor = .labelColor
+        address.stringValue = pageAddress?.absoluteString ?? ""
+        needsLayout = true
+    }
+
+    /// Left without Return: back to the page's address. With no page yet,
+    /// what was typed stays, in case the click away was to go copy something.
+    private func addressLostFocus() {
+        if pageAddress != nil { renderAddress() }
+        needsLayout = true
+    }
+
+    /// Esc: the first press puts the page's address back and keeps the
+    /// field; the next returns to the page. Nothing to undo goes straight there.
+    func control(_: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(cancelOperation(_:)) || selector == #selector(NSTextView.complete(_:)) else { return false }
+        let original = pageAddress?.absoluteString ?? ""
+        if textView.string != original {
+            textView.string = original
+            textView.selectAll(nil)
+        } else {
+            window?.makeFirstResponder(webView)
+        }
+        return true
     }
 
     @objc private func addressEntered() {
@@ -462,8 +605,27 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
         window?.makeFirstResponder(webView)
     }
 
-    @objc private func goBack() { webView.goBack() }
-    @objc private func goForward() { webView.goForward() }
+    private func updateSecurity() {
+        let state = navigationPending || !errorPage.isHidden
+            ? BrowserAddress.Security.quiet
+            : BrowserAddress.security(of: pageAddress, onlySecureContent: webView.hasOnlySecureContent)
+        guard state != securityState else { return }
+        securityState = state
+        let (symbol, tip, tint): (String, String, NSColor) = switch state {
+        case .secure: ("lock.fill", "This connection is secure", .tertiaryLabelColor)
+        case .mixed: ("lock.open.fill", "Some of this page was loaded insecurely", .systemOrange)
+        case .insecure: ("lock.open.fill", "This connection isn’t secure", .systemOrange)
+        case .quiet: ("", "", .clear)
+        }
+        security.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+            .withSymbolConfiguration(.init(pointSize: 9.5, weight: .regular))
+        security.contentTintColor = tint
+        security.toolTip = tip
+        needsLayout = true
+    }
+
+    @objc private func goBackClicked() { webView.goBack() }
+    @objc private func goForwardClicked() { webView.goForward() }
     /// The ↻ in the address bar: stops a load in progress, else reloads.
     @objc private func reloadPage() {
         if webView.isLoading {
@@ -476,18 +638,45 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     /// ⌘R: loads the page again, even mid-load. After a failed load, the
     /// address that failed.
     func reloadAgain() {
-        if webView.url == nil || !errorPage.isHidden, let url = Self.normalize(address.stringValue) {
-            navigate(to: url)
+        if webView.url == nil || !errorPage.isHidden, let pageAddress {
+            navigate(to: pageAddress)
         } else {
             webView.reload()
         }
     }
 
+    /// ⇧⌘R: everything fetched again, for checking a dev server's assets.
+    func reloadWithoutCache() {
+        if webView.url == nil || !errorPage.isHidden { return reloadAgain() }
+        webView.reloadFromOrigin()
+    }
+
+    func stopLoading() { webView.stopLoading() }
+    func goBack() { webView.goBack() }
+    func goForward() { webView.goForward() }
+
+    var isLoading: Bool { webView.isLoading }
+
     @objc private func closePane() { onClose?() }
 
-    @objc private func openExternally() {
+    /// The real URL: a remote page's forwarded port reaches it from any
+    /// browser on this Mac, where its localhost wouldn't.
+    func openInDefaultBrowser() {
         if let url = webView.url { NSWorkspace.shared.open(url) }
     }
+
+    func copyAddress() {
+        guard let pageAddress else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pageAddress.absoluteString, forType: .string)
+    }
+
+    /// ⌘+ ⌘− (±1) and ⌘0 (0).
+    func zoom(by step: Int) {
+        webView.pageZoom = step == 0 ? 1 : min(3, max(0.5, webView.pageZoom + CGFloat(step) * 0.1))
+    }
+
+    private var zoomPercent: Int { Int((webView.pageZoom * 100).rounded()) }
 
     private func updateButtons() {
         back.isEnabled = webView.canGoBack
@@ -497,9 +686,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     private func pageChanged() {
         // Forwarded remote pages show (and save) their localhost address.
         let shown = webView.url.map { localhostMapper?.display($0) ?? $0 }
-        if let shown, errorPage.isHidden, window?.firstResponder !== address.currentEditor() {
-            address.stringValue = shown.absoluteString
-        }
+        if let shown, errorPage.isHidden { showAddress(shown) }
         var state = HostPaneStore.shared[hostID] ?? HostPaneState(kind: .browser)
         state.url = shown?.absoluteString ?? state.url
         state.title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
@@ -569,6 +756,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
     }
 
     func webView(_: WKWebView, didCommit _: WKNavigation!) {
+        navigationPending = false
+        updateSecurity()
         pageFullscreen = false
         // A new page: its old media is gone.
         audibleFrames.removeAll()
@@ -577,6 +766,8 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     func webView(_: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
         lastNavigationError = nil
+        navigationPending = true
+        updateSecurity()
     }
 
     func webView(_: WKWebView, didFinish _: WKNavigation!) {
@@ -586,18 +777,26 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         lastNavigationError = error.localizedDescription
+        navigationPending = false
+        updateSecurity()
         finishLoad()
     }
 
     func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         lastNavigationError = error.localizedDescription
+        navigationPending = false
         finishLoad()
         let nsError = error as NSError
-        guard nsError.code != NSURLErrorCancelled else { return }
-        let failing = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Self.normalize(address.stringValue)
+        guard nsError.code != NSURLErrorCancelled else {
+            // Stopped, or superseded: the page on screen is still this one.
+            pageChanged()
+            return updateSecurity()
+        }
+        let failing = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? pageAddress
         errorPage.show(error: nsError, url: failing)
         // Keep the address that failed, not the page underneath.
-        if let failing { address.stringValue = failing.absoluteString }
+        if let failing { showAddress(localhostMapper?.display(failing) ?? failing) }
+        updateSecurity()
         needsLayout = true
     }
 
@@ -616,7 +815,7 @@ final class BrowserPaneView: NSView, WKNavigationDelegate, WKUIDelegate, NSTextF
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        if hit != nil, NSApp.currentEvent?.type == .leftMouseDown { onFocus?() }
+        if hit != nil, [.leftMouseDown, .rightMouseDown].contains(NSApp.currentEvent?.type) { onFocus?() }
         return hit
     }
 }

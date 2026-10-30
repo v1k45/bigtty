@@ -125,6 +125,15 @@ restarts. It identifies as Safari, plays media with a speaker on its tab, and
 video full screen fills the pane (or the display, if you prefer). Terminal
 links open in the tab's browser pane or in your default browser (a setting).
 
+The address bar shows the host bright and the path dim, with a lock that only
+speaks up when you should care: amber for plain http (local dev servers are
+fine) or insecure content on an https page. Long addresses lose the path first,
+then the start of the host, so the real site always shows. `:3000` means
+localhost. Esc puts the page's address back, and a second Esc returns to the
+page. A remote pane names its machine, so its `localhost` isn't mistaken for
+this Mac's. Right-click ‹ or › for history. The ⋯ menu (or a right-click on the
+toolbar) holds the page's actions, zoom, extensions and browser settings.
+
 **Extensions.** Browser panes run Safari/Chrome MV3 web extensions (macOS
 15.4+). **Settings ▸ General ▸ Get uBlock Origin Lite** installs it; any other
 unpacked extension goes in `~/Library/Application Support/bigtty/Extensions`.

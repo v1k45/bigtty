@@ -49,7 +49,8 @@ final class BrowserRegistry {
         let view = BrowserPaneView(
             hostID: hostID, state: state,
             dataStore: machine.flatMap { BrowserProxy.store(for: $0) },
-            localhostMapper: machine?.localhostMapper
+            localhostMapper: machine?.localhostMapper,
+            machineName: machine.flatMap { $0.isLocal ? nil : $0.name }
         )
         // Until a window shows it, lay the page out at a desktop size.
         view.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)

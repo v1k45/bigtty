@@ -234,7 +234,7 @@ final class ControlAPI {
             throw Failure(code: "no_pane", message: "run inside a herdr pane, or focus one in bigtty")
         }
         let direction: SplitDirection = params["direction"]?.stringValue == "down" ? .down : .right
-        let normalized = BrowserPaneView.normalize(url)?.absoluteString
+        let normalized = BrowserAddress.normalize(url)?.absoluteString
         let id = HostPaneStore.open(
             HostPaneState(kind: .browser, url: normalized), beside: beside, direction: direction, store: store
         )

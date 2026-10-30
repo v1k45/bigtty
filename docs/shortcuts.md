@@ -22,6 +22,9 @@
 | ⌃⌘S · ⇧⌘E · ⌃⌘F | Toggle sidebar · toggle file viewer · full screen |
 | ⌘F · ⌘G / ⇧⌘G · ⌘E | Find in the pane (terminal scrollback, page, file) · next / previous match · find the selection |
 | ⌘R | Reload the browser page, or the open file from disk |
+| ⇧⌘R · ⌘. | Reload the page without its cache · stop loading |
+| ⌘← · ⌘→ | Back · forward in a browser page (the page gets the key first) |
+| ⇧⌘O · ⇧⌘C | Open the page in your default browser · copy its address |
 | ⌘V | Paste (an image pastes as a file the agent can attach) |
 | ⌘, | Settings |
 | Hold ⌘Q | Quit (a quick press only shows the hint, so a slip doesn't close bigtty) |

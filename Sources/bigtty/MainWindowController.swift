@@ -1652,13 +1652,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         HostPaneStore.open(HostPaneState(kind: .browser, machine: machine.hostTag), beside: target, direction: .right, store: store, remote: !machine.isLocal)
     }
 
-    /// ⌘L: the focused browser pane's address bar, or a new browser pane.
+    /// ⌘L: the address bar of the focused browser, else of this tab's
+    /// browser, else of a new one split off beside this pane.
     @objc func openLocation(_ sender: Any?) {
-        if let id = focusedPaneID, let browser = paneViews[id]?.browser {
-            browser.focusAddressBar()
-        } else {
-            newBrowserPane(sender)
-        }
+        if let id = focusedPaneID, let browser = paneViews[id]?.browser { return browser.focusAddressBar() }
+        guard let tabID, let pane = store.panes(in: tabID).first(where: { $0.hostKind == .browser }),
+              let browser = paneViews[pane.paneID]?.browser
+        else { return newBrowserPane(sender) }
+        paneGainedFocus(pane.paneID)
+        browser.focusAddressBar()
     }
 
     private var pendingAddressFocus = false
@@ -2270,6 +2272,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         }
     }
 
+    // MARK: - The focused browser (Go ▸ Back and friends)
+
+    fileprivate var focusedBrowser: BrowserPaneView? { findPane?.browser }
+
+    @objc func browserBack(_: Any?) { focusedBrowser?.goBack() }
+    @objc func browserForward(_: Any?) { focusedBrowser?.goForward() }
+    @objc func browserReloadWithoutCache(_: Any?) { focusedBrowser?.reloadWithoutCache() }
+    @objc func browserStop(_: Any?) { focusedBrowser?.stopLoading() }
+    @objc func browserOpenInDefaultBrowser(_: Any?) { focusedBrowser?.openInDefaultBrowser() }
+    @objc func browserCopyAddress(_: Any?) { focusedBrowser?.copyAddress() }
+
     /// Debug hook: opens the find bar of the pane in focus and searches.
     @objc func debugFind(_ sender: Any?) {
         guard let query = sender as? String, let pane = findPane else { return }
@@ -2299,7 +2312,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private func changeTextSize(by step: Int) {
         if let id = focusedPaneID, let browser = paneViews[id]?.browser {
-            browser.webView.pageZoom = step == 0 ? 1 : min(3, max(0.5, browser.webView.pageZoom + CGFloat(step) * 0.1))
+            browser.zoom(by: step)
             return
         }
         let base = 13.0
@@ -2912,6 +2925,14 @@ extension MainWindowController: NSMenuItemValidation {
         case #selector(PaneActions.showFind(_:)), #selector(PaneActions.findNext(_:)),
              #selector(PaneActions.findPrevious(_:)), #selector(PaneActions.useSelectionForFind(_:)):
             return findPane?.finder != nil
+        case #selector(PaneActions.browserBack(_:)), #selector(PaneActions.browserForward(_:)):
+            // In the address bar or find bar these move the caret.
+            return focusedBrowser != nil && !(window?.firstResponder is NSTextView)
+        case #selector(PaneActions.browserStop(_:)):
+            return focusedBrowser?.isLoading == true
+        case #selector(PaneActions.browserReloadWithoutCache(_:)), #selector(PaneActions.browserOpenInDefaultBrowser(_:)),
+             #selector(PaneActions.browserCopyAddress(_:)):
+            return focusedBrowser != nil
         default:
             break
         }
