@@ -135,6 +135,13 @@ public enum ClaudeHooks {
         let (updated, changed) = change(settings)
         guard changed else { return .unchanged }
 
+        // Kept for the new file and the backup alike (it may hold tokens).
+        var mode: mode_t?
+        if original != nil {
+            var info = stat()
+            guard stat(target.path, &info) == 0 else { throw posixError(target) }
+            mode = info.st_mode & 0o7777
+        }
         var backup: URL?
         if let original {
             let stamp = DateFormatter()
@@ -148,18 +155,42 @@ public enum ClaudeHooks {
                     .appendingPathComponent("\(target.lastPathComponent).bigtty-backup-\(stamp.string(from: now))-\(n)")
                 n += 1
             }
-            // A copy keeps the file's permissions (it may hold tokens).
-            try fm.copyItem(at: target, to: candidate)
+            try write(original, to: candidate, mode: mode)
             backup = candidate
         } else {
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        let permissions = (try? fm.attributesOfItem(atPath: target.path))?[.posixPermissions]
-        try Data((json(updated) + "\n").utf8).write(to: target, options: .atomic)
-        if let permissions {
-            try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: target.path)
-        }
+        try write(Data((json(updated) + "\n").utf8), to: target, mode: mode)
         return .written(backup: backup)
+    }
+
+    /// Writes `data` to a new file beside `url` and renames it over `url`.
+    /// The file has `mode` from the moment it exists, so a settings file that
+    /// may hold tokens is never readable with default permissions, not even
+    /// briefly (nil: the defaults, for a file that's new).
+    static func write(_ data: Data, to url: URL, mode: mode_t?, beforeRename: ((URL) throws -> Void)? = nil) throws {
+        let temp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).bigtty-\(UUID().uuidString)")
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode ?? 0o666)
+        guard fd >= 0 else { throw posixError(temp) }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            // The umask may have narrowed it; the mode is set exactly before
+            // anything is written.
+            if let mode, fchmod(fd, mode) != 0 { throw posixError(temp) }
+            try file.write(contentsOf: data)
+            try file.synchronize()
+            try file.close()
+            try beforeRename?(temp)
+            guard rename(temp.path, url.path) == 0 else { throw posixError(url) }
+        } catch {
+            unlink(temp.path)
+            throw error
+        }
+    }
+
+    private static func posixError(_ url: URL) -> Error {
+        let code = POSIXErrorCode(rawValue: errno) ?? .EIO
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code.rawValue), userInfo: [NSFilePathErrorKey: url.path])
     }
 
     /// JSON as Claude Code writes it (two-space indent, `"key": value`),

@@ -20,6 +20,10 @@ public final class TerminalChannel: @unchecked Sendable {
     private var stdin: FileHandle?
     private var pendingStdout = Data()
     private var closed = false
+    /// The ends of the pipes this channel opened, so tests can check it
+    /// gave them back.
+    var pipeEnds: [PipeEnd] { lock.withLock { ends } }
+    private var ends: [PipeEnd] = []
 
     /// Raw ANSI bytes for the terminal surface. Called on a background queue.
     public var onFrame: (@Sendable (Data) -> Void)?
@@ -56,6 +60,8 @@ public final class TerminalChannel: @unchecked Sendable {
 
         let input = Pipe()
         let output = Pipe()
+        let ends = [input, output].flatMap { [$0.fileHandleForReading, $0.fileHandleForWriting] }.map { PipeEnd($0.fileDescriptor) }
+        lock.withLock { self.ends = ends }
         process.standardInput = input
         process.standardOutput = output
         if let log = ProcessInfo.processInfo.environment["BIGTTY_CHANNEL_LOG"],
@@ -206,5 +212,24 @@ public final class TerminalChannel: @unchecked Sendable {
                 if process.isRunning { process.terminate() }
             }
         }
+    }
+}
+
+/// One end of a pipe, known by its inode as well as its descriptor: once
+/// it's closed, the number can come back as something else.
+struct PipeEnd: Equatable {
+    let descriptor: Int32
+    let inode: UInt64
+
+    init(_ descriptor: Int32) {
+        var info = stat()
+        fstat(descriptor, &info)
+        self.descriptor = descriptor
+        inode = info.st_ino
+    }
+
+    var isOpen: Bool {
+        var info = stat()
+        return fstat(descriptor, &info) == 0 && info.st_mode & S_IFMT == S_IFIFO && info.st_ino == inode
     }
 }

@@ -134,6 +134,35 @@ import Testing
         #expect(backups.count == 1)
     }
 
+    /// The rewritten file has the original's mode before it replaces it,
+    /// so there's no moment it sits there with default permissions.
+    @Test func newFileHasTheModeBeforeItReplacesTheOld() throws {
+        let dir = try tempDir()
+        let url = dir.appendingPathComponent("settings.json")
+        try "{}".write(to: url, atomically: true, encoding: .utf8)
+        let mode = { (path: String) in (try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? Int }
+        var seen: Int?
+        try ClaudeHooks.write(Data("new".utf8), to: url, mode: 0o640) { temp in
+            seen = mode(temp.path)
+            #expect((try? String(contentsOf: temp, encoding: .utf8)) == "new")
+        }
+        #expect(seen == 0o640)
+        #expect(mode(url.path) == 0o640)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "new")
+    }
+
+    @Test func failedWriteLeavesTheOriginal() throws {
+        let dir = try tempDir()
+        let url = dir.appendingPathComponent("settings.json")
+        try "{}".write(to: url, atomically: true, encoding: .utf8)
+        struct Stop: Error {}
+        #expect(throws: Stop.self) {
+            try ClaudeHooks.write(Data("new".utf8), to: url, mode: 0o600) { _ in throw Stop() }
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == "{}")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["settings.json"])
+    }
+
     @Test func leavesAFileThatIsNotJSONAlone() throws {
         let url = try tempDir().appendingPathComponent("settings.json")
         try "{ not json".write(to: url, atomically: true, encoding: .utf8)
