@@ -43,9 +43,9 @@ import Testing
     @Test func aLinkMatchesItsPageLoosely() {
         func url(_ s: String) -> URL? { URL(string: s) }
         #expect(BrowserTabRules.samePage(url("http://localhost:3000/"), url("http://localhost:3000")))
-        #expect(BrowserTabRules.samePage(url("https://a.dev/x#top"), url("https://a.dev/x")))
-        #expect(!BrowserTabRules.samePage(url("https://a.dev/x"), url("https://a.dev/y")))
-        #expect(!BrowserTabRules.samePage(url("https://a.dev/?q=1"), url("https://a.dev/?q=2")))
+        #expect(BrowserTabRules.samePage(url("https://a.invalid/x#top"), url("https://a.invalid/x")))
+        #expect(!BrowserTabRules.samePage(url("https://a.invalid/x"), url("https://a.invalid/y")))
+        #expect(!BrowserTabRules.samePage(url("https://a.invalid/?q=1"), url("https://a.invalid/?q=2")))
         #expect(!BrowserTabRules.samePage(nil, nil))
     }
 
@@ -63,8 +63,8 @@ import Testing
     }
 
     @Test func tabStateSurvivesSaving() throws {
-        var state = HostPaneState(kind: .browser, url: "https://b.dev")
-        state.tabs = [BrowserTabState(id: "t1", url: "https://a.dev", title: "A"), BrowserTabState(id: "t2", url: "https://b.dev", agent: true)]
+        var state = HostPaneState(kind: .browser, url: "https://b.invalid")
+        state.tabs = [BrowserTabState(id: "t1", url: "https://a.invalid", title: "A"), BrowserTabState(id: "t2", url: "https://b.invalid", agent: true)]
         state.activeTab = "t2"
         let back = try JSONDecoder().decode(HostPaneState.self, from: JSONEncoder().encode(state))
         #expect(back.tabs == state.tabs)
@@ -158,12 +158,12 @@ import Testing
     }
 
     @Test func reopeningPutsATabBackWhereItWas() {
-        let view = pane(["https://a.dev", "https://b.dev", "https://c.dev"], active: 0)
+        let view = pane(["https://a.invalid", "https://b.invalid", "https://c.invalid"], active: 0)
         view.close(view.pages[1])
         #expect(view.closed.count == 1)
         view.reopenClosed()
-        #expect(view.pages.map(\.address?.host) == ["a.dev", "b.dev", "c.dev"])
-        #expect(view.activePage.address?.host == "b.dev")
+        #expect(view.pages.map(\.address?.host) == ["a.invalid", "b.invalid", "c.invalid"])
+        #expect(view.activePage.address?.host == "b.invalid")
         #expect(view.closed.isEmpty)
     }
 
@@ -185,24 +185,24 @@ import Testing
     }
 
     @Test func aLinkReusesTheTabOnItsPage() {
-        let view = pane(["https://a.dev/", "https://b.dev/"], active: 0)
-        view.showLink(URL(string: "https://b.dev")!)
-        #expect(view.activePage.address?.host == "b.dev")
+        let view = pane(["https://a.invalid/", "https://b.invalid/"], active: 0)
+        view.showLink(URL(string: "https://b.invalid")!)
+        #expect(view.activePage.address?.host == "b.invalid")
         #expect(view.pages.count == 2)
     }
 
     @Test func aLinkFillsABlankTab() {
         let view = pane([nil])
-        view.showLink(URL(string: "https://a.dev")!)
+        view.showLink(URL(string: "https://a.invalid")!)
         #expect(view.pages.count == 1)
-        #expect(view.activePage.address?.host == "a.dev")
+        #expect(view.activePage.address?.host == "a.invalid")
     }
 
     @Test func aLinkToANewPageOpensATab() {
-        let view = pane(["https://a.dev/"])
-        view.showLink(URL(string: "https://b.dev")!)
+        let view = pane(["https://a.invalid/"])
+        view.showLink(URL(string: "https://b.invalid")!)
         #expect(view.pages.count == 2)
-        #expect(view.activePage.address?.host == "b.dev")
+        #expect(view.activePage.address?.host == "b.invalid")
     }
 
     @Test func theStripNeedsTwoTabsAndRoom() {
@@ -223,23 +223,23 @@ import Testing
     }
 
     @Test func theCountButtonListsEveryTab() {
-        let view = pane(["https://a.dev", "https://b.dev"])
+        let view = pane(["https://a.invalid", "https://b.invalid"])
         view.frame = NSRect(x: 0, y: 0, width: 250, height: 300)
-        #expect(view.tabsMenu().items.prefix(2).map(\.title) == ["a.dev", "b.dev"])
+        #expect(view.tabsMenu().items.prefix(2).map(\.title) == ["a.invalid", "b.invalid"])
         #expect(view.tabsMenu().items.contains { $0.title == "New Tab" })
     }
 
     @Test func theTightestCountButtonHoldsTheOptionsToo() {
-        let view = pane(["https://a.dev", "https://b.dev"])
+        let view = pane(["https://a.invalid", "https://b.invalid"])
         view.frame = NSRect(x: 0, y: 0, width: 180, height: 300)
         #expect(view.tabsMenu().items.contains { $0.title == "Copy Address" })
     }
 
     @Test func stateMirrorsTheActiveTab() {
-        let view = pane(["https://a.dev/", "https://b.dev/"], active: 0)
+        let view = pane(["https://a.invalid/", "https://b.invalid/"], active: 0)
         view.select(view.pages[1])
         let state = HostPaneStore.shared[view.hostID]
-        #expect(state?.url == "https://b.dev/")
+        #expect(state?.url == "https://b.invalid/")
         #expect(state?.activeTab == view.pages[1].id)
         #expect(state?.tabs?.map(\.id) == view.pages.map(\.id))
     }

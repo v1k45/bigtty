@@ -108,18 +108,8 @@ final class HostPaneStore {
     private let fileURL: URL
     private var saveScheduled = false
 
-    /// Where pane state lives. A test run gets a throwaway folder: its
-    /// panes must never reach the file the real app restores from.
-    nonisolated static let directory: URL = {
-        let isTestRun = ["xctest", "swiftpm-testing-helper"].contains(ProcessInfo.processInfo.processName)
-        let base = isTestRun
-            ? FileManager.default.temporaryDirectory.appendingPathComponent("bigtty-tests-\(UUID().uuidString)", isDirectory: true)
-            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("bigtty", isDirectory: true)
-    }()
-
     private init() {
-        let dir = Self.directory
+        let dir = AppPaths.support
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("panes.json")
         if let data = try? Data(contentsOf: fileURL),

@@ -70,7 +70,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
     static let automationWorld = WKContentWorld.world(name: "bigtty")
 
     /// One cookie/storage store for every browser pane, persisted on disk.
-    private static let sharedDataStore = WKWebsiteDataStore.default()
+    /// (WebKit keeps it in the user's Library, so a test run gets none.)
+    static let sharedDataStore = AppPaths.isTestRun ? WKWebsiteDataStore.nonPersistent() : WKWebsiteDataStore.default()
 
     /// The installed Safari's version, for the user agent.
     static let safariVersion: String = {

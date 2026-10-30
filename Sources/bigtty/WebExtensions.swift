@@ -9,8 +9,7 @@ import WebKit
 enum WebExtensions {
     /// Where unpacked extensions live, one folder each.
     static var folder: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("bigtty/Extensions", isDirectory: true)
+        AppPaths.support.appendingPathComponent("Extensions", isDirectory: true)
     }
 
     /// The shared controller, for web view configurations; nil before macOS 15.4.
@@ -149,7 +148,7 @@ final class WebExtensionHost: NSObject, WKWebExtensionControllerDelegate {
 
     override init() {
         // Persistent storage per extension (settings, filter choices).
-        controller = WKWebExtensionController(configuration: .default())
+        controller = WKWebExtensionController(configuration: AppPaths.isTestRun ? .nonPersistent() : .default())
         super.init()
         controller.delegate = self
     }

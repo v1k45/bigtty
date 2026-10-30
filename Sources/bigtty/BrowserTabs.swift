@@ -85,7 +85,7 @@ enum BrowserPageState {
     /// Above this a page's state isn't worth restoring.
     static let sizeLimit = 256 * 1024
 
-    static var folder: URL { HostPaneStore.directory.appendingPathComponent("browser-tabs", isDirectory: true) }
+    static var folder: URL { AppPaths.support.appendingPathComponent("browser-tabs", isDirectory: true) }
 
     private static func file(_ id: String) -> URL? {
         // Ids come from `panes.json`: nothing there may name a path elsewhere.
