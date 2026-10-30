@@ -25,6 +25,9 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     private(set) var mode: Mode = .control
     private var viewport: InMemoryTerminalViewport?
     private var scrollAccumulator: CGFloat = 0
+    /// Keeps a selection on its text as herdr scrolls it; see `SelectionTracker`.
+    private let selectionTracker = SelectionTracker()
+    private let selectionOverlay = SelectionHighlightView()
 
     var onFocus: (() -> Void)?
     /// herdr ended the stream, e.g. another client took control.
@@ -56,7 +59,16 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         )
         box.value = self
         let surfaceSession = session!
-        gate = FrameGate { surfaceSession.receive($0) }
+        let tracker = selectionTracker
+        gate = FrameGate { data in
+            surfaceSession.receive(data)
+            // With a selection to keep on its text, see where the text went.
+            guard tracker.isTracking else { return }
+            surfaceSession.waitForPendingOutput()
+            guard let screen = surfaceSession.readViewportText(),
+                  let change = tracker.screenChanged(screen.components(separatedBy: "\n")) else { return }
+            DispatchQueue.main.async { box.value?.selectionChanged(change) }
+        }
         self.controller = controller
         configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         delegate = self
@@ -71,6 +83,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
         let first = self.viewport == nil
+        // The app re-wraps its text for the new size.
+        if !first { dropPinnedSelection() }
         self.viewport = viewport
         // Ghostty creates surfaces focused; only the first responder should
         // draw a focused (blinking) cursor.
@@ -157,6 +171,7 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     private func startChannel() {
         guard let viewport, viewport.columns > 0, viewport.rows > 0 else { return }
         channel?.close()
+        dropPinnedSelection()
         let channel = TerminalChannel(endpoint: endpoint, terminalID: terminalID, mode: displaced ? .observe : mode)
         // Attaching resizes the pane to this view: wait for the redraw.
         gate.hold()
@@ -275,6 +290,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
     /// Typing into an observing view takes control first, then delivers.
     private func userInput(_ data: Data) {
         if mode == .observe || displaced { takeControl() }
+        // Typing clears Ghostty's selection; a moved one goes too.
+        dropPinnedSelection()
         channel?.sendInput(data)
     }
 
@@ -322,7 +339,14 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         let grid = viewport.map { "\($0.columns)x\($0.rows)" } ?? "none"
         let text = session.readViewportText() ?? "<no surface>"
         let state = (channel?.isRunning == true ? "\(mode)" : "none") + (displaced ? " displaced" : "") + (hasDetached ? " detached" : "") + " term=\(terminalID)"
-        return "viewport=\(grid) channel=\(state)\n\(text)"
+        var selection = ""
+        if let selected = selectedText {
+            let top = bounds.height - (cellMetrics()?.padY ?? 0), height = cellMetrics()?.cellHeight ?? 1
+            let rows = selectionOverlay.rects.map { Int(((top - $0.maxY) / height).rounded()) }
+            let lines = selectionOverlay.superview == nil ? "ghostty" : "drawn on rows \(rows)"
+            selection = " selection=\(lines) \(selected.debugDescription)"
+        }
+        return "viewport=\(grid) channel=\(state)\(selection)\n\(text)"
     }
 
     /// Tells Ghostty whether this surface has focus. Unfocused surfaces draw
@@ -448,6 +472,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
 
     override func mouseDown(with event: NSEvent) {
         pressed(event, button: "left")
+        // A click starts over: Ghostty clears or replaces its own selection.
+        dropPinnedSelection()
         super.mouseDown(with: event)
     }
 
@@ -464,6 +490,8 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         commandClickCell = event.modifierFlags.contains(.command) && !draggedSincePress ? cellPosition(of: event) : nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.commandClickCell = nil }
         super.mouseUp(with: event)
+        // A rectangle (⌥-drag) is left to Ghostty, where it stays put.
+        if !event.modifierFlags.contains(.option) { pinSelection() }
         // ⌘-click opens links; that's Ghostty's, not the app's.
         guard event.modifierFlags.contains(.command) else { return released(event) }
         // Nothing Ghostty saw as a link: the word under the pointer may
@@ -575,12 +603,92 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         guard lines != 0 else { return }
         scrollAccumulator -= CGFloat(lines)
         let cell = cellPosition(of: event)
+        let count = min(abs(lines), 60)
+        // Scrolling up (back) moves the text down.
+        selectionTracker.scrolled(movingTextUp: lines > 0 ? -count : count)
         // One message per line: for apps with their own scrolling (less,
         // Claude Code) herdr sends one wheel event per message whatever
         // `lines` says; only its scrollback honours the count.
-        for _ in 0..<min(abs(lines), 60) {
+        for _ in 0..<count {
             channel?.scroll(up: lines > 0, lines: 1, column: cell?.column, row: cell?.row)
         }
+    }
+
+    // MARK: - Selection
+
+    /// Starts keeping Ghostty's selection, if there is one, on its text.
+    private func pinSelection() {
+        guard let selection = ghosttySelection(), let screen = session.readViewportText() else { return }
+        selectionTracker.start(selection, screen: screen.components(separatedBy: "\n"))
+    }
+
+    private func dropPinnedSelection() {
+        selectionTracker.stop()
+        selectionOverlay.removeFromSuperview()
+    }
+
+    /// The text moved under the selection, or went away.
+    private func selectionChanged(_ change: SelectionTracker.Change) {
+        switch change {
+        case let .moved(selection, first):
+            // Ghostty's highlight is on the old cells: clear it (switching
+            // screens away and back clears the selection, and nothing
+            // else) and draw the selection here from now on.
+            if first { session.receive(Data("\u{1b}[?47h\u{1b}[?47l".utf8)) }
+            drawSelection(selection)
+        case .lost:
+            if selectionOverlay.superview == nil { session.receive(Data("\u{1b}[?47h\u{1b}[?47l".utf8)) }
+            dropPinnedSelection()
+        }
+    }
+
+    private func drawSelection(_ selection: PinnedSelection) {
+        guard let m = cellMetrics() else { return }
+        if selectionOverlay.superview !== self {
+            selectionOverlay.frame = bounds
+            selectionOverlay.autoresizingMask = [.width, .height]
+            selectionOverlay.color = selectionColor
+            addSubview(selectionOverlay)
+        }
+        selectionOverlay.rects = selection.runs(rows: m.rows, columns: m.columns).compactMap {
+            cellsRect(column: $0.column, row: $0.line, count: $0.count)
+        }
+    }
+
+    /// The theme's selection color, over the text instead of behind it.
+    private var selectionColor: NSColor {
+        let theme = TerminalThemeChoice.find(Settings.terminalTheme)
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let hex = (dark ? theme.dark : theme.light).map { $0[3] }
+        let color = hex.flatMap { UInt32($0, radix: 16) }.map {
+            NSColor(srgbRed: CGFloat($0 >> 16 & 0xFF) / 255, green: CGFloat($0 >> 8 & 0xFF) / 255, blue: CGFloat($0 & 0xFF) / 255, alpha: 1)
+        } ?? .selectedTextBackgroundColor
+        return color.withAlphaComponent(0.5)
+    }
+
+    /// The selected text: once herdr has scrolled it, what was selected,
+    /// wherever it is now (Ghostty's copy would read the cells it was on).
+    var selectedText: String? {
+        selectionTracker.movedSelection?.text ?? ghosttySelection()?.text
+    }
+
+    @discardableResult
+    override func copySelectedTextToPasteboard() -> Bool {
+        guard let text = selectionTracker.movedSelection?.text else { return super.copySelectedTextToPasteboard() }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return true
+    }
+
+    /// The right-click menu offers Copy for a moved selection too.
+    override func selectionMenuPoint(at point: CGPoint) -> CGPoint? {
+        selectionTracker.movedSelection != nil ? point : super.selectionMenuPoint(at: point)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        dropPinnedSelection()
+        super.selectAll(sender)
+        pinSelection()
     }
 
     /// Zero-based grid cell under the event, from the surface's cell size.
@@ -660,6 +768,24 @@ final class HerdrTerminalView: AppTerminalView, TerminalSurfaceOpenURLDelegate, 
         NSLog("bigtty: debugCommandClick \(word) at column \(column) row \(row)")
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+            window.sendEvent(event)
+        }
+    }
+
+    /// Debug hook: drag-selects `word`'s first appearance on screen with
+    /// real mouse events, as the user would.
+    func debugSelect(_ word: String) {
+        guard let window, let text = session.readViewportText(), let m = cellMetrics() else { return }
+        let lines = text.components(separatedBy: "\n")
+        guard let row = lines.firstIndex(where: { $0.contains(word) }),
+              let range = lines[row].range(of: word) else { return NSLog("bigtty: debugSelect: \(word) not on screen") }
+        let column = lines[row].distance(from: lines[row].startIndex, to: range.lowerBound)
+        let y = bounds.height - m.padY - (CGFloat(row) + 0.5) * m.cellHeight
+        let from = convert(NSPoint(x: m.padX + (CGFloat(column) + 0.1) * m.cellWidth, y: y), to: nil)
+        let to = convert(NSPoint(x: m.padX + (CGFloat(column + word.count) - 0.1) * m.cellWidth, y: y), to: nil)
+        for (type, point) in [(NSEvent.EventType.leftMouseDown, from), (.leftMouseDragged, to), (.leftMouseUp, to)] {
+            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
             window.sendEvent(event)
         }
