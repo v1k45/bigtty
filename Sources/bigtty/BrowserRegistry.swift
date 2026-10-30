@@ -11,6 +11,8 @@ enum BrowserProxy {
     private static var stores: [String: WKWebsiteDataStore] = [:]
     private static var ports: [String: Int] = [:]
 
+    static var allStores: [WKWebsiteDataStore] { Array(stores.values) }
+
     static func store(for machine: Machine) -> WKWebsiteDataStore? {
         guard !machine.isLocal else { return nil }
         let store = stores[machine.id] ?? {
@@ -50,7 +52,8 @@ final class BrowserRegistry {
             hostID: hostID, state: state,
             dataStore: machine.flatMap { BrowserProxy.store(for: $0) },
             localhostMapper: machine?.localhostMapper,
-            machineName: machine.flatMap { $0.isLocal ? nil : $0.name }
+            machineName: machine.flatMap { $0.isLocal ? nil : $0.name },
+            machineKey: machine.map(Self.historyKey) ?? "local"
         )
         // Until a window shows it, lay the page out at a desktop size.
         view.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -78,6 +81,11 @@ final class BrowserRegistry {
 
     var all: [(id: String, view: BrowserPaneView)] {
         views.map { ($0.key, $0.value) }.sorted { $0.id < $1.id }
+    }
+
+    /// Whose history a machine's pages are: its sessions share one.
+    static func historyKey(_ machine: Machine) -> String {
+        machine.isLocal ? "local" : machine.parentID ?? machine.id
     }
 
     /// Every page with a web view, for extensions, which see each as a tab.

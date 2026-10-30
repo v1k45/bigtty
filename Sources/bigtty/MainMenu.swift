@@ -61,6 +61,7 @@ import AppKit
     func browserOpenInDefaultBrowser(_ sender: Any?)
     func browserCopyAddress(_ sender: Any?)
     func reopenClosedTab(_ sender: Any?)
+    func browserShowInspector(_ sender: Any?)
     func nextPageTab(_ sender: Any?)
     func previousPageTab(_ sender: Any?)
 }
@@ -163,6 +164,7 @@ enum MainMenu {
         item(view, "Reload", #selector(PaneActions.reloadPane(_:)), "r")
         main.contextual.append(item(view, "Reload Without Cache", #selector(PaneActions.browserReloadWithoutCache(_:)), "r", [.command, .shift]))
         main.contextual.append(item(view, "Stop", #selector(PaneActions.browserStop(_:)), "."))
+        main.contextual.append(item(view, "Web Inspector", #selector(PaneActions.browserShowInspector(_:)), "i", [.command, .option]))
         view.addItem(.separator())
         item(view, "Toggle Sidebar", #selector(PaneActions.toggleSidebar(_:)), "s", [.command, .control])
         item(view, "Toggle File Viewer", #selector(PaneActions.toggleFileViewer(_:)), "e", [.command, .shift])

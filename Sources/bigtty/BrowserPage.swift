@@ -36,8 +36,17 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var isForwarding = false
     /// The page fills the pane (full screen in the pane): no toolbar.
     private(set) var isFullscreen = false
-    /// A form was posted here: going back after a restart could post it again.
-    private var postedForm = false
+    /// Back/forward aren't written down for this tab: going back after a
+    /// restart could post a form again, or history was cleared.
+    private var dropsHistory = false
+    /// When an agent last acted here: what happens next is its doing.
+    private var lastAgentAction: Date?
+    /// The next page came from the address bar.
+    private var typed = false
+    /// The first load after a restart isn't a visit.
+    private var restored = false
+    /// The clean address last recorded, so a reload doesn't count twice.
+    private var recorded: String?
 
     private var audibleFrames: [String: Bool] = [:]
     /// Some frame is playing sound; shown on the tab.
@@ -218,6 +227,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
         WebExtensions.tabOpened(self)
         if let restoring {
             self.restoring = nil
+            restored = true
             web.interactionState = restoring
         } else if let address {
             navigate(to: address)
@@ -311,6 +321,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func noteAutomation(_ text: String) {
         automationText = text
+        lastAgentAction = Date()
         keepAwake()
         pane?.pageChromeChanged(self)
         automationHide?.cancel()
@@ -372,12 +383,51 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.reloadFromOrigin()
     }
 
+    // MARK: - History
+
+    private var isYours: Bool {
+        BrowserHistoryRules.isYours(enabled: Settings.browserHistory, openedByAgent: openedByAgent, lastAgentAction: lastAgentAction, now: Date())
+    }
+
+    /// Return in the address bar: a tab an agent opened becomes yours.
+    func noteTyped() {
+        openedByAgent = false
+        lastAgentAction = nil
+        typed = true
+    }
+
+    private func recordVisit() {
+        defer { typed = false }
+        guard let url = storage?.url, let clean = BrowserHistoryRules.clean(localhostMapper?.display(url) ?? url), let pane else { return }
+        let again = clean == recorded && !typed
+        // Set either way: reloading an agent's page doesn't make it yours.
+        recorded = clean
+        guard isYours, !again else { return }
+        BrowserHistory.shared.record(url: clean, machine: pane.machineKey, title: title, space: pane.spaceName?(), typed: typed)
+    }
+
+    private func recordTitle() {
+        guard isYours, let recorded, !title.isEmpty, let pane, let url = storage?.url,
+              BrowserHistoryRules.clean(localhostMapper?.display(url) ?? url) == recorded else { return }
+        BrowserHistory.shared.setTitle(title, url: recorded, machine: pane.machineKey)
+    }
+
+    func forgetSavedHistory() {
+        dropsHistory = true
+        recorded = nil
+        BrowserPageState.remove(id)
+    }
+
     private func pageChanged() {
         let before = address
         // Forwarded remote pages show (and save) their localhost address.
         if let url = storage?.url, failure == nil { address = localhostMapper?.display(url) ?? url }
         // A restored page keeps its saved title until it publishes one.
+        let oldTitle = title
         if let shown = storage?.title, !shown.isEmpty || address != before { title = shown }
+        // A page that changes its address without loading (most web apps).
+        if address != before, storage?.isLoading == false { recordVisit() }
+        if title != oldTitle { recordTitle() }
         pane?.pageChanged(self)
         WebExtensions.tabChanged(self)
     }
@@ -409,7 +459,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
             navigate(to: url)
             return
         }
-        if action.request.httpMethod == "POST" { postedForm = true }
+        if action.request.httpMethod == "POST" { dropsHistory = true }
         decisionHandler(.allow)
     }
 
@@ -421,6 +471,12 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_: WKWebView, didCommit _: WKNavigation!) {
         navigationPending = false
         isFullscreen = false
+        if restored {
+            restored = false
+            recorded = storage?.url.flatMap { BrowserHistoryRules.clean(localhostMapper?.display($0) ?? $0) }
+        } else {
+            recordVisit()
+        }
         // A new page: its old media is gone.
         audibleFrames.removeAll()
         isAudible = false
@@ -542,7 +598,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     /// Whether this tab's history may be written down: remote forwards
     /// change between launches.
-    private var keepsHistory: Bool { localhostMapper == nil && !postedForm }
+    private var keepsHistory: Bool { localhostMapper == nil && !dropsHistory }
 
     /// What goes on ⇧⌘T's list, or `saveHistory`'s file.
     var historyData: Data? {

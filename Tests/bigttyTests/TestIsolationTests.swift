@@ -14,6 +14,10 @@ import Testing
         }
     }
 
+    @Test func historyGoesToATemporaryFolder() {
+        #expect(BrowserHistory.shared.path.hasPrefix(temporary))
+    }
+
     @Test func webDataStaysInMemory() {
         #expect(!BrowserPage.sharedDataStore.isPersistent)
     }

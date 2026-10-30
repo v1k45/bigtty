@@ -124,6 +124,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "copyOnSelect") }
     }
 
+    /// Remember the pages you open, for the address bar.
+    static var browserHistory: Bool {
+        get { UserDefaults.standard.object(forKey: "browserHistory") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "browserHistory") }
+    }
+
     /// Played when an agent needs you or finishes (a system sound's name;
     /// empty for none).
     static var sound: String {
@@ -169,6 +175,7 @@ final class SettingsWindowController: NSWindowController {
     private let fullscreen = NSPopUpButton()
     private let paneKeys = NSPopUpButton()
     private let herdr = NSTextField(labelWithString: "")
+    private let rememberHistory = NSButton(checkboxWithTitle: "Remember pages you open", target: nil, action: nil)
     private let getUBlock = NSButton(title: "Get uBlock Origin Lite", target: nil, action: nil)
     private let extensionsFolder = NSButton(title: "Open Folder", target: nil, action: nil)
     private let extensionsStatus = NSTextField(wrappingLabelWithString: "")
@@ -310,9 +317,38 @@ final class SettingsWindowController: NSWindowController {
         form([
             [label("Open terminal links:"), stack(links, "⌘-click on a web link in a terminal.")],
             [label("Video full screen:"), stack(fullscreen, "Fill the pane keeps the rest of bigtty on screen; Esc leaves. Applies to pages opened after a change.")],
+            [label("History:"), historyRow()],
+            [label("Website data:"), websiteDataRow()],
             [label("Extensions:"), extensionsRow()],
         ])
     }
+
+    /// The pages you opened stay on this Mac; agents' browsing isn't kept.
+    private func historyRow() -> NSView {
+        rememberHistory.state = Settings.browserHistory ? .on : .off
+        rememberHistory.target = self
+        rememberHistory.action = #selector(rememberHistoryChanged)
+        let clear = NSButton(title: "Clear History…", target: self, action: #selector(clearHistory))
+        clear.bezelStyle = .rounded
+        let note = NSTextField(labelWithString: "Kept on this Mac for 90 days. Pages agents open aren’t included, and agents can’t read it.")
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        let column = NSStackView(views: [rememberHistory, clear, note])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        return column
+    }
+
+    private func websiteDataRow() -> NSView {
+        let clear = NSButton(title: "Clear Cookies and Site Data…", target: self, action: #selector(clearWebsiteData))
+        clear.bezelStyle = .rounded
+        return clear
+    }
+
+    @objc private func rememberHistoryChanged() { Settings.browserHistory = rememberHistory.state == .on }
+    @objc private func clearHistory() { BrowserData.confirmClearHistory(in: window) }
+    @objc private func clearWebsiteData() { BrowserData.confirmClearWebsiteData(in: window) }
 
     /// Web extensions for browser panes: the uBlock installer, the folder
     /// for any other unpacked MV3 extension, and what's loaded.

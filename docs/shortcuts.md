@@ -27,6 +27,8 @@
 | ⇧⌘O · ⇧⌘C | Open the page in your default browser · copy its address |
 | ⌃⌥1–9 · ⇧⌘] / ⇧⌘[ | Page tab by number · next / previous page tab |
 | ⌘W · ⇧⌘T | Close the page tab (the pane with its last) · reopen a closed one |
+| ↑ ↓ · ⌘⏎ · ⌘⌫ | In the address bar: choose a row · open in a new tab · remove a history row |
+| ⌥⌘I | Web Inspector |
 | ⌘V | Paste (an image pastes as a file the agent can attach) |
 | ⌘, | Settings |
 | Hold ⌘Q | Quit (a quick press only shows the hint, so a slip doesn't close bigtty) |

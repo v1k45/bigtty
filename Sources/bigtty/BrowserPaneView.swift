@@ -14,6 +14,8 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     private let dataStore: WKWebsiteDataStore?
     /// Set for a remote machine's panes: its `localhost` goes through SSH.
     let localhostMapper: LocalhostMapper?
+    /// Whose history this is: a remote `localhost` isn't this Mac's.
+    let machineKey: String
     /// What ⇧⌘T brings back, last closed at the end.
     private(set) var closed: [ClosedBrowserTab] = []
     /// The page each calling terminal last used. Refs like @e5 belong to one
@@ -47,6 +49,12 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     var onStateChange: ((HostPaneState) -> Void)?
     /// The user clicked into the pane.
     var onFocus: (() -> Void)?
+    /// The open tabs and dev servers the address bar can offer.
+    var suggestionSources: (() -> BrowserSuggestionSources)?
+    /// The space this pane is in, which ranks its history higher.
+    var spaceName: (() -> String?)?
+    /// Jumps to a tab anywhere on this machine.
+    var onShowTab: ((String, String) -> Void)?
 
     static let toolbarHeight: CGFloat = 28
     static let stripHeight: CGFloat = 24
@@ -66,12 +74,15 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     }
 
     private var securityState = BrowserAddress.Security.quiet
+    private lazy var completer = BrowserAddressCompleter(pane: self)
+    private var keyObserver: NSObjectProtocol?
 
     /// Some page is playing sound; shown on the herdr tab.
     var isAudible: Bool { pages.contains(where: \.isAudible) }
 
-    init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil, machineName: String? = nil) {
+    init(hostID: String, state: HostPaneState, dataStore: WKWebsiteDataStore? = nil, localhostMapper: LocalhostMapper? = nil, machineName: String? = nil, machineKey: String = "local") {
         self.hostID = hostID
+        self.machineKey = machineKey
         self.dataStore = dataStore
         self.localhostMapper = localhostMapper
         // Panes saved before tabs have one page, in `url`.
@@ -160,6 +171,19 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
 
     isolated deinit {
         if let extensionObserver { NotificationCenter.default.removeObserver(extensionObserver) }
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+    }
+
+    /// The list closes with the field, and when the window stops being key
+    /// (the field keeps its focus then, so nothing else would close it).
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = window.map {
+            NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: $0, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.completer.hide() }
+            }
+        }
     }
 
     /// Extensions changed: the toolbar menu is rebuilt when it opens, so
@@ -205,6 +229,10 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         menu.addItem(.separator())
         add("New Tab", "t") { [weak self] in self?.newTab() }
         add("Reopen Closed Tab", "t", [.command, .shift], enabled: !closed.isEmpty) { [weak self] in self?.reopenClosed() }
+        menu.addItem(.separator())
+        let history = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
+        history.submenu = historyPagesMenu()
+        menu.addItem(history)
         let actions = WebExtensions.actions(for: page)
         if !actions.isEmpty {
             menu.addItem(.separator())
@@ -220,9 +248,32 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
             }
         }
         menu.addItem(.separator())
+        if BrowserInspector.isAvailable {
+            add("Web Inspector", "i", [.command, .option], enabled: hasPage) { [weak self] in self?.showInspector() }
+        }
         add("Browser Settings…") {
             NSApp.sendAction(#selector(AppDelegate.showSettings(_:)), to: nil, from: nil)
         }
+    }
+
+    /// ⋯ ▸ History: recent pages, then Clear History….
+    private func historyPagesMenu() -> NSMenu {
+        let menu = NSMenu()
+        let recent = Settings.browserHistory ? BrowserHistory.shared.recent(machine: machineKey, limit: 15) : []
+        for visit in recent {
+            guard let url = URL(string: visit.url) else { continue }
+            menu.addItem(ClosureMenuItem(title: visit.title.isEmpty ? BrowserSuggestions.displayed(url) : visit.title) { [weak self] in
+                self?.openTyped(url, newTab: false)
+            })
+        }
+        if recent.isEmpty {
+            let none = NSMenuItem(title: Settings.browserHistory ? "No Pages Yet" : "History Is Off", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Clear History…") { [weak self] in BrowserData.confirmClearHistory(in: self?.window) })
+        return menu
     }
 
     /// The count button: every tab, then New Tab. At the tightest width it
@@ -350,6 +401,7 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         addressBox.frame = NSRect(x: fieldX, y: y, width: fieldWidth, height: 20)
         reload.frame = NSRect(x: addressBox.frame.maxX - 22, y: y, width: 20, height: 20)
         layoutAddress(tight: tight)
+        completer.reposition()
         let chrome = chromeHeight
         strip.isHidden = !showsStrip
         strip.frame = NSRect(x: 0, y: b.height - Self.toolbarHeight - Self.stripHeight, width: b.width, height: Self.stripHeight)
@@ -362,6 +414,7 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         // Hidden pages keep the pane's size: an agent's screenshot of one
         // should look like the page would.
         for each in pages where each.hasWebView { each.webView.frame = page }
+        BrowserInspector.keepDetached(webView, in: self)
         errorPage.frame = page
         if chrome != laidOutChrome {
             laidOutChrome = chrome
@@ -542,6 +595,7 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         guard page !== activePage, pages.contains(where: { $0 === page }) else { return }
         let hadKeyboard = (window?.firstResponder as? NSView)?.isDescendant(of: self) == true
         if isEditingAddress { window?.makeFirstResponder(nil) }
+        completer.hide()
         finderStorage?.pageHidden()
         activePage.saveHistory()
         // A hidden page leaves the view tree; its pane keeps it, and
@@ -674,11 +728,20 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         address.textColor = .labelColor
         address.stringValue = activePage.address?.absoluteString ?? ""
         needsLayout = true
+        completer.began()
     }
+
+    func controlTextDidChange(_ note: Notification) {
+        if let editor = note.userInfo?["NSFieldEditor"] as? NSTextView { completer.textChanged(editor) }
+    }
+
+    var addressAnchor: NSView { addressBox }
+    var suggestions: [BrowserSuggestion] { completer.rows }
 
     /// Left without Return: back to the page's address. With no page yet,
     /// what was typed stays, in case the click away was to go copy something.
     private func addressLostFocus() {
+        completer.hide()
         if !activePage.isBlank { renderAddress() }
         needsLayout = true
     }
@@ -686,7 +749,26 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     /// Esc: the first press puts the page's address back and keeps the
     /// field; the next returns to the page. Nothing to undo goes straight there.
     func control(_: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard selector == #selector(cancelOperation(_:)) || selector == #selector(NSTextView.complete(_:)) else { return false }
+        let command = NSApp.currentEvent?.modifierFlags.contains(.command) == true
+        switch selector {
+        case #selector(moveDown(_:)), #selector(moveUp(_:)):
+            guard completer.isShowing else { return false }
+            completer.move(by: selector == #selector(moveDown(_:)) ? 1 : -1)
+            return true
+        case #selector(insertNewline(_:)):
+            return completer.enter(newTab: command)
+        case Selector(("noop:")):
+            // ⌘⏎ has no binding of its own.
+            guard command, NSApp.currentEvent?.keyCode == 36 else { return false }
+            return completer.enter(newTab: true)
+        case #selector(deleteToBeginningOfLine(_:)):
+            return completer.removeSelected()
+        case #selector(cancelOperation(_:)), #selector(NSTextView.complete(_:)):
+            break
+        default:
+            return false
+        }
+        completer.hide()
         let original = activePage.address?.absoluteString ?? ""
         if textView.string != original {
             textView.string = original
@@ -698,9 +780,29 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func addressEntered() {
-        load(address.stringValue)
-        window?.makeFirstResponder(webView)
+        let text = address.stringValue
+        completer.hide()
+        if let url = BrowserAddress.normalize(text) { openTyped(url, newTab: false) }
     }
+
+    /// Return in the address bar, or a row or menu item the user chose.
+    func openTyped(_ url: URL, newTab: Bool) {
+        let page = newTab ? newPage() : activePage
+        page.noteTyped()
+        page.navigate(to: url)
+        leaveAddressBar()
+    }
+
+    /// The keyboard goes back to the page.
+    func leaveAddressBar() { window?.makeFirstResponder(webView) }
+
+    /// Forgets saved back/forward lists and the reopen list, which hold URLs.
+    func forgetSavedHistory() {
+        closed.removeAll()
+        for page in pages { page.forgetSavedHistory() }
+    }
+
+    func showInspector() { BrowserInspector.show(webView) }
 
     private func updateSecurity() {
         let state = activePage.security

@@ -553,6 +553,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         JumpPalette.shared.show(manager: manager) { [weak self] target in
             self?.jump(to: target)
         }
+        // History rows, for what's typed; they arrive a moment later.
+        guard Settings.browserHistory else { return }
+        let machine = keyWindow?.historyKey ?? "local"
+        Task { [weak self] in
+            let pages = await BrowserHistory.shared.search("", machine: machine, space: nil, limit: 300)
+            JumpPalette.shared.addPages(pages) { self?.keyWindow?.openPage($0) }
+        }
     }
 
     private func jump(to target: JumpPalette.Target) {
@@ -562,8 +569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case let .pane(machineID, pane):
             if let machine = manager.machine(machineID) { reveal(pane, on: machine) }
         case let .browserTab(machineID, pane, tab):
-            if let machine = manager.machine(machineID) { reveal(pane, on: machine) }
-            if let browser = pane.hostID.flatMap(BrowserRegistry.shared.existing), let page = browser.page(id: tab) { browser.select(page) }
+            revealBrowserTab(machineID: machineID, pane: pane, tab: tab)
         case let .machine(id):
             guard let machine = manager.machine(id) else { return }
             if machine.status == .connected, let first = machine.store?.snapshot.workspaces.first {
@@ -710,6 +716,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     // MARK: - Attention
 
     /// Shows the pane in its space's window (space mode) or the key window.
+    func revealBrowserTab(machineID: String, pane: Pane, tab: String) {
+        if let machine = manager.machine(machineID) { reveal(pane, on: machine) }
+        if let browser = pane.hostID.flatMap(BrowserRegistry.shared.existing), let page = browser.page(id: tab) { browser.select(page) }
+    }
+
     private func reveal(_ pane: Pane, on machine: Machine) {
         let space = SpaceRef(machine: machine.id, workspace: pane.workspaceID)
         if windowPerSpace {

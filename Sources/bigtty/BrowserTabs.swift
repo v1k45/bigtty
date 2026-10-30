@@ -106,6 +106,10 @@ enum BrowserPageState {
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
+    static func removeAll() {
+        try? FileManager.default.removeItem(at: folder)
+    }
+
     static func remove(_ id: String) {
         if let file = file(id) { try? FileManager.default.removeItem(at: file) }
     }
