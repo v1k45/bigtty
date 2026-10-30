@@ -143,6 +143,14 @@ import WebKit
     }
 }
 
+@Suite struct HostPaneStoreTests {
+    /// Tests build real panes; the file the app restores from is off limits.
+    @Test func testRunsKeepAwayFromTheRealFile() {
+        let real = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #expect(!HostPaneStore.directory.path.hasPrefix(real.path))
+    }
+}
+
 /// The real field in a real window (never shown), through the field editor.
 @MainActor @Suite struct AddressFieldTests {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
