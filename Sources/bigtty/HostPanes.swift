@@ -195,13 +195,17 @@ final class HostPaneStore {
 
     /// A new tab in `workspaceID` whose pane is a host pane.
     @discardableResult
-    static func openTab(_ state: HostPaneState, in workspaceID: String, store: SessionStore, remote: Bool = false) -> String {
+    static func openTab(_ state: HostPaneState, in workspaceID: String, store: SessionStore, remote: Bool = false,
+                        created: (@MainActor @Sendable (Pane) -> Void)? = nil) -> String {
         let id = newID(state.kind)
         shared[id] = state
         let title = hostTitle(state)
         store.perform { client in
             let pane = try await client.createTab(in: workspaceID)
-            await MainActor.run { shared[id]?.paneID = pane.paneID }
+            await MainActor.run {
+                shared[id]?.paneID = pane.paneID
+                created?(pane)
+            }
             try await tag(pane: pane.paneID, id: id, kind: state.kind, title: title, client: client, remote: remote)
         }
         return id

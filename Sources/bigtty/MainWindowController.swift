@@ -34,6 +34,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
 
     private var workspaceID: String?
     private var tabID: String?
+    /// A tab or space this window just created, shown once herdr has it.
+    private var awaitedTab: AwaitedTab?
     /// Pane views for the visible tab, reused across layout changes.
     private var paneViews: [String: PaneContainerView] = [:]
     private var lastFocusedPane: String?
@@ -490,6 +492,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
                 return
             }
             workspaceID = pinned
+        }
+        if let awaited = awaitedTab {
+            switch awaited.step(in: snapshot) {
+            case .wait:
+                break
+            case .forget:
+                awaitedTab = nil
+            case .show:
+                awaitedTab = nil
+                // A window pinned to its space shows only that space's tabs.
+                if pinnedWorkspaceID == nil || pinnedWorkspaceID == awaited.workspaceID {
+                    if awaited.workspaceID != workspaceID { noteVisited(SpaceRef(machine: machine.id, workspace: awaited.workspaceID)) }
+                    workspaceID = awaited.workspaceID
+                    tabID = awaited.tabID
+                    lastFocusedPane = nil
+                    pendingFocus = awaited.paneID
+                }
+            }
         }
         // Keep this window's selection while it exists; otherwise follow herdr.
         if store.workspace(workspaceID) == nil {
@@ -1657,9 +1677,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func newBrowserTab(_: Any?) {
         guard let workspaceID else { return }
         pendingAddressFocus = true
-        tabID = nil // follow herdr to the new (focused) tab, as ⌘T does
         HostPaneStore.openTab(HostPaneState(kind: .browser, machine: machine.hostTag),
-                              in: workspaceID, store: store, remote: !machine.isLocal)
+                              in: workspaceID, store: store, remote: !machine.isLocal) { [weak self] pane in self?.show(created: pane) }
+    }
+
+    /// Shows a tab or space this window just created, once herdr's
+    /// snapshot has it (see `AwaitedTab`).
+    func show(created pane: Pane) {
+        awaitedTab = AwaitedTab(pane)
+        render()
+    }
+
+    /// Runs a herdr call that makes a tab or space and shows what it made.
+    private func create(_ make: @escaping @Sendable (HerdrClient) async throws -> Pane) {
+        store.perform { [weak self] client in
+            let pane = try await make(client)
+            await self?.show(created: pane)
+        }
     }
 
     /// Turns the focused pane (e.g. one just split off) into a browser.
@@ -2232,8 +2266,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         // A focused browser takes ⌘T as a browser does.
         if let focusedBrowser { return focusedBrowser.newTab() }
         guard let workspaceID else { return }
-        tabID = nil
-        store.perform { try await $0.createTab(workspaceID: workspaceID) }
+        create { try await $0.createTab(in: workspaceID) }
     }
 
     @objc func closeTab(_: Any?) {
@@ -2311,8 +2344,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
     @objc func newSpaceHere(_: Any?) {
         let pane = focusedPaneID.flatMap { store.pane($0) }
         let cwd = pane?.foregroundCwd ?? pane?.cwd ?? machine.homeDirectory ?? NSHomeDirectory()
-        if pinnedWorkspaceID == nil { workspaceID = nil }
-        store.perform { try await $0.createWorkspace(cwd: cwd, label: (cwd as NSString).lastPathComponent) }
+        create { try await $0.createWorkspace(cwd: cwd, label: (cwd as NSString).lastPathComponent) }
     }
 
     @objc func renameSpace(_: Any?) {
@@ -2412,8 +2444,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PaneActi
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
-            if self.pinnedWorkspaceID == nil { self.workspaceID = nil }
-            self.store.perform { try await $0.createWorkspace(cwd: url.path, label: url.lastPathComponent) }
+            self.create { try await $0.createWorkspace(cwd: url.path, label: url.lastPathComponent) }
         }
     }
 
